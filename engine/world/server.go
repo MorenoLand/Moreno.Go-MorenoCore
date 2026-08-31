@@ -73,7 +73,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	return &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc"))}
+	return &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc"))}
 }
 
 func (s *Server) Initialize(ctx context.Context) error {
@@ -281,7 +281,11 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 func loadAccount(ctx context.Context, store *database.Store, username string) (*account, error) {
 	var result account
 	var locked int64
-	err := store.DB.QueryRowContext(ctx, "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE username = ? LIMIT 1", username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS)
+	query := "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE username = ? LIMIT 1"
+	if store.Backend == database.BackendSQLite {
+		query = "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE UPPER(username) = UPPER(?) LIMIT 1"
+	}
+	err := store.DB.QueryRowContext(ctx, query, username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

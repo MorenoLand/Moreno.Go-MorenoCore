@@ -37,7 +37,7 @@ func TestAuthSessionAndPing(t *testing.T) {
 		}
 	}
 	key := bytes.Repeat([]byte{0x42}, crypto.SRP6SessionKeyLength)
-	if _, err := db.Exec("INSERT INTO account (id, username, session_key_auth, last_ip, locked, lock_country, os) VALUES (7, 'TEST', ?, '127.0.0.1', 0, '00', 'Win')", key); err != nil {
+	if _, err := db.Exec("INSERT INTO account (id, username, session_key_auth, last_ip, locked, lock_country, os) VALUES (7, 'test', ?, '127.0.0.1', 0, '00', 'Win')", key); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec("INSERT INTO characters (guid, account, name, race, class, gender, skin, face, hairStyle, hairColor, facialStyle, level, zone, map, position_x, position_y, position_z, orientation, playerFlags, at_login, equipmentCache) VALUES (99, 7, 'Tester', 1, 1, 0, 0, 0, 0, 0, 0, 1, 12, 0, 1.5, 2.5, 3.5, 0.5, 0, 32, '')"); err != nil {
