@@ -11,8 +11,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/MorenoLand/Moreno.TrinityGo/engine/crypto"
-	"github.com/MorenoLand/Moreno.TrinityGo/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/crypto"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/database"
 )
 
 func TestLogonAndRealmList(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/MorenoLand/Moreno.TrinityGo/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/database"
 )
 
 func main() {

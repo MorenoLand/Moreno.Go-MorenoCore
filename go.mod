@@ -1,4 +1,4 @@
-module github.com/MorenoLand/Moreno.TrinityGo
+module github.com/MorenoLand/Moreno.Go-MorenoCore5
 
 go 1.26.0
 

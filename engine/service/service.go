@@ -11,10 +11,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/MorenoLand/Moreno.TrinityGo/engine/auth"
-	"github.com/MorenoLand/Moreno.TrinityGo/engine/config"
-	"github.com/MorenoLand/Moreno.TrinityGo/engine/database"
-	"github.com/MorenoLand/Moreno.TrinityGo/engine/world"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/auth"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/world"
 )
 
 type Kind string
