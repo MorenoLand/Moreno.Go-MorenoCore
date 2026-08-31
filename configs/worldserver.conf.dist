@@ -168,6 +168,13 @@ WorldServerPort = 8085
 BindIP = "0.0.0.0"
 
 #
+#    RealmAddress
+#        Description: Optional address advertised to clients for the world server. SQLite defaults to 127.0.0.1 when empty.
+#        Default:     ""
+
+RealmAddress = ""
+
+#
 #    ThreadPool
 #        Description: Number of threads to be used for the global thread pool
 #                     The thread pool is currently used for:

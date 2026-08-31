@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -43,9 +44,10 @@ const (
 var versionChallenge = [16]byte{0xBA, 0xA3, 0x1E, 0x99, 0xA0, 0x0B, 0x21, 0x57, 0xFC, 0x37, 0x3F, 0xB3, 0x69, 0xCD, 0xD2, 0xF1}
 
 type Server struct {
-	Store   *database.Store
-	Logger  *slog.Logger
-	RealmID uint32
+	Store        *database.Store
+	Logger       *slog.Logger
+	RealmID      uint32
+	RealmAddress string
 }
 
 type account struct {
@@ -107,8 +109,15 @@ const (
 	statusAuthed
 )
 
-func NewServer(store *database.Store, logger *slog.Logger, realmID uint32) *Server {
-	return &Server{Store: store, Logger: logger, RealmID: realmID}
+func NewServer(store *database.Store, logger *slog.Logger, realmID uint32, settings ...config.Config) *Server {
+	address := ""
+	if len(settings) != 0 {
+		address = settings[0].RealmAddress
+	}
+	if address == "" && store.Backend == database.BackendSQLite {
+		address = "127.0.0.1"
+	}
+	return &Server{Store: store, Logger: logger, RealmID: realmID, RealmAddress: address}
 }
 
 func (s *Server) Handle(ctx context.Context, conn net.Conn) {
@@ -380,7 +389,7 @@ func (s *session) handleRealmList(ctx context.Context) error {
 	if _, err := io.ReadFull(s.conn, padding); err != nil {
 		return err
 	}
-	realms, err := loadRealms(ctx, s.server.Store)
+	realms, err := loadRealms(ctx, s.server.Store, s.server.RealmAddress)
 	if err != nil {
 		return err
 	}
@@ -529,7 +538,7 @@ func loadBuilds(ctx context.Context, store *database.Store) (map[uint32]buildInf
 	return result, rows.Err()
 }
 
-func loadRealms(ctx context.Context, store *database.Store) ([]realm, error) {
+func loadRealms(ctx context.Context, store *database.Store, advertisedAddress string) ([]realm, error) {
 	rows, err := store.DB.QueryContext(ctx, "SELECT id, name, address, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild FROM realmlist ORDER BY id")
 	if err != nil {
 		return nil, err
@@ -544,6 +553,9 @@ func loadRealms(ctx context.Context, store *database.Store) ([]realm, error) {
 		}
 		if population.Valid {
 			r.Population = float32(population.Float64)
+		}
+		if advertisedAddress != "" {
+			r.Address = advertisedAddress
 		}
 		result = append(result, r)
 	}

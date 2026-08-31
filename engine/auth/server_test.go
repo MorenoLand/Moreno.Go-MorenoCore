@@ -48,7 +48,7 @@ func TestLogonAndRealmList(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO build_info (build, majorVersion, minorVersion, bugfixVersion) VALUES (12340, 3, 3, 5)"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("INSERT INTO realmlist (id, name, address, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild) VALUES (1, 'Test Realm', '127.0.0.1', 8085, 0, 0, 0, 0, 0, 12340)"); err != nil {
+	if _, err := db.Exec("INSERT INTO realmlist (id, name, address, port, icon, flag, timezone, allowedSecurityLevel, population, gamebuild) VALUES (1, 'Test Realm', '203.0.113.10', 8085, 0, 0, 0, 0, 0, 12340)"); err != nil {
 		t.Fatal(err)
 	}
 	store := &database.Store{Name: "auth", Backend: database.BackendSQLite, DB: db}
@@ -103,6 +103,9 @@ func TestLogonAndRealmList(t *testing.T) {
 	}
 	if realmHeader[0] != realmList || len(realmBody) < 8 {
 		t.Fatalf("realm response: %x %x", realmHeader, realmBody)
+	}
+	if !bytes.Contains(realmBody, []byte("127.0.0.1:8085")) || bytes.Contains(realmBody, []byte("203.0.113.10:8085")) {
+		t.Fatalf("realm address: %x", realmBody)
 	}
 }
 

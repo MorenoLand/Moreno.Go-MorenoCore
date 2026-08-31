@@ -64,6 +64,13 @@ MaxPingTime = 30
 RealmServerPort = 3724
 
 #
+#    RealmAddress
+#        Description: Optional address advertised to clients for the world server. SQLite defaults to 127.0.0.1 when empty.
+#        Default:     ""
+
+RealmAddress = ""
+
+#
 #
 #    BindIP
 #        Description: Bind auth server to IP/hostname

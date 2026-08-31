@@ -37,7 +37,7 @@ func RunCombined(ctx context.Context, c config.Config, logger *slog.Logger) erro
 		return err
 	}
 	defer stores.Close()
-	authServer := auth.NewServer(stores.Auth, logger, c.RealmID)
+	authServer := auth.NewServer(stores.Auth, logger, c.RealmID, c)
 	worldServer := world.NewServer(stores, logger, c.RealmID, c)
 	if err := worldServer.Initialize(ctx); err != nil {
 		return err
@@ -69,7 +69,7 @@ func RunSingle(ctx context.Context, c config.Config, kind Kind, logger *slog.Log
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if kind == Auth {
-		server := auth.NewServer(stores.Auth, logger, c.RealmID)
+		server := auth.NewServer(stores.Auth, logger, c.RealmID, c)
 		return (&Service{Kind: kind, Address: fmt.Sprintf(":%d", c.RealmServerPort), Store: stores.Auth, Handler: server.Handle}).Run(ctx, logger)
 	}
 	server := world.NewServer(stores, logger, c.RealmID, c)

@@ -21,6 +21,7 @@ type Config struct {
 	LoginDatabaseInfo                       string
 	WorldDatabaseInfo                       string
 	CharacterDatabaseInfo                   string
+	RealmAddress                            string
 	RealmServerPort                         int
 	WorldServerPort                         int
 	RealmID                                 uint32
@@ -121,6 +122,9 @@ func (c *Config) ApplyEnv() {
 			_ = c.set(key, value)
 		}
 	}
+	if value, ok := os.LookupEnv("MORENOCORE_REALM_ADDRESS"); ok {
+		_ = c.set("RealmAddress", value)
+	}
 	if value, ok := os.LookupEnv("MORENOCORE_GAME_DATA_DIR"); ok {
 		c.GameDataDir = value
 	}
@@ -174,6 +178,8 @@ func (c *Config) set(key, value string) error {
 		c.WorldDatabaseInfo = value
 	case "CharacterDatabaseInfo":
 		c.CharacterDatabaseInfo = value
+	case "RealmAddress":
+		c.RealmAddress = value
 	case "RealmServerPort":
 		return setInt(&c.RealmServerPort, key, value)
 	case "WorldServerPort":
