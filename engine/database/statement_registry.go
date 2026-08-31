@@ -48,6 +48,9 @@ var sqliteStatementOverrides = map[StatementID]string{
 	"LOGIN_SEL_REALM_CHARACTER_COUNTS": "SELECT realmid, numchars FROM realmcharacters WHERE acctid = ?",
 	"LOGIN_UPD_LAST_IP":                "UPDATE account SET last_ip = ? WHERE username = ?",
 	"LOGIN_UPD_LAST_ATTEMPT_IP":        "UPDATE account SET last_attempt_ip = ? WHERE username = ?",
+	"LOGIN_UPD_FAILEDLOGINS":            "UPDATE account SET failed_logins = failed_logins + 1 WHERE username = ?",
+	"LOGIN_INS_IP_AUTO_BANNED":          "INSERT INTO ip_banned (ip, bandate, unbandate, bannedby, banreason) VALUES (?, unixepoch(), unixepoch()+?, 'Trinity Auth', 'Failed login autoban')",
+	"LOGIN_INS_ACCOUNT_AUTO_BANNED":     "INSERT INTO account_banned (id, bandate, unbandate, bannedby, banreason, active) VALUES (?, unixepoch(), unixepoch()+?, 'Trinity Auth', 'Failed login autoban', 1)",
 }
 
 func StatementSQL(id StatementID, backend Backend) (string, error) {

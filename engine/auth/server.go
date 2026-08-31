@@ -2,6 +2,9 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha1"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/binary"
 	"errors"
@@ -87,17 +90,20 @@ type session struct {
 	account    account
 	srp        *crypto.SRP6
 	sessionKey [crypto.SRP6SessionKeyLength]byte
+	reconnectProof [16]byte
 	build      uint32
 	postBC     bool
 	login      string
 	remoteIP   string
 	os         string
 	locale     uint8
+	totpRequired bool
 }
 
 const (
 	statusChallenge byte = iota
 	statusProof
+	statusReconnectProof
 	statusAuthed
 )
 
@@ -131,8 +137,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			err = state.handleLogonProof(ctx)
 		case realmList:
 			err = state.handleRealmList(ctx)
-		case reconnectChallenge, reconnectProof:
-			return
+		case reconnectChallenge:
+			err = state.handleReconnectChallenge(ctx)
+		case reconnectProof:
+			err = state.handleReconnectProof(ctx)
 		default:
 			return
 		}
@@ -149,26 +157,13 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	if s.status != statusChallenge {
 		return errors.New("unexpected logon challenge")
 	}
-	prefix := make([]byte, 3)
-	if _, err := io.ReadFull(s.conn, prefix); err != nil {
-		return err
-	}
-	size := binary.LittleEndian.Uint16(prefix[1:])
-	if size < 30 || size > 46 {
-		return errors.New("invalid logon challenge size")
-	}
-	body := make([]byte, size)
-	if _, err := io.ReadFull(s.conn, body); err != nil {
-		return err
-	}
-	if int(body[29])+30 != int(size) {
-		return errors.New("invalid logon challenge login length")
-	}
-	s.build = uint32(binary.LittleEndian.Uint16(body[7:9]))
+	build, login, osName, locale, err := readChallenge(s.conn)
+	if err != nil { return err }
+	s.build = build
 	s.postBC = s.build > preBCMaxBuild
-	s.login = string(body[30 : 30+body[29]])
-	s.os = reverseCode(string(body[13:17]))
-	s.locale = localeID(reverseCode(string(body[17:21])))
+	s.login = login
+	s.os = osName
+	s.locale = locale
 	loaded, err := loadAccount(ctx, s.server.Store, s.login, s.remoteIP)
 	if err != nil {
 		return err
@@ -210,7 +205,13 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	packet.Write(modulus[:])
 	packet.Write(s.account.Salt[:])
 	packet.Write(versionChallenge[:])
-	packet.WriteU8(0)
+	if len(s.account.TotpSecret) != 0 {
+		s.totpRequired = true
+		packet.WriteU8(4)
+		packet.WriteU8(1)
+	} else {
+		packet.WriteU8(0)
+	}
 	s.status = statusProof
 	return writePacket(s.conn, packet.Bytes())
 }
@@ -227,12 +228,27 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 	var clientM [20]byte
 	copy(A[:], data[:32])
 	copy(clientM[:], data[32:52])
+	if data[73]&0x04 != 0 {
+		size := []byte{0}
+		if _, err := io.ReadFull(s.conn, size); err != nil { return err }
+		tokenData := make([]byte, size[0])
+		if _, err := io.ReadFull(s.conn, tokenData); err != nil { return err }
+		token, parseErr := strconv.ParseUint(strings.TrimSpace(string(tokenData)), 10, 32)
+		if !s.totpRequired || parseErr != nil || !crypto.ValidateTOTP(s.account.TotpSecret, uint32(token), time.Now()) {
+			_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
+			return errors.New("invalid authentication token")
+		}
+	} else if s.totpRequired {
+		_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
+		return errors.New("missing authentication token")
+	}
 	key, ok, err := s.srp.VerifyChallengeResponse(A, clientM)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
+		_, _ = s.server.Store.ExecStatement(ctx, "LOGIN_UPD_FAILEDLOGINS", s.account.Login)
 		return errors.New("invalid SRP6 proof")
 	}
 	s.sessionKey = key
@@ -250,6 +266,63 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 	if err := writePacket(s.conn, packet.Bytes()); err != nil {
 		return err
 	}
+	s.status = statusAuthed
+	return nil
+}
+
+func (s *session) handleReconnectChallenge(ctx context.Context) error {
+	if s.status != statusChallenge { return errors.New("unexpected reconnect challenge") }
+	build, login, osName, locale, err := readChallenge(s.conn)
+	if err != nil { return err }
+	s.build = build
+	s.postBC = build > preBCMaxBuild
+	s.login = login
+	s.os = osName
+	s.locale = locale
+	row, err := s.server.Store.QueryRowStatement(ctx, "LOGIN_SEL_RECONNECTCHALLENGE", login)
+	if err != nil { return err }
+	var loaded account
+	var locked, failed, banned, permanent, security uint64
+	var sessionKey []byte
+	if err := row.Scan(&loaded.ID, &loaded.Login, &locked, &loaded.LockCountry, &loaded.LastIP, &failed, &banned, &permanent, &security, &sessionKey); err != nil {
+		if errors.Is(err, sql.ErrNoRows) { return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount}) }
+		return err
+	}
+	loaded.Locked = locked != 0
+	loaded.FailedLogins = uint32(failed)
+	loaded.Banned = banned != 0
+	loaded.PermanentBan = permanent != 0
+	loaded.Security = uint8(security)
+	if loaded.Banned { return writePacket(s.conn, []byte{reconnectChallenge, wowBanned}) }
+	if len(sessionKey) != crypto.SRP6SessionKeyLength { return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount}) }
+	copy(s.sessionKey[:], sessionKey)
+	if _, err := io.ReadFull(rand.Reader, s.reconnectProof[:]); err != nil { return err }
+	s.account = loaded
+	packet := protocol.NewBuffer(34)
+	packet.WriteU8(reconnectChallenge)
+	packet.WriteU8(wowSuccess)
+	packet.Write(s.reconnectProof[:])
+	packet.Write(versionChallenge[:])
+	s.status = statusReconnectProof
+	return writePacket(s.conn, packet.Bytes())
+}
+
+func (s *session) handleReconnectProof(ctx context.Context) error {
+	if s.status != statusReconnectProof { return errors.New("unexpected reconnect proof") }
+	data := make([]byte, 57)
+	if _, err := io.ReadFull(s.conn, data); err != nil { return err }
+	var r1 [16]byte
+	var r2 [20]byte
+	copy(r1[:], data[:16])
+	copy(r2[:], data[16:36])
+	h := sha1.New()
+	_, _ = h.Write([]byte(s.account.Login))
+	_, _ = h.Write(r1[:])
+	_, _ = h.Write(s.reconnectProof[:])
+	_, _ = h.Write(s.sessionKey[:])
+	if subtle.ConstantTimeCompare(h.Sum(nil), r2[:]) != 1 { return errors.New("invalid reconnect proof") }
+	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil { return err }
+	if err := writePacket(s.conn, []byte{reconnectProof, wowSuccess, 0, 0}); err != nil { return err }
 	s.status = statusAuthed
 	return nil
 }
@@ -458,6 +531,21 @@ func writePacket(conn net.Conn, data []byte) error {
 		data = data[n:]
 	}
 	return nil
+}
+
+func readChallenge(conn net.Conn) (uint32, string, string, uint8, error) {
+	prefix := make([]byte, 3)
+	if _, err := io.ReadFull(conn, prefix); err != nil { return 0, "", "", 0, err }
+	size := binary.LittleEndian.Uint16(prefix[1:])
+	if size < 30 || size > 46 { return 0, "", "", 0, errors.New("invalid logon challenge size") }
+	body := make([]byte, size)
+	if _, err := io.ReadFull(conn, body); err != nil { return 0, "", "", 0, err }
+	if len(body) < 30 || int(body[29])+30 != int(size) { return 0, "", "", 0, errors.New("invalid logon challenge login length") }
+	build := uint32(binary.LittleEndian.Uint16(body[7:9]))
+	login := string(body[30 : 30+body[29]])
+	osName := reverseCode(string(body[13:17]))
+	locale := localeID(reverseCode(string(body[17:21])))
+	return build, login, osName, locale, nil
 }
 
 func reverseCode(value string) string {
