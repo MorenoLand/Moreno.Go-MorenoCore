@@ -24,13 +24,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	for _, statement := range []string{
-		"CREATE TABLE account (id INTEGER PRIMARY KEY, username TEXT NOT NULL, session_key_auth BLOB, last_ip TEXT, locked INTEGER, lock_country TEXT, os TEXT)",
+		"CREATE TABLE account (id INTEGER PRIMARY KEY, username TEXT NOT NULL, session_key_auth BLOB, last_ip TEXT, locked INTEGER, lock_country TEXT, os TEXT, online INTEGER NOT NULL DEFAULT 0)",
 		"CREATE TABLE account_banned (id INTEGER NOT NULL, bandate INTEGER NOT NULL, unbandate INTEGER NOT NULL, active INTEGER NOT NULL)",
 		"CREATE TABLE character_banned (guid INTEGER NOT NULL, active INTEGER NOT NULL)",
 		"CREATE TABLE character_pet (owner INTEGER NOT NULL, slot INTEGER NOT NULL, entry INTEGER, modelid INTEGER, level INTEGER)",
 		"CREATE TABLE character_spell (guid INTEGER NOT NULL, spell INTEGER NOT NULL, active INTEGER NOT NULL, disabled INTEGER NOT NULL)",
 		"CREATE TABLE guild_member (guid INTEGER NOT NULL, guildid INTEGER NOT NULL)",
-		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, account INTEGER NOT NULL, name TEXT NOT NULL, race INTEGER NOT NULL, class INTEGER NOT NULL, gender INTEGER NOT NULL, skin INTEGER NOT NULL, face INTEGER NOT NULL, hairStyle INTEGER NOT NULL, hairColor INTEGER NOT NULL, facialStyle INTEGER NOT NULL, level INTEGER NOT NULL, zone INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, orientation REAL NOT NULL, playerFlags INTEGER NOT NULL, extra_flags INTEGER NOT NULL DEFAULT 0, at_login INTEGER NOT NULL, equipmentCache TEXT, deleteInfos_Name TEXT)",
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, account INTEGER NOT NULL, name TEXT NOT NULL, race INTEGER NOT NULL, class INTEGER NOT NULL, gender INTEGER NOT NULL, skin INTEGER NOT NULL, face INTEGER NOT NULL, hairStyle INTEGER NOT NULL, hairColor INTEGER NOT NULL, facialStyle INTEGER NOT NULL, level INTEGER NOT NULL, zone INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, orientation REAL NOT NULL, playerFlags INTEGER NOT NULL, extra_flags INTEGER NOT NULL DEFAULT 0, at_login INTEGER NOT NULL, equipmentCache TEXT, deleteInfos_Name TEXT, online INTEGER NOT NULL DEFAULT 0)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -140,6 +140,49 @@ func TestAuthSessionAndPing(t *testing.T) {
 	}
 	if newWorldOpcode != uint16(protocol.OpcodeSMSG_NEW_WORLD) || len(newWorldPayload) != 20 {
 		t.Fatalf("new world opcode=%x payload=%d", newWorldOpcode, len(newWorldPayload))
+	}
+	updateOpcode, updatePayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updateOpcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		updatePayload, err = protocol.DecompressUpdatePayload(updatePayload)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if updateOpcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) {
+		t.Fatalf("update opcode=%x", updateOpcode)
+	}
+	updates := protocol.NewReader(updatePayload)
+	if blocks, err := updates.ReadU32(); err != nil || blocks != 1 {
+		t.Fatalf("update blocks=%d err=%v", blocks, err)
+	}
+	if updateType, err := updates.ReadU8(); err != nil || updateType != protocol.UpdateCreateObject2 {
+		t.Fatalf("update type=%d err=%v", updateType, err)
+	}
+	if updateGUID, err := updates.ReadPackedGUID(); err != nil || updateGUID != 99 {
+		t.Fatalf("update guid=%d err=%v", updateGUID, err)
+	}
+	initialSpellsOpcode, initialSpellsPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initialSpellsOpcode != uint16(protocol.OpcodeSMSG_INITIAL_SPELLS) || len(initialSpellsPayload) != 5 {
+		t.Fatalf("initial spells opcode=%x payload=%d", initialSpellsOpcode, len(initialSpellsPayload))
+	}
+	unlearnOpcode, unlearnPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unlearnOpcode != uint16(protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS) || len(unlearnPayload) != 4 {
+		t.Fatalf("unlearn opcode=%x payload=%d", unlearnOpcode, len(unlearnPayload))
+	}
+	actionOpcode, actionPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actionOpcode != uint16(protocol.OpcodeSMSG_ACTION_BUTTONS) || len(actionPayload) != 577 {
+		t.Fatalf("action opcode=%x payload=%d", actionOpcode, len(actionPayload))
 	}
 	timeOpcode, timePayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {

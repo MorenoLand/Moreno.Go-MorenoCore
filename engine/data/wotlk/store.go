@@ -19,6 +19,9 @@ const MountedFlightSpeedAura uint32 = 207
 type Race struct {
 	ID                uint32
 	Flags             uint32
+	FactionID         uint32
+	MaleDisplayID     uint32
+	FemaleDisplayID   uint32
 	Alliance          uint32
 	RequiredExpansion uint32
 }
@@ -80,6 +83,18 @@ func (s *Store) Race(id uint32) (Race, bool, error) {
 	if err != nil {
 		return Race{}, false, err
 	}
+	factionID, err := record.Uint32(2)
+	if err != nil {
+		return Race{}, false, err
+	}
+	maleDisplayID, err := record.Uint32(4)
+	if err != nil {
+		return Race{}, false, err
+	}
+	femaleDisplayID, err := record.Uint32(5)
+	if err != nil {
+		return Race{}, false, err
+	}
 	alliance, err := record.Uint32(13)
 	if err != nil {
 		return Race{}, false, err
@@ -88,7 +103,7 @@ func (s *Store) Race(id uint32) (Race, bool, error) {
 	if err != nil {
 		return Race{}, false, err
 	}
-	return Race{ID: id, Flags: flags, Alliance: alliance, RequiredExpansion: requiredExpansion}, true, nil
+	return Race{ID: id, Flags: flags, FactionID: factionID, MaleDisplayID: maleDisplayID, FemaleDisplayID: femaleDisplayID, Alliance: alliance, RequiredExpansion: requiredExpansion}, true, nil
 }
 
 func (s *Store) Class(id uint32) (Class, bool, error) {

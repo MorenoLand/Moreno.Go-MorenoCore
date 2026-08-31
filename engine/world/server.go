@@ -46,15 +46,17 @@ type Server struct {
 }
 
 type session struct {
-	server      *Server
-	conn        net.Conn
-	authSeed    [4]byte
-	crypt       *crypto.AuthCrypt
-	authed      bool
-	accountID   uint32
-	accountName string
-	legitimate  map[uint64]struct{}
-	mounts      *MountState
+	server       *Server
+	conn         net.Conn
+	authSeed     [4]byte
+	crypt        *crypto.AuthCrypt
+	authed       bool
+	accountID    uint32
+	accountName  string
+	legitimate   map[uint64]struct{}
+	mounts       *MountState
+	playerGUID   uint64
+	playerLoaded bool
 }
 
 type account struct {
@@ -90,6 +92,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 	}()
 	defer close(closed)
 	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{})}
+	defer state.logout()
 	if _, err := rand.Read(state.authSeed[:]); err != nil {
 		return
 	}
@@ -210,6 +213,9 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
 		return false
 	}
+	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", account.ID); err != nil {
+		return false
+	}
 	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET last_ip = ? WHERE id = ?", remoteAddress(s.conn), account.ID); err != nil {
 		return false
 	}
@@ -293,4 +299,14 @@ func remoteAddress(conn net.Conn) string {
 		return host
 	}
 	return strings.TrimSpace(address)
+}
+
+func (s *session) logout() {
+	ctx := context.Background()
+	if s.playerLoaded {
+		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID)
+	}
+	if s.accountID != 0 {
+		_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID)
+	}
 }

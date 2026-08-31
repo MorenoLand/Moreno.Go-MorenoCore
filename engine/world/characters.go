@@ -242,6 +242,9 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 }
 
 func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
+	if s.playerLoaded {
+		return false
+	}
 	b := protocol.NewReader(payload)
 	guid, err := b.ReadPackedGUID()
 	if err != nil {
@@ -250,9 +253,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
 	if _, ok := s.legitimate[guid]; !ok {
 		return false
 	}
-	var mapID uint32
-	var x, y, z, orientation float32
-	err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT map, position_x, position_y, position_z, orientation FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&mapID, &x, &y, &z, &orientation)
+	state, err := s.loadPlayerState(ctx, guid)
 	if err != nil {
 		return false
 	}
@@ -262,14 +263,38 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
 	}
 	s.mounts = mounts
 	packet := protocol.NewBuffer(20)
-	packet.WriteU32(mapID)
-	packet.WriteF32(x)
-	packet.WriteF32(y)
-	packet.WriteF32(z)
-	packet.WriteF32(orientation)
+	packet.WriteU32(state.Map)
+	packet.WriteF32(state.X)
+	packet.WriteF32(state.Y)
+	packet.WriteF32(state.Z)
+	packet.WriteF32(state.Orientation)
 	if err := s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true); err != nil {
 		return false
 	}
+	updates, err := s.server.buildPlayerUpdate(state)
+	if err != nil {
+		return false
+	}
+	if err := s.write(updates.Opcode, updates.Payload.Bytes(), true); err != nil {
+		return false
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_INITIAL_SPELLS), buildInitialSpells(state), true); err != nil {
+		return false
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_SEND_UNLEARN_SPELLS), buildUnlearnSpells(), true); err != nil {
+		return false
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_ACTION_BUTTONS), buildActionButtons(state.Actions), true); err != nil {
+		return false
+	}
+	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
+		return false
+	}
+	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", s.accountID); err != nil {
+		return false
+	}
+	s.playerGUID = guid
+	s.playerLoaded = true
 	timePacket := protocol.NewBuffer(12)
 	timePacket.WritePackedTime(time.Now())
 	timePacket.WriteF32(0.5)
