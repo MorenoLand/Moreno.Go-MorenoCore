@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	PlayerEventLogin = 3
-	PlayerEventChat  = 18
+	PlayerEventLogin   = 3
+	PlayerEventLogout  = 4
+	PlayerEventChat    = 18
+	PlayerEventCommand = 42
 )
 
 type Hook struct {
@@ -36,13 +38,14 @@ type Object struct {
 }
 
 type Config struct {
-	Enabled       bool
-	ScriptPath    string
-	CoreExpansion uint32
-	AuthDatabase  *sql.DB
-	CharacterDB   *sql.DB
-	WorldDatabase *sql.DB
-	Logger        *slog.Logger
+	Enabled        bool
+	ScriptPath     string
+	CoreExpansion  uint32
+	PlayerProvider func() []*Object
+	AuthDatabase   *sql.DB
+	CharacterDB    *sql.DB
+	WorldDatabase  *sql.DB
+	Logger         *slog.Logger
 }
 
 type Runtime struct {
@@ -258,6 +261,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("RegisterGlobalEvent", r.registerServerEvent)
 	r.state.Register("GetCoreExpansion", r.getCoreExpansion)
 	r.state.Register("GetPlayersInWorld", r.getPlayersInWorld)
+	r.state.Register("GetPlayerByName", r.getPlayerByName)
 	r.state.Register("CreateLuaEvent", r.createLuaEvent)
 	r.state.Register("RemoveEventById", r.removeEvent)
 	r.state.Register("CharDBQuery", r.charDBQuery)
@@ -282,7 +286,42 @@ func (r *Runtime) getCoreExpansion(state *lua.State) int {
 
 func (r *Runtime) getPlayersInWorld(state *lua.State) int {
 	state.NewTable()
+	if r.config.PlayerProvider == nil {
+		return 1
+	}
+	for index, player := range r.config.PlayerProvider() {
+		if player == nil {
+			continue
+		}
+		if err := pushValue(state, player); err != nil {
+			continue
+		}
+		state.RawSetInt(-2, index+1)
+	}
 	return 1
+}
+
+func (r *Runtime) getPlayerByName(state *lua.State) int {
+	name := lua.CheckString(state, 1)
+	if r.config.PlayerProvider != nil {
+		for _, player := range r.config.PlayerProvider() {
+			if player == nil {
+				continue
+			}
+			if value, ok := player.Fields["Name"].(string); ok && strings.EqualFold(value, name) {
+				PushObject(state, player)
+				return 1
+			}
+		}
+	}
+	state.PushNil()
+	return 1
+}
+
+func (r *Runtime) SetPlayerProvider(provider func() []*Object) {
+	r.mu.Lock()
+	r.config.PlayerProvider = provider
+	r.mu.Unlock()
 }
 
 func setPackagePath(state *lua.State, scriptPath string) {

@@ -56,6 +56,7 @@ type session struct {
 	authed       bool
 	accountID    uint32
 	accountName  string
+	security     uint8
 	legitimate   map[uint64]struct{}
 	mounts       *MountState
 	playerGUID   uint64
@@ -63,6 +64,13 @@ type session struct {
 	player       *playerState
 	logoutAt     time.Time
 	writeMu      sync.Mutex
+	selection    uint64
+	auras        map[uint32]struct{}
+	scale        float32
+	emoteState   uint32
+	playerLocked bool
+	rooted       bool
+	logoutHook   bool
 }
 
 type account struct {
@@ -72,6 +80,7 @@ type account struct {
 	Locked      bool
 	LockCountry string
 	OS          string
+	Security    uint8
 }
 
 func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settings ...config.Config) *Server {
@@ -79,7 +88,9 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	return &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{})}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{})}
+	server.Features.Scripts.SetPlayerProvider(server.luaPlayers)
+	return server
 }
 
 func (s *Server) Initialize(ctx context.Context) error {
@@ -97,7 +108,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 	}()
 	defer close(closed)
-	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{})}
+	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), auras: make(map[uint32]struct{}), scale: 1}
 	s.addSession(state)
 	defer s.removeSession(state)
 	defer state.logout()
@@ -161,6 +172,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handlePlayerLogin(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_MESSAGECHAT):
+			if !state.authed || !state.handleMessageChat(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_SELECTION):
+			if !state.authed || !state.handleSetSelection(payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST):
 			if !state.authed || !state.handleLogoutRequest(ctx) {
 				return
@@ -219,7 +238,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	account, err := loadAccount(ctx, s.server.AuthStore, accountName)
+	account, err := loadAccount(ctx, s.server.AuthStore, accountName, s.server.RealmID)
 	if err != nil || account == nil {
 		s.debug("world authentication rejected", "account", debugAccount, "reason", "unknown account")
 		_ = s.write(opcodeAuthResponse, []byte{authUnknownAccount}, false)
@@ -269,6 +288,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	s.authed = true
 	s.accountID = account.ID
 	s.accountName = accountName
+	s.security = account.Security
 	s.debug("world authentication accepted", "account", accountName, "build", build, "remote", remoteAddress(s.conn))
 	return s.write(opcodeAuthResponse, []byte{authOK}, true) == nil
 }
@@ -316,7 +336,7 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 	return nil
 }
 
-func loadAccount(ctx context.Context, store *database.Store, username string) (*account, error) {
+func loadAccount(ctx context.Context, store *database.Store, username string, realmID uint32) (*account, error) {
 	var result account
 	var locked int64
 	query := "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE username = ? LIMIT 1"
@@ -331,6 +351,13 @@ func loadAccount(ctx context.Context, store *database.Store, username string) (*
 		return nil, err
 	}
 	result.Locked = locked != 0
+	var security int64
+	err = store.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND RealmID IN (-1, ?)", result.ID, realmID).Scan(&security)
+	if err == nil {
+		result.Security = uint8(security)
+	} else if !strings.Contains(strings.ToLower(err.Error()), "no such table") && !strings.Contains(strings.ToLower(err.Error()), "doesn't exist") && !strings.Contains(strings.ToLower(err.Error()), "unknown table") {
+		return nil, err
+	}
 	return &result, nil
 }
 
@@ -363,6 +390,7 @@ func (s *session) debug(message string, args ...any) {
 func (s *session) logout() {
 	ctx := context.Background()
 	if s.playerLoaded {
+		s.triggerLogout(ctx)
 		if err := s.savePlayerPosition(ctx); err != nil {
 			s.debug("player position save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 		}

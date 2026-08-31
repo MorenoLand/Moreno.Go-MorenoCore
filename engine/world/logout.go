@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -53,6 +54,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 	if !s.playerLoaded {
 		return nil
 	}
+	s.triggerLogout(ctx)
 	if err := s.savePlayerPosition(ctx); err != nil {
 		return err
 	}
@@ -70,6 +72,14 @@ func (s *session) completeLogout(ctx context.Context) error {
 	s.logoutAt = time.Time{}
 	s.debug("player logged out", "account", s.accountName, "guid", s.playerGUID)
 	return nil
+}
+
+func (s *session) triggerLogout(ctx context.Context) {
+	if !s.playerLoaded || s.logoutHook {
+		return
+	}
+	s.logoutHook = true
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogout, s.luaPlayer())
 }
 
 func (s *session) savePlayerPosition(ctx context.Context) error {

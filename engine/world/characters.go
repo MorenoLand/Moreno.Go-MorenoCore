@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -296,6 +297,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
 	s.playerGUID = guid
 	s.player = &state
 	s.playerLoaded = true
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
 	timePacket := protocol.NewBuffer(12)
 	timePacket.WritePackedTime(time.Now())
 	timePacket.WriteF32(0.5)
