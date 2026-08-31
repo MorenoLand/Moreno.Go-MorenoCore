@@ -1,6 +1,7 @@
 package version
 
 import (
+	"os/exec"
 	"runtime/debug"
 	"strings"
 )
@@ -51,6 +52,14 @@ func buildRevision() (string, bool) {
 			commit = setting.Value
 		case "vcs.modified":
 			modified = strings.EqualFold(setting.Value, "true")
+		}
+	}
+	if commit == "unknown" || commit == "" {
+		if output, err := exec.Command("git", "rev-parse", "HEAD").Output(); err == nil {
+			commit = strings.TrimSpace(string(output))
+			if output, err := exec.Command("git", "status", "--porcelain").Output(); err == nil {
+				modified = len(strings.TrimSpace(string(output))) != 0
+			}
 		}
 	}
 	return commit, modified
