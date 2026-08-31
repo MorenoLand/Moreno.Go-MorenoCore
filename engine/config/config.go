@@ -13,6 +13,7 @@ import (
 type Config struct {
 	Backend                                 string
 	DataDir                                 string
+	GameDataDir                             string
 	SchemaDir                               string
 	AuthDatabaseFile                        string
 	CharactersDatabaseFile                  string
@@ -82,7 +83,7 @@ type NPCBotConfig struct {
 }
 
 func Default() Config {
-	return Config{Backend: "sqlite", DataDir: ".", SchemaDir: "sql", AuthDatabaseFile: "auth.db", CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, RealmID: 1, LogsDir: "logs", LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, Expansion: 2, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, SoloLFGEnable: true, SoloLFGAnnounce: true, NPCBots: NPCBotConfig{Enable: true, MaxBots: 9, MaxBotsPerClass: 0, BaseFollowDistance: 25, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, DamagePhysicalMultiplier: 1, DamageSpellMultiplier: 1, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: true, EnableBG: true, EnableArena: true, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, MovementInterruptFood: false, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: true, BlademasterEnable: false, ObsidianDestroyerEnable: false, ArchmageEnable: false, DreadlordEnable: false, SpellBreakerEnable: false, DarkRangerEnable: false, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
+	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", AuthDatabaseFile: "auth.db", CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, RealmID: 1, LogsDir: "logs", LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, Expansion: 2, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, SoloLFGEnable: true, SoloLFGAnnounce: true, NPCBots: NPCBotConfig{Enable: true, MaxBots: 9, MaxBotsPerClass: 0, BaseFollowDistance: 25, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, DamagePhysicalMultiplier: 1, DamageSpellMultiplier: 1, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: true, EnableBG: true, EnableArena: true, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, MovementInterruptFood: false, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: true, BlademasterEnable: false, ObsidianDestroyerEnable: false, ArchmageEnable: false, DreadlordEnable: false, SpellBreakerEnable: false, DarkRangerEnable: false, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
 }
 
 func Load(path string) (Config, error) {
@@ -120,6 +121,9 @@ func (c *Config) ApplyEnv() {
 			_ = c.set(key, value)
 		}
 	}
+	if value, ok := os.LookupEnv("MORENOCORE_GAME_DATA_DIR"); ok {
+		c.GameDataDir = value
+	}
 }
 
 func (c *Config) Set(key, value string) error { return c.set(key, value) }
@@ -154,6 +158,8 @@ func (c *Config) set(key, value string) error {
 		c.Backend = strings.ToLower(value)
 	case "DataDir":
 		c.DataDir = value
+	case "GameDataDir":
+		c.GameDataDir = value
 	case "SchemaDir":
 		c.SchemaDir = value
 	case "AuthDatabaseFile":

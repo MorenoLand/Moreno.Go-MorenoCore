@@ -9,11 +9,13 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -40,6 +42,7 @@ type Server struct {
 	RealmID         uint32
 	Config          config.Config
 	Features        *Features
+	Data            *wotlk.Store
 }
 
 type session struct {
@@ -51,6 +54,7 @@ type session struct {
 	accountID   uint32
 	accountName string
 	legitimate  map[uint64]struct{}
+	mounts      *MountState
 }
 
 type account struct {
@@ -67,7 +71,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	return &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores)}
+	return &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc"))}
 }
 
 func (s *Server) Initialize(ctx context.Context) error {

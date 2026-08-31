@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -129,13 +131,15 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
 		}
 	}
-	if !playableRace(race) || s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 || !playableClass(class) || s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
+	raceAllowed, raceRequiredExpansion := s.server.raceDefinition(race)
+	classAllowed, classRequiredExpansion := s.server.classDefinition(class)
+	if !raceAllowed || s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 || !classAllowed || s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
 	}
-	if raceExpansion(race) > s.server.Config.Expansion {
+	if raceRequiredExpansion > s.server.Config.Expansion {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateExpansion)
 	}
-	if classExpansion(class) > s.server.Config.Expansion {
+	if classRequiredExpansion > s.server.Config.Expansion {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateExpansionClass)
 	}
 	if class == 6 {
@@ -252,6 +256,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	mounts, err := s.loadMountState(ctx, guid)
+	if err != nil {
+		return false
+	}
+	s.mounts = mounts
 	packet := protocol.NewBuffer(20)
 	packet.WriteU32(mapID)
 	packet.WriteF32(x)
@@ -414,6 +423,24 @@ func playableRace(race uint8) bool {
 	}
 }
 
+func (s *Server) raceDefinition(id uint8) (bool, uint32) {
+	if s.Data != nil {
+		if race, found, err := s.Data.Race(uint32(id)); err == nil && found {
+			return wotlk.IsPlayableRace(race), race.RequiredExpansion
+		}
+	}
+	return playableRace(id), raceExpansion(id)
+}
+
+func (s *Server) classDefinition(id uint8) (bool, uint32) {
+	if s.Data != nil {
+		if class, found, err := s.Data.Class(uint32(id)); err == nil && found {
+			return class.ID != 0, class.RequiredExpansion
+		}
+	}
+	return playableClass(id), classExpansion(id)
+}
+
 func playableClass(class uint8) bool {
 	switch class {
 	case 1, 2, 3, 4, 5, 6, 7, 8, 9, 11:
@@ -446,4 +473,64 @@ func classExpansion(class uint8) uint32 {
 		return 2
 	}
 	return 0
+}
+
+func (s *session) loadMountState(ctx context.Context, guid uint64) (*MountState, error) {
+	var extraFlags int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT extra_flags FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&extraFlags); err != nil {
+		return nil, err
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell FROM character_spell WHERE guid = ? AND active <> 0 AND disabled = 0 ORDER BY spell", guid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	spells := make([]LearnedMountSpell, 0)
+	for rows.Next() {
+		var spellID uint32
+		if err := rows.Scan(&spellID); err != nil {
+			return nil, err
+		}
+		if s.server.Data == nil {
+			continue
+		}
+		spell, found, err := s.server.Data.Spell(spellID)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			continue
+		}
+		for _, effect := range spell.Effects {
+			if effect.Aura == wotlk.MountedFlightSpeedAura {
+				spells = append(spells, LearnedMountSpell{ID: spellID, MountedFlightSpeed: int(effect.BasePoints + 1)})
+				break
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return NewMountState(uint32(extraFlags), spells), nil
+}
+
+func (s *session) LearnMountSpell(ctx context.Context, guid uint64, spellID uint32) error {
+	if s.mounts == nil || s.server.Data == nil {
+		return fmt.Errorf("mount data is unavailable")
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("spell %d not found", spellID)
+	}
+	for _, effect := range spell.Effects {
+		if effect.Aura == wotlk.MountedFlightSpeedAura {
+			s.mounts.LearnSpell(LearnedMountSpell{ID: spellID, MountedFlightSpeed: int(effect.BasePoints + 1)})
+			_, err = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET extra_flags = ? WHERE guid = ? AND account = ?", s.mounts.ExtraFlags(), guid, s.accountID)
+			return err
+		}
+	}
+	return nil
 }

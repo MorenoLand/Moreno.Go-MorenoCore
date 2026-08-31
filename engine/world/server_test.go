@@ -28,8 +28,9 @@ func TestAuthSessionAndPing(t *testing.T) {
 		"CREATE TABLE account_banned (id INTEGER NOT NULL, bandate INTEGER NOT NULL, unbandate INTEGER NOT NULL, active INTEGER NOT NULL)",
 		"CREATE TABLE character_banned (guid INTEGER NOT NULL, active INTEGER NOT NULL)",
 		"CREATE TABLE character_pet (owner INTEGER NOT NULL, slot INTEGER NOT NULL, entry INTEGER, modelid INTEGER, level INTEGER)",
+		"CREATE TABLE character_spell (guid INTEGER NOT NULL, spell INTEGER NOT NULL, active INTEGER NOT NULL, disabled INTEGER NOT NULL)",
 		"CREATE TABLE guild_member (guid INTEGER NOT NULL, guildid INTEGER NOT NULL)",
-		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, account INTEGER NOT NULL, name TEXT NOT NULL, race INTEGER NOT NULL, class INTEGER NOT NULL, gender INTEGER NOT NULL, skin INTEGER NOT NULL, face INTEGER NOT NULL, hairStyle INTEGER NOT NULL, hairColor INTEGER NOT NULL, facialStyle INTEGER NOT NULL, level INTEGER NOT NULL, zone INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, orientation REAL NOT NULL, playerFlags INTEGER NOT NULL, at_login INTEGER NOT NULL, equipmentCache TEXT, deleteInfos_Name TEXT)",
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, account INTEGER NOT NULL, name TEXT NOT NULL, race INTEGER NOT NULL, class INTEGER NOT NULL, gender INTEGER NOT NULL, skin INTEGER NOT NULL, face INTEGER NOT NULL, hairStyle INTEGER NOT NULL, hairColor INTEGER NOT NULL, facialStyle INTEGER NOT NULL, level INTEGER NOT NULL, zone INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, orientation REAL NOT NULL, playerFlags INTEGER NOT NULL, extra_flags INTEGER NOT NULL DEFAULT 0, at_login INTEGER NOT NULL, equipmentCache TEXT, deleteInfos_Name TEXT)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)

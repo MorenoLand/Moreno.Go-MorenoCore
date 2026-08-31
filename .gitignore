@@ -7,7 +7,7 @@ worldserver.conf
 trinitygo.conf
 /bin/
 logs/
-data/
+/data/
 build/
 dist/
 out/

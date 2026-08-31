@@ -4,6 +4,7 @@
 [worldserver]
 
 Database.Backend = "sqlite"
+GameDataDir = "data"
 SchemaDir = "sql"
 AuthDatabaseFile = "auth.db"
 CharactersDatabaseFile = "characters.db"
