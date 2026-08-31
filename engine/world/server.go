@@ -11,6 +11,7 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
@@ -43,6 +44,8 @@ type Server struct {
 	Config          config.Config
 	Features        *Features
 	Data            *wotlk.Store
+	sessionsMu      sync.RWMutex
+	sessions        map[*session]struct{}
 }
 
 type session struct {
@@ -59,6 +62,7 @@ type session struct {
 	playerLoaded bool
 	player       *playerState
 	logoutAt     time.Time
+	writeMu      sync.Mutex
 }
 
 type account struct {
@@ -75,7 +79,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	return &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc"))}
+	return &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{})}
 }
 
 func (s *Server) Initialize(ctx context.Context) error {
@@ -94,6 +98,8 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 	}()
 	defer close(closed)
 	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{})}
+	s.addSession(state)
+	defer s.removeSession(state)
 	defer state.logout()
 	if _, err := rand.Read(state.authSeed[:]); err != nil {
 		return
@@ -161,6 +167,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_LOGOUT_CANCEL):
 			if !state.authed || !state.handleLogoutCancel() {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_MOVE_START_FORWARD), uint32(protocol.OpcodeMSG_MOVE_START_BACKWARD), uint32(protocol.OpcodeMSG_MOVE_STOP), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_STRAFE), uint32(protocol.OpcodeMSG_MOVE_JUMP), uint32(protocol.OpcodeMSG_MOVE_START_TURN_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_TURN_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_TURN), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_UP), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_DOWN), uint32(protocol.OpcodeMSG_MOVE_STOP_PITCH), uint32(protocol.OpcodeMSG_MOVE_SET_RUN_MODE), uint32(protocol.OpcodeMSG_MOVE_SET_WALK_MODE), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), uint32(protocol.OpcodeMSG_MOVE_START_SWIM), uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM), uint32(protocol.OpcodeMSG_MOVE_ROOT), uint32(protocol.OpcodeMSG_MOVE_UNROOT), uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT), uint32(protocol.OpcodeMSG_MOVE_HOVER), uint32(protocol.OpcodeMSG_MOVE_SET_FACING), uint32(protocol.OpcodeMSG_MOVE_SET_PITCH):
+			if !state.authed || !state.handleMovement(ctx, header.Opcode, payload) {
 				return
 			}
 		default:
@@ -285,6 +295,8 @@ func (s *session) decrypt(data []byte) error {
 }
 
 func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	frame, headerSize, err := protocol.EncodeServerFrame(opcode, payload)
 	if err != nil {
 		return err
@@ -351,6 +363,9 @@ func (s *session) debug(message string, args ...any) {
 func (s *session) logout() {
 	ctx := context.Background()
 	if s.playerLoaded {
+		if err := s.savePlayerPosition(ctx); err != nil {
+			s.debug("player position save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
+		}
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID)
 	}
 	if s.accountID != 0 {

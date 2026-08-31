@@ -53,6 +53,9 @@ func (s *session) completeLogout(ctx context.Context) error {
 	if !s.playerLoaded {
 		return nil
 	}
+	if err := s.savePlayerPosition(ctx); err != nil {
+		return err
+	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID); err != nil {
 		return err
 	}
@@ -67,6 +70,14 @@ func (s *session) completeLogout(ctx context.Context) error {
 	s.logoutAt = time.Time{}
 	s.debug("player logged out", "account", s.accountName, "guid", s.playerGUID)
 	return nil
+}
+
+func (s *session) savePlayerPosition(ctx context.Context) error {
+	if !s.playerLoaded || s.player == nil {
+		return nil
+	}
+	_, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHARACTER_POSITION", s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map, s.player.Zone, s.player.GUID)
+	return err
 }
 
 func isReadTimeout(err error) bool {
