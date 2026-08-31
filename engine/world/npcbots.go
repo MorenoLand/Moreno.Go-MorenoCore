@@ -28,6 +28,20 @@ const (
 	BotClassDarkRanger        = uint8(17)
 )
 
+type BotAssignResult uint16
+
+const (
+	BotAddDisabled         BotAssignResult = 0x001
+	BotAddAlreadyHave      BotAssignResult = 0x002
+	BotAddMaxExceeded      BotAssignResult = 0x004
+	BotAddMaxClassExceeded BotAssignResult = 0x008
+	BotAddCannotAfford     BotAssignResult = 0x010
+	BotAddInstanceLimit    BotAssignResult = 0x020
+	BotAddBusy             BotAssignResult = 0x040
+	BotAddNotAvailable     BotAssignResult = 0x080
+	BotAddSuccess          BotAssignResult = 0x100
+)
+
 type NpcBotUpdateType uint8
 
 const (
@@ -361,6 +375,135 @@ func (m *NPCBotManager) Assign(ctx context.Context, owner, entry uint32) error {
 		return errors.New("npcbot cannot be assigned to owner")
 	}
 	return m.Update(ctx, entry, NpcBotUpdateOwner, owner)
+}
+
+func (m *NPCBotManager) Recruit(ctx context.Context, owner, entry uint32) (BotAssignResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.config.Enable {
+		return BotAddDisabled, nil
+	}
+	data, ok := m.bots[entry]
+	if !ok {
+		return BotAddNotAvailable, nil
+	}
+	if data.Owner == owner && owner != 0 {
+		return BotAddAlreadyHave, nil
+	}
+	if data.Owner != 0 {
+		return BotAddNotAvailable, nil
+	}
+	extra, ok := m.extras[entry]
+	if !ok {
+		return BotAddNotAvailable, nil
+	}
+	if !m.classEnabled(extra.Class) {
+		return BotAddNotAvailable, nil
+	}
+	var owned uint32
+	var classOwned uint32
+	for botEntry, bot := range m.bots {
+		if bot.Owner != owner {
+			continue
+		}
+		owned++
+		if botExtra, exists := m.extras[botEntry]; exists && botExtra.Class == extra.Class {
+			classOwned++
+		}
+	}
+	if m.config.MaxBots > 0 && owned >= m.config.MaxBots {
+		return BotAddMaxExceeded, nil
+	}
+	if m.config.MaxBotsPerClass > 0 && classOwned >= m.config.MaxBotsPerClass {
+		return BotAddMaxClassExceeded, nil
+	}
+	var level, money int64
+	if err := m.characters.DB.QueryRowContext(ctx, "SELECT level, money FROM characters WHERE guid = ?", owner).Scan(&level, &money); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return BotAddNotAvailable, nil
+		}
+		return 0, err
+	}
+	cost := NpcBotCost(uint8(level), extra.Class, m.config.Cost)
+	if uint64(money) < cost {
+		return BotAddCannotAfford, nil
+	}
+	tx, err := m.characters.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE characters SET money = money - ? WHERE guid = ? AND money >= ?", cost, owner, cost)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		_ = tx.Rollback()
+		if err != nil {
+			return 0, err
+		}
+		return BotAddCannotAfford, nil
+	}
+	result, err = tx.ExecContext(ctx, "UPDATE characters_npcbot SET owner = ? WHERE entry = ? AND owner = 0", owner, entry)
+	if err != nil {
+		_ = tx.Rollback()
+		return 0, err
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		_ = tx.Rollback()
+		if err != nil {
+			return 0, err
+		}
+		return BotAddNotAvailable, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	data.Owner = owner
+	m.bots[entry] = data
+	return BotAddSuccess, nil
+}
+
+func (m *NPCBotManager) classEnabled(class uint8) bool {
+	switch class {
+	case BotClassBlademaster:
+		return m.config.BlademasterEnable
+	case BotClassObsidianDestroyer:
+		return m.config.ObsidianDestroyerEnable
+	case BotClassArchmage:
+		return m.config.ArchmageEnable
+	case BotClassDreadlord:
+		return m.config.DreadlordEnable
+	case BotClassSpellbreaker:
+		return m.config.SpellBreakerEnable
+	case BotClassDarkRanger:
+		return m.config.DarkRangerEnable
+	default:
+		return true
+	}
+}
+
+func NpcBotCost(level, class uint8, base uint64) uint64 {
+	var cost uint64
+	switch {
+	case level < 10:
+		cost = base / 5000
+	case level < 20:
+		cost = base / 100
+	case level < 30:
+		cost = base / 20
+	case level < 40:
+		cost = base / 5
+	default:
+		cost = base * uint64(level) / 80
+	}
+	switch class {
+	case BotClassBlademaster, BotClassArchmage, BotClassSpellbreaker:
+		cost *= 2
+	case BotClassObsidianDestroyer, BotClassDreadlord, BotClassDarkRanger:
+		cost *= 5
+	}
+	return cost
 }
 
 func loadNpcBotAppearance(ctx context.Context, store *database.Store) (map[uint32]NpcBotAppearanceData, error) {
