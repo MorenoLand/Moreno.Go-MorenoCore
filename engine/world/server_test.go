@@ -198,6 +198,26 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if chatOpcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) || len(chatPayload) == 0 {
 		t.Fatalf("chat opcode=%x payload=%d", chatOpcode, len(chatPayload))
 	}
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST), nil, clientCrypt); err != nil {
+		t.Fatal(err)
+	}
+	logoutOpcode, logoutPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if logoutOpcode != uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE) || len(logoutPayload) != 5 || binary.LittleEndian.Uint32(logoutPayload[:4]) != 0 || logoutPayload[4] != 0 {
+		t.Fatalf("logout response opcode=%x payload=%x", logoutOpcode, logoutPayload)
+	}
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_LOGOUT_CANCEL), nil, clientCrypt); err != nil {
+		t.Fatal(err)
+	}
+	cancelOpcode, cancelPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelOpcode != uint16(protocol.OpcodeSMSG_LOGOUT_CANCEL_ACK) || len(cancelPayload) != 0 {
+		t.Fatalf("logout cancel opcode=%x payload=%x", cancelOpcode, cancelPayload)
+	}
 	deletePayload := protocol.NewBuffer(8)
 	deletePayload.WritePackedGUID(99)
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_CHAR_DELETE), deletePayload.Bytes(), clientCrypt); err != nil {

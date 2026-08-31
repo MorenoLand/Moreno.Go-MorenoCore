@@ -294,6 +294,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	s.playerGUID = guid
+	s.player = &state
 	s.playerLoaded = true
 	timePacket := protocol.NewBuffer(12)
 	timePacket.WritePackedTime(time.Now())

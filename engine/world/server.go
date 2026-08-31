@@ -57,6 +57,8 @@ type session struct {
 	mounts       *MountState
 	playerGUID   uint64
 	playerLoaded bool
+	player       *playerState
+	logoutAt     time.Time
 }
 
 type account struct {
@@ -108,8 +110,24 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		return
 	}
 	for {
+		if state.logoutAt.IsZero() {
+			_ = conn.SetReadDeadline(time.Time{})
+		} else {
+			_ = conn.SetReadDeadline(state.logoutAt)
+		}
 		header, payload, err := protocol.ReadClientFrame(conn, state.decrypt)
 		if err != nil {
+			if !state.logoutAt.IsZero() && isReadTimeout(err) {
+				if logoutErr := state.completeLogout(ctx); logoutErr != nil {
+					state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
+				}
+			}
+			return
+		}
+		if !state.logoutAt.IsZero() && !time.Now().Before(state.logoutAt) {
+			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
+				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
+			}
 			return
 		}
 		switch header.Opcode {
@@ -135,6 +153,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_PLAYER_LOGIN):
 			if !state.authed || !state.handlePlayerLogin(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST):
+			if !state.authed || !state.handleLogoutRequest(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LOGOUT_CANCEL):
+			if !state.authed || !state.handleLogoutCancel() {
 				return
 			}
 		default:
