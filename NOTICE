@@ -1,0 +1,3 @@
+This MorenoCore project is a Go reimplementation derived from the MorenoLand MorenoCore4 and TrinityCore codebases.
+
+The integrated distribution includes translated Eluna Lua Engine behavior and Lua 5.2.3 compatibility work. See THIRD_PARTY_NOTICES.md for component attributions and license notices.

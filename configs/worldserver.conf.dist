@@ -1,0 +1,14 @@
+Database.Backend = "sqlite"
+DataDir = "."
+SchemaDir = "sql"
+AuthDatabaseFile = "auth.db"
+CharactersDatabaseFile = "characters.db"
+WorldDatabaseFile = "world.db"
+LoginDatabaseInfo = ""
+WorldDatabaseInfo = ""
+CharacterDatabaseInfo = ""
+WorldServerPort = 8085
+RealmID = 1
+LogsDir = "logs"
+Eluna.Enabled = true
+Eluna.ScriptPath = "lua_scripts"

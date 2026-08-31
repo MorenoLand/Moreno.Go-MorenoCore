@@ -1,0 +1,10 @@
+Database.Backend = "sqlite"
+DataDir = "."
+SchemaDir = "sql"
+AuthDatabaseFile = "auth.db"
+CharactersDatabaseFile = "characters.db"
+WorldDatabaseFile = "world.db"
+LoginDatabaseInfo = ""
+RealmServerPort = 3724
+RealmID = 1
+LogsDir = "logs"
