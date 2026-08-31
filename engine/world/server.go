@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -37,6 +38,8 @@ type Server struct {
 	WorldStore      *database.Store
 	Logger          *slog.Logger
 	RealmID         uint32
+	Config          config.Config
+	Features        *Features
 }
 
 type session struct {
@@ -59,8 +62,16 @@ type account struct {
 	OS          string
 }
 
-func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32) *Server {
-	return &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID}
+func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settings ...config.Config) *Server {
+	c := config.Default()
+	if len(settings) != 0 {
+		c = settings[0]
+	}
+	return &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores)}
+}
+
+func (s *Server) Initialize(ctx context.Context) error {
+	return s.Features.Initialize(ctx)
 }
 
 func (s *Server) Handle(ctx context.Context, conn net.Conn) {

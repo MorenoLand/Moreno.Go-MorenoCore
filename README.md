@@ -10,6 +10,12 @@ From the repository root, `go run .` uses SQLite and starts the authentication a
 
 The individual services are available with `go run ./server/authserver` and `go run ./server/worldserver`. Use `--config`, `--backend`, and `--data-dir` to select configuration, database backend, and runtime data location. MySQL/MariaDB connection values are supplied through configuration or environment variables and are never embedded in the binaries.
 
+## Build and package layout
+
+Use `scripts/build.ps1 moreno` for the combined executable, `scripts/build.ps1 auth` for AuthServer, `scripts/build.ps1 world` for the game/world server, or `scripts/build.ps1 all` for all three. Unix-like systems can use `scripts/build.sh` with the same target names. `scripts/run.ps1` and `scripts/run.sh` run the combined service by default and accept `auth` or `world` for a single service.
+
+The ignored `bin/` directory is the local runtime package: place the three SQLite databases, custom `authserver.conf` and `worldserver.conf`, and `lua_scripts/` there. The ignored `data/` directory contains local maps, DBCs, VMAPs, and MMAPs. `scripts/setup.ps1` or `scripts/setup.sh` accepts explicit SQL dump and WotLK data archive paths and never assumes a Desktop or deployment path.
+
 ## Database input
 
 The public SQL files contain schema only. Use `go run ./tools/dbtool schema` to derive public schema templates from explicit dump paths, `go run ./tools/dbtool import-sql` to convert local SQL dumps into SQLite files, and `go run ./tools/dbtool verify` to check imported table and row totals. Local dumps and generated databases are ignored by Git.

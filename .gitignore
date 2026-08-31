@@ -5,6 +5,7 @@
 authserver.conf
 worldserver.conf
 trinitygo.conf
+/bin/
 logs/
 data/
 build/

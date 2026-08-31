@@ -37,8 +37,13 @@ func RunCombined(ctx context.Context, c config.Config, logger *slog.Logger) erro
 		return err
 	}
 	defer stores.Close()
-	authService := &Service{Kind: Auth, Address: fmt.Sprintf(":%d", c.RealmServerPort), Store: stores.Auth, Handler: authHandler(stores.Auth, logger, c.RealmID)}
-	worldService := &Service{Kind: World, Address: fmt.Sprintf(":%d", c.WorldServerPort), Store: stores.World, Handler: worldHandler(stores, logger, c.RealmID)}
+	authServer := auth.NewServer(stores.Auth, logger, c.RealmID)
+	worldServer := world.NewServer(stores, logger, c.RealmID, c)
+	if err := worldServer.Initialize(ctx); err != nil {
+		return err
+	}
+	authService := &Service{Kind: Auth, Address: fmt.Sprintf(":%d", c.RealmServerPort), Store: stores.Auth, Handler: authServer.Handle}
+	worldService := &Service{Kind: World, Address: fmt.Sprintf(":%d", c.WorldServerPort), Store: stores.World, Handler: worldServer.Handle}
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	errs := make(chan error, 2)
@@ -61,26 +66,21 @@ func RunSingle(ctx context.Context, c config.Config, kind Kind, logger *slog.Log
 		return err
 	}
 	defer stores.Close()
-	store := stores.Auth
-	address := fmt.Sprintf(":%d", c.RealmServerPort)
-	if kind == World {
-		store = stores.World
-		address = fmt.Sprintf(":%d", c.WorldServerPort)
-	}
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if kind == Auth {
-		return (&Service{Kind: kind, Address: address, Store: store, Handler: authHandler(store, logger, c.RealmID)}).Run(ctx, logger)
+		server := auth.NewServer(stores.Auth, logger, c.RealmID)
+		return (&Service{Kind: kind, Address: fmt.Sprintf(":%d", c.RealmServerPort), Store: stores.Auth, Handler: server.Handle}).Run(ctx, logger)
 	}
-	return (&Service{Kind: kind, Address: address, Store: store, Handler: worldHandler(stores, logger, c.RealmID)}).Run(ctx, logger)
+	server := world.NewServer(stores, logger, c.RealmID, c)
+	if err := server.Initialize(ctx); err != nil {
+		return err
+	}
+	return (&Service{Kind: kind, Address: fmt.Sprintf(":%d", c.WorldServerPort), Store: stores.World, Handler: server.Handle}).Run(ctx, logger)
 }
 
 func authHandler(store *database.Store, logger *slog.Logger, realmID uint32) func(context.Context, net.Conn) {
 	return auth.NewServer(store, logger, realmID).Handle
-}
-
-func worldHandler(stores *database.Set, logger *slog.Logger, realmID uint32) func(context.Context, net.Conn) {
-	return world.NewServer(stores, logger, realmID).Handle
 }
 
 func (s *Service) Run(ctx context.Context, logger *slog.Logger) error {

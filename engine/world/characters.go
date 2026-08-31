@@ -31,6 +31,13 @@ const (
 	charCreateSuccess                   = 47
 	charCreateError                     = 48
 	charCreateFailed                    = 49
+	charCreateDisabled                  = 51
+	charCreateServerLimit               = 53
+	charCreateAccountLimit              = 54
+	charCreateExpansion                 = 57
+	charCreateExpansionClass            = 58
+	charCreateLevelRequirement          = 59
+	charCreateUniqueClassLimit          = 60
 	charCreateNameInUse                 = 50
 	charDeleteSuccess                   = 71
 	charDeleteFailed                    = 72
@@ -114,7 +121,43 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	}
 	race, class, gender := values[0], values[1], values[2]
 	if !validCharacterName(name) || race == 0 || class == 0 || gender > 2 {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 49)
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateFailed)
+	}
+	if disabled := s.server.Config.CharacterCreatingDisabled; disabled != 0 {
+		team := raceTeam(race)
+		if (team == 1 && disabled&1 != 0) || (team == 2 && disabled&2 != 0) {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+		}
+	}
+	if !playableRace(race) || s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 || !playableClass(class) || s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
+	}
+	if raceExpansion(race) > s.server.Config.Expansion {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateExpansion)
+	}
+	if classExpansion(class) > s.server.Config.Expansion {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateExpansionClass)
+	}
+	if class == 6 {
+		if s.server.Config.DeathKnightsPerRealm == 0 {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateUniqueClassLimit)
+		}
+		var deathKnights int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(guid) FROM characters WHERE account = ? AND class = ?", s.accountID, class).Scan(&deathKnights); err != nil {
+			return false
+		}
+		if deathKnights >= int64(s.server.Config.DeathKnightsPerRealm) {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateUniqueClassLimit)
+		}
+		if required := s.server.Config.CharacterCreatingMinLevelForDeathKnight; required > 0 {
+			var maxLevel sql.NullInt64
+			if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT MAX(level) FROM characters WHERE account = ? AND class <> ?", s.accountID, class).Scan(&maxLevel); err != nil {
+				return false
+			}
+			if !maxLevel.Valid || maxLevel.Int64 < int64(required) {
+				return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateLevelRequirement)
+			}
+		}
 	}
 	row, err := s.server.CharactersStore.QueryRowStatement(ctx, "CHAR_SEL_CHECK_NAME", name)
 	if err != nil {
@@ -140,8 +183,15 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if err := s.server.CharactersStore.QueryRowContext(ctx, "SELECT COUNT(guid) FROM characters WHERE account = ?", s.accountID).Scan(&accountCharacters); err != nil {
 		return false
 	}
-	if accountCharacters >= 50 {
-		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 54)
+	if accountCharacters >= int64(s.server.Config.CharactersPerAccount) {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateAccountLimit)
+	}
+	var realmCharacterCount int64
+	if err := s.server.CharactersStore.QueryRowContext(ctx, "SELECT COUNT(guid) FROM characters WHERE account = ?", s.accountID).Scan(&realmCharacterCount); err != nil {
+		return false
+	}
+	if realmCharacterCount >= int64(s.server.Config.CharactersPerRealm) {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateServerLimit)
 	}
 	var guid uint64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM characters").Scan(&guid); err != nil {
@@ -215,7 +265,17 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
 	timePacket.WritePackedTime(time.Now())
 	timePacket.WriteF32(0.5)
 	timePacket.WriteU32(0)
-	return s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), timePacket.Bytes(), true) == nil
+	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), timePacket.Bytes(), true); err != nil {
+		return false
+	}
+	s.server.Features.OnPlayerLogin()
+	if s.server.Config.SoloLFGAnnounce {
+		message := protocol.BuildSystemChatMessage("This server is running |cff4CFF00Solo Dungeon Finder|r module.")
+		if err := s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), message, true); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func scanEnumCharacter(rows *sql.Rows) (enumCharacter, error) {
@@ -343,4 +403,47 @@ func validCharacterName(name string) bool {
 		}
 	}
 	return true
+}
+
+func playableRace(race uint8) bool {
+	switch race {
+	case 1, 2, 3, 4, 5, 6, 7, 8, 10, 11:
+		return true
+	default:
+		return false
+	}
+}
+
+func playableClass(class uint8) bool {
+	switch class {
+	case 1, 2, 3, 4, 5, 6, 7, 8, 9, 11:
+		return true
+	default:
+		return false
+	}
+}
+
+func raceTeam(race uint8) uint8 {
+	switch race {
+	case 1, 3, 4, 7, 11:
+		return 1
+	case 2, 5, 6, 8, 10:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func raceExpansion(race uint8) uint32 {
+	if race == 10 || race == 11 {
+		return 1
+	}
+	return 0
+}
+
+func classExpansion(class uint8) uint32 {
+	if class == 6 {
+		return 2
+	}
+	return 0
 }
