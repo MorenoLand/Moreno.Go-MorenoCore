@@ -158,6 +158,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	debugAccount := accountName
 	if _, err = b.ReadU32(); err != nil {
 		return false
 	}
@@ -184,22 +185,27 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	}
 	account, err := loadAccount(ctx, s.server.AuthStore, accountName)
 	if err != nil || account == nil {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "unknown account")
 		_ = s.write(opcodeAuthResponse, []byte{authUnknownAccount}, false)
 		return false
 	}
 	if realmID != s.server.RealmID {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "realm mismatch", "realm", realmID)
 		_ = s.write(opcodeAuthResponse, []byte{loginServerNotFound}, false)
 		return false
 	}
 	if banned, err := accountBanned(ctx, s.server.AuthStore, account.ID); err != nil || banned {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "account ban")
 		_ = s.write(opcodeAuthResponse, []byte{authBanned}, false)
 		return false
 	}
 	if account.Locked && account.LastIP != remoteAddress(s.conn) {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "ip lock")
 		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
 		return false
 	}
 	if len(account.SessionKey) != crypto.SRP6SessionKeyLength {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "invalid session key length")
 		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
 		return false
 	}
@@ -210,6 +216,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	_, _ = h.Write(s.authSeed[:])
 	_, _ = h.Write(account.SessionKey)
 	if subtle.ConstantTimeCompare(h.Sum(nil), digestBytes) != 1 {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "invalid session digest")
 		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
 		return false
 	}
@@ -226,7 +233,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	s.authed = true
 	s.accountID = account.ID
 	s.accountName = accountName
-	_ = build
+	s.debug("world authentication accepted", "account", accountName, "build", build, "remote", remoteAddress(s.conn))
 	return s.write(opcodeAuthResponse, []byte{authOK}, true) == nil
 }
 
@@ -299,6 +306,16 @@ func remoteAddress(conn net.Conn) string {
 		return host
 	}
 	return strings.TrimSpace(address)
+}
+
+func (s *Server) debug(message string, args ...any) {
+	if s.Logger != nil {
+		s.Logger.Debug(message, args...)
+	}
+}
+
+func (s *session) debug(message string, args ...any) {
+	s.server.debug(message, args...)
 }
 
 func (s *session) logout() {

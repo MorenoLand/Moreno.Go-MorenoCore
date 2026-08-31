@@ -124,6 +124,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 	defer close(closed)
 	remoteIP := remoteAddress(conn)
 	state := &session{server: s, conn: conn, status: statusChallenge, remoteIP: remoteIP}
+	s.debug("authentication connection accepted", "remote", remoteIP)
 	for {
 		cmd := []byte{0}
 		if _, err := io.ReadFull(conn, cmd); err != nil {
@@ -161,23 +162,28 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	login = strings.ToUpper(login)
 	s.build = build
 	s.postBC = s.build > preBCMaxBuild
 	s.login = login
 	s.os = osName
 	s.locale = locale
+	s.debug("logon challenge received", "account", login, "build", build, "remote", s.remoteIP)
 	loaded, err := loadAccount(ctx, s.server.Store, s.login, s.remoteIP)
 	if err != nil {
 		return err
 	}
 	if loaded == nil {
+		s.debug("logon rejected", "account", s.login, "reason", "unknown account")
 		return writePacket(s.conn, []byte{logonChallenge, 0, wowUnknownAccount})
 	}
 	s.account = *loaded
 	if s.account.Locked && s.account.LastIP != s.remoteIP {
+		s.debug("logon rejected", "account", s.login, "reason", "ip lock")
 		return writePacket(s.conn, []byte{logonChallenge, 0, wowLockedEnforced})
 	}
 	if s.account.Banned {
+		s.debug("logon rejected", "account", s.login, "reason", "account ban", "permanent", s.account.PermanentBan)
 		result := wowSuspended
 		if s.account.PermanentBan {
 			result = wowBanned
@@ -189,6 +195,7 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 		return err
 	}
 	if info == nil {
+		s.debug("logon rejected", "account", s.login, "reason", "unsupported build", "build", s.build)
 		return writePacket(s.conn, []byte{logonChallenge, 0, wowVersionInvalid})
 	}
 	s.srp, err = crypto.NewSRP6(s.account.Login, s.account.Salt, s.account.Verifier)
@@ -241,10 +248,12 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 		}
 		token, parseErr := strconv.ParseUint(strings.TrimSpace(string(tokenData)), 10, 32)
 		if !s.totpRequired || parseErr != nil || !crypto.ValidateTOTP(s.account.TotpSecret, uint32(token), time.Now()) {
+			s.debug("logon proof rejected", "account", s.account.Login, "reason", "invalid totp")
 			_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
 			return errors.New("invalid authentication token")
 		}
 	} else if s.totpRequired {
+		s.debug("logon proof rejected", "account", s.account.Login, "reason", "missing totp")
 		_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
 		return errors.New("missing authentication token")
 	}
@@ -253,6 +262,7 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 		return err
 	}
 	if !ok {
+		s.debug("logon proof rejected", "account", s.account.Login, "reason", "invalid srp6 proof")
 		_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
 		_, _ = s.server.Store.ExecStatement(ctx, "LOGIN_UPD_FAILEDLOGINS", s.account.Login)
 		return errors.New("invalid SRP6 proof")
@@ -273,6 +283,7 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 		return err
 	}
 	s.status = statusAuthed
+	s.debug("logon authenticated", "account", s.account.Login, "remote", s.remoteIP)
 	return nil
 }
 
@@ -308,9 +319,11 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 	loaded.PermanentBan = permanent != 0
 	loaded.Security = uint8(security)
 	if loaded.Banned {
+		s.debug("reconnect rejected", "account", login, "reason", "account ban")
 		return writePacket(s.conn, []byte{reconnectChallenge, wowBanned})
 	}
 	if len(sessionKey) != crypto.SRP6SessionKeyLength {
+		s.debug("reconnect rejected", "account", login, "reason", "missing session key")
 		return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount})
 	}
 	copy(s.sessionKey[:], sessionKey)
@@ -345,6 +358,7 @@ func (s *session) handleReconnectProof(ctx context.Context) error {
 	_, _ = h.Write(s.reconnectProof[:])
 	_, _ = h.Write(s.sessionKey[:])
 	if subtle.ConstantTimeCompare(h.Sum(nil), r2[:]) != 1 {
+		s.debug("reconnect proof rejected", "account", s.account.Login, "reason", "invalid proof")
 		return errors.New("invalid reconnect proof")
 	}
 	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
@@ -354,6 +368,7 @@ func (s *session) handleReconnectProof(ctx context.Context) error {
 		return err
 	}
 	s.status = statusAuthed
+	s.debug("reconnect authenticated", "account", s.account.Login, "remote", s.remoteIP)
 	return nil
 }
 
@@ -465,6 +480,7 @@ func loadAccount(ctx context.Context, store *database.Store, login, remoteIP str
 	result.PermanentBan = permanent != 0
 	result.Security = uint8(security)
 	result.TotpSecret = totp
+	result.Login = strings.ToUpper(result.Login)
 	if len(salt) != crypto.SRP6SaltLength || len(verifier) != crypto.SRP6VerifierLength {
 		return nil, errors.New("account SRP6 data has invalid length")
 	}
@@ -609,4 +625,14 @@ func remoteAddress(conn net.Conn) string {
 		return host
 	}
 	return strings.TrimSpace(address)
+}
+
+func (s *Server) debug(message string, args ...any) {
+	if s.Logger != nil {
+		s.Logger.Debug(message, args...)
+	}
+}
+
+func (s *session) debug(message string, args ...any) {
+	s.server.debug(message, args...)
 }

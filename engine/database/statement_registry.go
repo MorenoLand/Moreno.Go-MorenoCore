@@ -41,17 +41,18 @@ func (r *StatementRegistry) Len() int {
 
 var sqliteStatementOverrides = map[StatementID]string{
 	"LOGIN_SEL_IP_INFO":                "SELECT unbandate > unixepoch() OR unbandate = bandate AS banned, NULL as country FROM ip_banned WHERE ip = ?",
-	"LOGIN_UPD_LOGONPROOF":             "UPDATE account SET session_key_auth = ?, last_ip = ?, last_login = CURRENT_TIMESTAMP, locale = ?, failed_logins = 0, os = ? WHERE username = ?",
-	"LOGIN_SEL_LOGONCHALLENGE":         "SELECT a.id, a.username, a.locked, a.lock_country, a.last_ip, a.failed_logins, COALESCE(ab.unbandate > unixepoch() OR ab.unbandate = ab.bandate, 0), COALESCE(ab.unbandate = ab.bandate, 0), COALESCE(aa.SecurityLevel, 0), a.totp_secret, a.salt, a.verifier FROM account a LEFT JOIN account_access aa ON a.id = aa.AccountID LEFT JOIN account_banned ab ON ab.id = a.id AND ab.active = 1 WHERE a.username = ?",
-	"LOGIN_SEL_RECONNECTCHALLENGE":     "SELECT a.id, UPPER(a.username), a.locked, a.lock_country, a.last_ip, a.failed_logins, COALESCE(ab.unbandate > unixepoch() OR ab.unbandate = ab.bandate, 0), COALESCE(ab.unbandate = ab.bandate, 0), COALESCE(aa.SecurityLevel, 0), a.session_key_auth FROM account a LEFT JOIN account_access aa ON a.id = aa.AccountID LEFT JOIN account_banned ab ON ab.id = a.id AND ab.active = 1 WHERE a.username = ? AND a.session_key_auth IS NOT NULL",
+	"LOGIN_UPD_LOGONPROOF":             "UPDATE account SET session_key_auth = ?, last_ip = ?, last_login = CURRENT_TIMESTAMP, locale = ?, failed_logins = 0, os = ? WHERE UPPER(username) = UPPER(?)",
+	"LOGIN_SEL_LOGONCHALLENGE":         "SELECT a.id, UPPER(a.username), a.locked, a.lock_country, a.last_ip, a.failed_logins, COALESCE(ab.unbandate > unixepoch() OR ab.unbandate = ab.bandate, 0), COALESCE(ab.unbandate = ab.bandate, 0), COALESCE(aa.SecurityLevel, 0), a.totp_secret, a.salt, a.verifier FROM account a LEFT JOIN account_access aa ON a.id = aa.AccountID LEFT JOIN account_banned ab ON ab.id = a.id AND ab.active = 1 WHERE UPPER(a.username) = UPPER(?)",
+	"LOGIN_SEL_RECONNECTCHALLENGE":     "SELECT a.id, UPPER(a.username), a.locked, a.lock_country, a.last_ip, a.failed_logins, COALESCE(ab.unbandate > unixepoch() OR ab.unbandate = ab.bandate, 0), COALESCE(ab.unbandate = ab.bandate, 0), COALESCE(aa.SecurityLevel, 0), a.session_key_auth FROM account a LEFT JOIN account_access aa ON a.id = aa.AccountID LEFT JOIN account_banned ab ON ab.id = a.id AND ab.active = 1 WHERE UPPER(a.username) = UPPER(?) AND a.session_key_auth IS NOT NULL",
 	"LOGIN_SEL_ACCOUNT_INFO_BY_NAME":   "SELECT a.id, a.session_key_auth, a.last_ip, a.locked, a.lock_country, a.expansion, a.mutetime, a.locale, a.recruiter, a.os, COALESCE(aa.SecurityLevel, 0), COALESCE(ab.unbandate > unixepoch() OR ab.unbandate = ab.bandate, 0), r.id FROM account a LEFT JOIN account_access aa ON a.id = aa.AccountID AND aa.RealmID IN (-1, ?) LEFT JOIN account_banned ab ON a.id = ab.id AND ab.active = 1 LEFT JOIN account r ON a.id = r.recruiter WHERE a.username = ? AND a.session_key_auth IS NOT NULL ORDER BY aa.RealmID DESC LIMIT 1",
 	"LOGIN_SEL_REALM_CHARACTER_COUNTS": "SELECT realmid, numchars FROM realmcharacters WHERE acctid = ?",
-	"LOGIN_UPD_LAST_IP":                "UPDATE account SET last_ip = ? WHERE username = ?",
-	"LOGIN_UPD_LAST_ATTEMPT_IP":        "UPDATE account SET last_attempt_ip = ? WHERE username = ?",
-	"LOGIN_UPD_FAILEDLOGINS":           "UPDATE account SET failed_logins = failed_logins + 1 WHERE username = ?",
+	"LOGIN_UPD_LAST_IP":                "UPDATE account SET last_ip = ? WHERE UPPER(username) = UPPER(?)",
+	"LOGIN_UPD_LAST_ATTEMPT_IP":        "UPDATE account SET last_attempt_ip = ? WHERE UPPER(username) = UPPER(?)",
+	"LOGIN_UPD_FAILEDLOGINS":           "UPDATE account SET failed_logins = failed_logins + 1 WHERE UPPER(username) = UPPER(?)",
 	"LOGIN_INS_IP_AUTO_BANNED":         "INSERT INTO ip_banned (ip, bandate, unbandate, bannedby, banreason) VALUES (?, unixepoch(), unixepoch()+?, 'Trinity Auth', 'Failed login autoban')",
 	"LOGIN_INS_ACCOUNT_AUTO_BANNED":    "INSERT INTO account_banned (id, bandate, unbandate, bannedby, banreason, active) VALUES (?, unixepoch(), unixepoch()+?, 'Trinity Auth', 'Failed login autoban', 1)",
 	"CHAR_DEL_EXPIRED_BANS":            "UPDATE character_banned SET active = 0 WHERE unbandate <= unixepoch() AND unbandate <> bandate",
+	"CHAR_SEL_CHECK_NAME":               "SELECT 1 FROM characters WHERE UPPER(name) = UPPER(?)",
 }
 
 func StatementSQL(id StatementID, backend Backend) (string, error) {

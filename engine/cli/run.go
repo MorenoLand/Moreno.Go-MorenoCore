@@ -19,6 +19,7 @@ func Run(kind *service.Kind) int {
 	backend := fs.String("backend", "", "database backend: sqlite, mysql, or mariadb")
 	dataDir := fs.String("data-dir", "", "runtime data directory")
 	showVersion := fs.Bool("version", false, "show version")
+	debug := fs.Bool("debug", false, "enable basic authentication and runtime debug logs")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return 2
 	}
@@ -42,7 +43,7 @@ func Run(kind *service.Kind) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := newLogger(*debug)
 	if err := service.RunSingle(context.Background(), c, *kind, logger); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -51,12 +52,13 @@ func Run(kind *service.Kind) int {
 }
 
 func RunCombined() int {
-	fs := flag.NewFlagSet("trinitygo", flag.ContinueOnError)
+	fs := flag.NewFlagSet("morenocore", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	configPath := fs.String("config", "", "configuration file")
 	backend := fs.String("backend", "", "database backend: sqlite, mysql, or mariadb")
 	dataDir := fs.String("data-dir", "", "runtime data directory")
 	showVersion := fs.Bool("version", false, "show version")
+	debug := fs.Bool("debug", false, "enable basic authentication and runtime debug logs")
 	authOnly := fs.Bool("auth", false, "run only the authentication service")
 	worldOnly := fs.Bool("world", false, "run only the world service")
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -82,7 +84,7 @@ func RunCombined() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := newLogger(*debug)
 	if *authOnly && *worldOnly {
 		fmt.Fprintln(os.Stderr, "--auth and --world cannot be used together")
 		return 2
@@ -108,4 +110,12 @@ func RunCombined() int {
 		return 1
 	}
 	return 0
+}
+
+func newLogger(debug bool) *slog.Logger {
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 }
