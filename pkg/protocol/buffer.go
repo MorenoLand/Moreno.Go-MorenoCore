@@ -76,6 +76,23 @@ func (b *Buffer) WriteF64(value float64)    { b.WriteU64(math.Float64bits(value)
 func (b *Buffer) WriteCString(value string) { b.Write([]byte(value)); b.WriteU8(0) }
 func (b *Buffer) WriteString(value string)  { b.Write([]byte(value)) }
 
+func (b *Buffer) WritePackedGUID(value uint64) {
+	var mask uint8
+	var bytes [8]byte
+	for i := range bytes {
+		bytes[i] = byte(value >> (8 * i))
+		if bytes[i] != 0 {
+			mask |= 1 << i
+		}
+	}
+	b.WriteU8(mask)
+	for i := range bytes {
+		if mask&(1<<i) != 0 {
+			b.WriteU8(bytes[i])
+		}
+	}
+}
+
 func (b *Buffer) read(size int) ([]byte, error) {
 	if size < 0 || b.pos+size > len(b.data) {
 		return nil, io.ErrUnexpectedEOF
@@ -141,4 +158,23 @@ func (b *Buffer) ReadCString() (string, error) {
 		}
 	}
 	return "", io.ErrUnexpectedEOF
+}
+
+func (b *Buffer) ReadPackedGUID() (uint64, error) {
+	mask, err := b.ReadU8()
+	if err != nil {
+		return 0, err
+	}
+	var value uint64
+	for i := 0; i < 8; i++ {
+		if mask&(1<<i) == 0 {
+			continue
+		}
+		part, err := b.ReadU8()
+		if err != nil {
+			return 0, err
+		}
+		value |= uint64(part) << (8 * i)
+	}
+	return value, nil
 }

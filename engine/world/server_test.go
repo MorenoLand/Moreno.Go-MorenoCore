@@ -26,6 +26,10 @@ func TestAuthSessionAndPing(t *testing.T) {
 	for _, statement := range []string{
 		"CREATE TABLE account (id INTEGER PRIMARY KEY, username TEXT NOT NULL, session_key_auth BLOB, last_ip TEXT, locked INTEGER, lock_country TEXT, os TEXT)",
 		"CREATE TABLE account_banned (id INTEGER NOT NULL, bandate INTEGER NOT NULL, unbandate INTEGER NOT NULL, active INTEGER NOT NULL)",
+		"CREATE TABLE character_banned (guid INTEGER NOT NULL, active INTEGER NOT NULL)",
+		"CREATE TABLE character_pet (owner INTEGER NOT NULL, slot INTEGER NOT NULL, entry INTEGER, modelid INTEGER, level INTEGER)",
+		"CREATE TABLE guild_member (guid INTEGER NOT NULL, guildid INTEGER NOT NULL)",
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, account INTEGER NOT NULL, name TEXT NOT NULL, race INTEGER NOT NULL, class INTEGER NOT NULL, gender INTEGER NOT NULL, skin INTEGER NOT NULL, face INTEGER NOT NULL, hairStyle INTEGER NOT NULL, hairColor INTEGER NOT NULL, facialStyle INTEGER NOT NULL, level INTEGER NOT NULL, zone INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, orientation REAL NOT NULL, playerFlags INTEGER NOT NULL, at_login INTEGER NOT NULL, equipmentCache TEXT, deleteInfos_Name TEXT)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -35,8 +39,12 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO account (id, username, session_key_auth, last_ip, locked, lock_country, os) VALUES (7, 'TEST', ?, '127.0.0.1', 0, '00', 'Win')", key); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec("INSERT INTO characters (guid, account, name, race, class, gender, skin, face, hairStyle, hairColor, facialStyle, level, zone, map, position_x, position_y, position_z, orientation, playerFlags, at_login, equipmentCache) VALUES (99, 7, 'Tester', 1, 1, 0, 0, 0, 0, 0, 0, 1, 12, 0, 1.5, 2.5, 3.5, 0.5, 0, 32, '')"); err != nil {
+		t.Fatal(err)
+	}
 	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
-	server := NewServer(store, slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
+	stores := &database.Set{Auth: store, Characters: store, World: store}
+	server := NewServer(stores, slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
 	go server.Handle(context.Background(), serverConn)
@@ -98,6 +106,52 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if pongOpcode != opcodePong || !bytes.Equal(pongPayload, []byte{123, 0, 0, 0}) {
 		t.Fatalf("pong opcode=%x payload=%x", pongOpcode, pongPayload)
 	}
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_CHAR_ENUM), nil, clientCrypt); err != nil {
+		t.Fatal(err)
+	}
+	charOpcode, charPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if charOpcode != uint16(protocol.OpcodeSMSG_CHAR_ENUM) {
+		t.Fatalf("character opcode=%x", charOpcode)
+	}
+	characters := protocol.NewReader(charPayload)
+	count, err := characters.ReadU8()
+	if err != nil || count != 1 {
+		t.Fatalf("character count=%d err=%v", count, err)
+	}
+	guid, err := characters.ReadPackedGUID()
+	if err != nil || guid != 99 {
+		t.Fatalf("character guid=%d err=%v", guid, err)
+	}
+	if name, err := characters.ReadCString(); err != nil || name != "Tester" {
+		t.Fatalf("character name=%q err=%v", name, err)
+	}
+	loginPayload := protocol.NewBuffer(8)
+	loginPayload.WritePackedGUID(99)
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_PLAYER_LOGIN), loginPayload.Bytes(), clientCrypt); err != nil {
+		t.Fatal(err)
+	}
+	newWorldOpcode, newWorldPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newWorldOpcode != uint16(protocol.OpcodeSMSG_NEW_WORLD) || len(newWorldPayload) != 20 {
+		t.Fatalf("new world opcode=%x payload=%d", newWorldOpcode, len(newWorldPayload))
+	}
+	deletePayload := protocol.NewBuffer(8)
+	deletePayload.WritePackedGUID(99)
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_CHAR_DELETE), deletePayload.Bytes(), clientCrypt); err != nil {
+		t.Fatal(err)
+	}
+	deleteOpcode, deleteResponse, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleteOpcode != uint16(protocol.OpcodeSMSG_CHAR_DELETE) || !bytes.Equal(deleteResponse, []byte{71}) {
+		t.Fatalf("delete opcode=%x response=%x", deleteOpcode, deleteResponse)
+	}
 }
 
 func writeClientFrame(w io.Writer, opcode uint32, payload []byte, crypt interface{ EncryptSend([]byte) error }) error {
@@ -112,6 +166,9 @@ func writeClientFrame(w io.Writer, opcode uint32, payload []byte, crypt interfac
 	}
 	if _, err := w.Write(header); err != nil {
 		return err
+	}
+	if len(payload) == 0 {
+		return nil
 	}
 	_, err := w.Write(payload)
 	return err

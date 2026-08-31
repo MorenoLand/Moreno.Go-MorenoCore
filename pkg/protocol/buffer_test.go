@@ -44,3 +44,13 @@ func TestBufferRoundTrip(t *testing.T) {
 		t.Fatalf("remaining bytes: %d", b.Remaining())
 	}
 }
+
+func TestPackedGUIDRoundTrip(t *testing.T) {
+	b := NewBuffer(16)
+	b.WritePackedGUID(0x0011223300445500)
+	b.ResetRead()
+	value, err := b.ReadPackedGUID()
+	if err != nil || value != 0x0011223300445500 {
+		t.Fatalf("value=%x err=%v", value, err)
+	}
+}

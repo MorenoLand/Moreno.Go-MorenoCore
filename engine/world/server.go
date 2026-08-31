@@ -32,18 +32,22 @@ const (
 )
 
 type Server struct {
-	Store   *database.Store
-	Logger  *slog.Logger
-	RealmID uint32
+	AuthStore       *database.Store
+	CharactersStore *database.Store
+	WorldStore      *database.Store
+	Logger          *slog.Logger
+	RealmID         uint32
 }
 
 type session struct {
-	server    *Server
-	conn      net.Conn
-	authSeed  [4]byte
-	crypt     *crypto.AuthCrypt
-	authed    bool
-	accountID uint32
+	server      *Server
+	conn        net.Conn
+	authSeed    [4]byte
+	crypt       *crypto.AuthCrypt
+	authed      bool
+	accountID   uint32
+	accountName string
+	legitimate  map[uint64]struct{}
 }
 
 type account struct {
@@ -55,8 +59,8 @@ type account struct {
 	OS          string
 }
 
-func NewServer(store *database.Store, logger *slog.Logger, realmID uint32) *Server {
-	return &Server{Store: store, Logger: logger, RealmID: realmID}
+func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32) *Server {
+	return &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID}
 }
 
 func (s *Server) Handle(ctx context.Context, conn net.Conn) {
@@ -70,7 +74,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 	}()
 	defer close(closed)
-	state := &session{server: s, conn: conn}
+	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{})}
 	if _, err := rand.Read(state.authSeed[:]); err != nil {
 		return
 	}
@@ -97,6 +101,18 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case opcodePing:
 			if !state.authed || !state.handlePing(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHAR_ENUM):
+			if !state.authed || !state.handleCharEnum(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHAR_DELETE):
+			if !state.authed || !state.handleCharDelete(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PLAYER_LOGIN):
+			if !state.authed || !state.handlePlayerLogin(ctx, payload) {
 				return
 			}
 		default:
@@ -144,7 +160,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	account, err := loadAccount(ctx, s.server.Store, accountName)
+	account, err := loadAccount(ctx, s.server.AuthStore, accountName)
 	if err != nil || account == nil {
 		_ = s.write(opcodeAuthResponse, []byte{authUnknownAccount}, false)
 		return false
@@ -153,7 +169,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		_ = s.write(opcodeAuthResponse, []byte{loginServerNotFound}, false)
 		return false
 	}
-	if banned, err := accountBanned(ctx, s.server.Store, account.ID); err != nil || banned {
+	if banned, err := accountBanned(ctx, s.server.AuthStore, account.ID); err != nil || banned {
 		_ = s.write(opcodeAuthResponse, []byte{authBanned}, false)
 		return false
 	}
@@ -175,7 +191,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
 		return false
 	}
-	if _, err := s.server.Store.DB.ExecContext(ctx, "UPDATE account SET last_ip = ? WHERE id = ?", remoteAddress(s.conn), account.ID); err != nil {
+	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET last_ip = ? WHERE id = ?", remoteAddress(s.conn), account.ID); err != nil {
 		return false
 	}
 	s.crypt, err = crypto.NewAuthCrypt(account.SessionKey)
@@ -184,6 +200,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	}
 	s.authed = true
 	s.accountID = account.ID
+	s.accountName = accountName
 	_ = build
 	return s.write(opcodeAuthResponse, []byte{authOK}, true) == nil
 }
