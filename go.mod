@@ -1,4 +1,4 @@
-module github.com/MorenoLand/Moreno.Go-MorenoCore5
+module github.com/MorenoLand/Moreno.Go-MorenoCore
 
 go 1.26.0
 

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 )
 
 func main() {

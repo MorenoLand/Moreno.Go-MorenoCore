@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/runtime"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/runtime"
 )
 
 type QueryResult struct {

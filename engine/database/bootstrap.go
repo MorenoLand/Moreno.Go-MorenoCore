@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 )
 
 var (

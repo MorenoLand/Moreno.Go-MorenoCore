@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 )
 
 type Backend string

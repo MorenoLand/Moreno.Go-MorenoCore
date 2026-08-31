@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 )
 
 func connection(backend, file, info string, c config.Config) (string, string, Backend, error) {

@@ -11,9 +11,9 @@ import (
 	"net"
 	"testing"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/crypto"
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/database"
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/pkg/protocol"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 func TestAuthSessionAndPing(t *testing.T) {

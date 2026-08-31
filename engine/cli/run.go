@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/config"
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/service"
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/version"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/service"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/version"
 )
 
 func Run(kind *service.Kind) int {

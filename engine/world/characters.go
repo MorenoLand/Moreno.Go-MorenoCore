@@ -6,7 +6,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/pkg/protocol"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 const (

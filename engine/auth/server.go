@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/crypto"
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/engine/database"
-	"github.com/MorenoLand/Moreno.Go-MorenoCore5/pkg/protocol"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 const (
@@ -84,20 +84,20 @@ type realm struct {
 }
 
 type session struct {
-	server     *Server
-	conn       net.Conn
-	status     byte
-	account    account
-	srp        *crypto.SRP6
-	sessionKey [crypto.SRP6SessionKeyLength]byte
+	server         *Server
+	conn           net.Conn
+	status         byte
+	account        account
+	srp            *crypto.SRP6
+	sessionKey     [crypto.SRP6SessionKeyLength]byte
 	reconnectProof [16]byte
-	build      uint32
-	postBC     bool
-	login      string
-	remoteIP   string
-	os         string
-	locale     uint8
-	totpRequired bool
+	build          uint32
+	postBC         bool
+	login          string
+	remoteIP       string
+	os             string
+	locale         uint8
+	totpRequired   bool
 }
 
 const (
@@ -158,7 +158,9 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 		return errors.New("unexpected logon challenge")
 	}
 	build, login, osName, locale, err := readChallenge(s.conn)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	s.build = build
 	s.postBC = s.build > preBCMaxBuild
 	s.login = login
@@ -230,9 +232,13 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 	copy(clientM[:], data[32:52])
 	if data[73]&0x04 != 0 {
 		size := []byte{0}
-		if _, err := io.ReadFull(s.conn, size); err != nil { return err }
+		if _, err := io.ReadFull(s.conn, size); err != nil {
+			return err
+		}
 		tokenData := make([]byte, size[0])
-		if _, err := io.ReadFull(s.conn, tokenData); err != nil { return err }
+		if _, err := io.ReadFull(s.conn, tokenData); err != nil {
+			return err
+		}
 		token, parseErr := strconv.ParseUint(strings.TrimSpace(string(tokenData)), 10, 32)
 		if !s.totpRequired || parseErr != nil || !crypto.ValidateTOTP(s.account.TotpSecret, uint32(token), time.Now()) {
 			_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
@@ -271,21 +277,29 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 }
 
 func (s *session) handleReconnectChallenge(ctx context.Context) error {
-	if s.status != statusChallenge { return errors.New("unexpected reconnect challenge") }
+	if s.status != statusChallenge {
+		return errors.New("unexpected reconnect challenge")
+	}
 	build, login, osName, locale, err := readChallenge(s.conn)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	s.build = build
 	s.postBC = build > preBCMaxBuild
 	s.login = login
 	s.os = osName
 	s.locale = locale
 	row, err := s.server.Store.QueryRowStatement(ctx, "LOGIN_SEL_RECONNECTCHALLENGE", login)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	var loaded account
 	var locked, failed, banned, permanent, security uint64
 	var sessionKey []byte
 	if err := row.Scan(&loaded.ID, &loaded.Login, &locked, &loaded.LockCountry, &loaded.LastIP, &failed, &banned, &permanent, &security, &sessionKey); err != nil {
-		if errors.Is(err, sql.ErrNoRows) { return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount}) }
+		if errors.Is(err, sql.ErrNoRows) {
+			return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount})
+		}
 		return err
 	}
 	loaded.Locked = locked != 0
@@ -293,10 +307,16 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 	loaded.Banned = banned != 0
 	loaded.PermanentBan = permanent != 0
 	loaded.Security = uint8(security)
-	if loaded.Banned { return writePacket(s.conn, []byte{reconnectChallenge, wowBanned}) }
-	if len(sessionKey) != crypto.SRP6SessionKeyLength { return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount}) }
+	if loaded.Banned {
+		return writePacket(s.conn, []byte{reconnectChallenge, wowBanned})
+	}
+	if len(sessionKey) != crypto.SRP6SessionKeyLength {
+		return writePacket(s.conn, []byte{reconnectChallenge, wowUnknownAccount})
+	}
 	copy(s.sessionKey[:], sessionKey)
-	if _, err := io.ReadFull(rand.Reader, s.reconnectProof[:]); err != nil { return err }
+	if _, err := io.ReadFull(rand.Reader, s.reconnectProof[:]); err != nil {
+		return err
+	}
 	s.account = loaded
 	packet := protocol.NewBuffer(34)
 	packet.WriteU8(reconnectChallenge)
@@ -308,9 +328,13 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 }
 
 func (s *session) handleReconnectProof(ctx context.Context) error {
-	if s.status != statusReconnectProof { return errors.New("unexpected reconnect proof") }
+	if s.status != statusReconnectProof {
+		return errors.New("unexpected reconnect proof")
+	}
 	data := make([]byte, 57)
-	if _, err := io.ReadFull(s.conn, data); err != nil { return err }
+	if _, err := io.ReadFull(s.conn, data); err != nil {
+		return err
+	}
 	var r1 [16]byte
 	var r2 [20]byte
 	copy(r1[:], data[:16])
@@ -320,9 +344,15 @@ func (s *session) handleReconnectProof(ctx context.Context) error {
 	_, _ = h.Write(r1[:])
 	_, _ = h.Write(s.reconnectProof[:])
 	_, _ = h.Write(s.sessionKey[:])
-	if subtle.ConstantTimeCompare(h.Sum(nil), r2[:]) != 1 { return errors.New("invalid reconnect proof") }
-	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil { return err }
-	if err := writePacket(s.conn, []byte{reconnectProof, wowSuccess, 0, 0}); err != nil { return err }
+	if subtle.ConstantTimeCompare(h.Sum(nil), r2[:]) != 1 {
+		return errors.New("invalid reconnect proof")
+	}
+	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
+		return err
+	}
+	if err := writePacket(s.conn, []byte{reconnectProof, wowSuccess, 0, 0}); err != nil {
+		return err
+	}
 	s.status = statusAuthed
 	return nil
 }
@@ -535,12 +565,20 @@ func writePacket(conn net.Conn, data []byte) error {
 
 func readChallenge(conn net.Conn) (uint32, string, string, uint8, error) {
 	prefix := make([]byte, 3)
-	if _, err := io.ReadFull(conn, prefix); err != nil { return 0, "", "", 0, err }
+	if _, err := io.ReadFull(conn, prefix); err != nil {
+		return 0, "", "", 0, err
+	}
 	size := binary.LittleEndian.Uint16(prefix[1:])
-	if size < 30 || size > 46 { return 0, "", "", 0, errors.New("invalid logon challenge size") }
+	if size < 30 || size > 46 {
+		return 0, "", "", 0, errors.New("invalid logon challenge size")
+	}
 	body := make([]byte, size)
-	if _, err := io.ReadFull(conn, body); err != nil { return 0, "", "", 0, err }
-	if len(body) < 30 || int(body[29])+30 != int(size) { return 0, "", "", 0, errors.New("invalid logon challenge login length") }
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return 0, "", "", 0, err
+	}
+	if len(body) < 30 || int(body[29])+30 != int(size) {
+		return 0, "", "", 0, errors.New("invalid logon challenge login length")
+	}
 	build := uint32(binary.LittleEndian.Uint16(body[7:9]))
 	login := string(body[30 : 30+body[29]])
 	osName := reverseCode(string(body[13:17]))
