@@ -107,6 +107,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleCharEnum(ctx) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_CHAR_CREATE):
+			if !state.authed || !state.handleCharCreate(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_CHAR_DELETE):
 			if !state.authed || !state.handleCharDelete(ctx, payload) {
 				return

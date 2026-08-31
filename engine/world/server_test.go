@@ -179,8 +179,10 @@ func readServerFrame(r io.Reader, crypt interface{ DecryptRecv([]byte) error }) 
 	if _, err := io.ReadFull(r, header); err != nil {
 		return 0, nil, err
 	}
-	if err := crypt.DecryptRecv(header); err != nil {
-		return 0, nil, err
+	if crypt != nil {
+		if err := crypt.DecryptRecv(header); err != nil {
+			return 0, nil, err
+		}
 	}
 	size := int(binary.BigEndian.Uint16(header[:2]))
 	payload := make([]byte, size-2)

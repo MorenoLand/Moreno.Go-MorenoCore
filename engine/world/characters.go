@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"unicode"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -26,6 +27,12 @@ const (
 	atLoginChangeFaction         uint64 = 0x040
 	atLoginChangeRace            uint64 = 0x080
 	inventorySlotBagEnd                 = 23
+	charCreateSuccess                   = 47
+	charCreateError                     = 48
+	charCreateFailed                    = 49
+	charCreateNameInUse                 = 50
+	charDeleteSuccess                   = 71
+	charDeleteFailed                    = 72
 )
 
 type enumCharacter struct {
@@ -89,6 +96,73 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 		return false
 	}
 	return s.write(uint16(protocol.OpcodeSMSG_CHAR_ENUM), packet.Bytes(), true) == nil
+}
+
+func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
+	b := protocol.NewReader(payload)
+	name, err := b.ReadCString()
+	if err != nil {
+		return false
+	}
+	values := make([]uint8, 9)
+	for i := range values {
+		values[i], err = b.ReadU8()
+		if err != nil {
+			return false
+		}
+	}
+	race, class, gender := values[0], values[1], values[2]
+	if !validCharacterName(name) || race == 0 || class == 0 || gender > 2 {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 49)
+	}
+	row, err := s.server.CharactersStore.QueryRowStatement(ctx, "CHAR_SEL_CHECK_NAME", name)
+	if err != nil {
+		return false
+	}
+	var exists int64
+	if err := row.Scan(&exists); err == nil {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 50)
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return false
+	}
+	var spawn struct {
+		Map, Zone            uint32
+		X, Y, Z, Orientation float32
+	}
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT map, zone, position_x, position_y, position_z, orientation FROM playercreateinfo WHERE race = ? AND class = ?", race, class).Scan(&spawn.Map, &spawn.Zone, &spawn.X, &spawn.Y, &spawn.Z, &spawn.Orientation); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 49)
+		}
+		return false
+	}
+	var accountCharacters int64
+	if err := s.server.CharactersStore.QueryRowContext(ctx, "SELECT COUNT(guid) FROM characters WHERE account = ?", s.accountID).Scan(&accountCharacters); err != nil {
+		return false
+	}
+	if accountCharacters >= 50 {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 54)
+	}
+	var guid uint64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM characters").Scan(&guid); err != nil {
+		return false
+	}
+	args := []any{uint32(guid), s.accountID, name, race, class, gender, uint8(1), uint32(0), uint32(0), values[3], values[4], values[5], values[6], values[7], uint8(0), uint8(0), uint32(0), uint16(spawn.Map), uint32(0), uint8(0), spawn.X, spawn.Y, spawn.Z, spawn.Orientation, float32(0), float32(0), float32(0), float32(0), uint32(0), "", uint8(0), uint32(0), uint32(0), float32(0), uint32(0), uint8(0), uint32(0), uint32(0), uint16(0), uint8(0), uint16(atLoginFirst), uint16(spawn.Zone), uint32(0), "", uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint64(0), uint32(0), uint8(0), uint32(1), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint8(1), uint8(0), "", "", uint32(0), "", uint8(0), uint32(0)}
+	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CHARACTER", args...); err != nil {
+		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 48)
+	}
+	var realmCharacters sql.NullInt64
+	if err := s.server.AuthStore.QueryRowContext(ctx, "SELECT SUM(numchars) FROM realmcharacters WHERE acctid = ?", s.accountID).Scan(&realmCharacters); err != nil {
+		return false
+	}
+	count := uint32(1)
+	if realmCharacters.Valid && realmCharacters.Int64 > 0 {
+		count = uint32(realmCharacters.Int64) + 1
+	}
+	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_REP_REALM_CHARACTERS", count, s.accountID, s.server.RealmID); err != nil {
+		return false
+	}
+	s.legitimate[guid] = struct{}{}
+	return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 47)
 }
 
 func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
@@ -248,4 +322,17 @@ func buildEnumCharacter(packet *protocol.Buffer, c enumCharacter) {
 
 func sendCharacterResult(s *session, opcode uint16, result uint8) bool {
 	return s.write(opcode, []byte{result}, true) == nil
+}
+
+func validCharacterName(name string) bool {
+	runes := []rune(name)
+	if len(runes) < 2 || len(runes) > 12 {
+		return false
+	}
+	for _, r := range runes {
+		if !unicode.IsLetter(r) {
+			return false
+		}
+	}
+	return true
 }
