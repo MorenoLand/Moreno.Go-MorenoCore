@@ -57,6 +57,8 @@ func RunCombined() int {
 	backend := fs.String("backend", "", "database backend: sqlite, mysql, or mariadb")
 	dataDir := fs.String("data-dir", "", "runtime data directory")
 	showVersion := fs.Bool("version", false, "show version")
+	authOnly := fs.Bool("auth", false, "run only the authentication service")
+	worldOnly := fs.Bool("world", false, "run only the world service")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return 2
 	}
@@ -81,6 +83,26 @@ func RunCombined() int {
 		return 1
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	if *authOnly && *worldOnly {
+		fmt.Fprintln(os.Stderr, "--auth and --world cannot be used together")
+		return 2
+	}
+	if *authOnly {
+		kind := service.Auth
+		if err := service.RunSingle(context.Background(), c, kind, logger); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	if *worldOnly {
+		kind := service.World
+		if err := service.RunSingle(context.Background(), c, kind, logger); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
 	if err := service.RunCombined(context.Background(), c, logger); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

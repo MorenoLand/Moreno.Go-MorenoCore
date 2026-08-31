@@ -6,7 +6,7 @@ This repository is being implemented against the MorenoCore4 reference at commit
 
 ## Run locally
 
-From the repository root, `go run .` uses SQLite and starts the authentication and world services together. It creates or migrates `auth.db`, `characters.db`, and `world.db` in the current directory when they are absent. Existing database files are opened after schema validation and migration; they are never reset automatically.
+From the repository root, `go run .` uses SQLite and starts the authentication and world services together in the current console. Use `go run . --auth` or `go run . --world` to run only one service; none of these modes opens a separate console window. The launcher creates or migrates `auth.db`, `characters.db`, and `world.db` in the current directory when they are absent. Existing database files are opened after schema validation and migration; they are never reset automatically.
 
 The individual services are available with `go run ./server/authserver` and `go run ./server/worldserver`. Use `--config`, `--backend`, and `--data-dir` to select configuration, database backend, and runtime data location. MySQL/MariaDB connection values are supplied through configuration or environment variables and are never embedded in the binaries.
 
