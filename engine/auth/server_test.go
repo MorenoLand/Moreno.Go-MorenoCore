@@ -23,7 +23,7 @@ func TestLogonAndRealmList(t *testing.T) {
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	for _, statement := range []string{
-		"CREATE TABLE account (id INTEGER PRIMARY KEY, username TEXT NOT NULL, locked INTEGER NOT NULL, lock_country TEXT NOT NULL, last_ip TEXT NOT NULL, failed_logins INTEGER NOT NULL, salt BLOB NOT NULL, verifier BLOB NOT NULL, session_key_auth BLOB, last_login TEXT, online INTEGER, locale INTEGER, os TEXT)",
+		"CREATE TABLE account (id INTEGER PRIMARY KEY, username TEXT NOT NULL, locked INTEGER NOT NULL, lock_country TEXT NOT NULL, last_ip TEXT NOT NULL, failed_logins INTEGER NOT NULL, salt BLOB NOT NULL, verifier BLOB NOT NULL, totp_secret BLOB, session_key_auth BLOB, last_login TEXT, online INTEGER, locale INTEGER, os TEXT)",
 		"CREATE TABLE account_access (AccountID INTEGER NOT NULL, SecurityLevel INTEGER NOT NULL, RealmID INTEGER NOT NULL)",
 		"CREATE TABLE account_banned (id INTEGER NOT NULL, bandate INTEGER NOT NULL, unbandate INTEGER NOT NULL, active INTEGER NOT NULL)",
 		"CREATE TABLE build_info (build INTEGER PRIMARY KEY, majorVersion INTEGER, minorVersion INTEGER, bugfixVersion INTEGER)",

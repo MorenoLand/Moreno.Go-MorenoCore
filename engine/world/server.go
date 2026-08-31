@@ -18,11 +18,11 @@ import (
 )
 
 const (
-	opcodePing          uint32 = 0x1dc
-	opcodePong          uint16 = 0x1dd
-	opcodeAuthChallenge uint16 = 0x1ec
-	opcodeAuthSession   uint32 = 0x1ed
-	opcodeAuthResponse  uint16 = 0x1ee
+	opcodePing          uint32 = uint32(protocol.OpcodeCMSG_PING)
+	opcodePong          uint16 = uint16(protocol.OpcodeSMSG_PONG)
+	opcodeAuthChallenge uint16 = uint16(protocol.OpcodeSMSG_AUTH_CHALLENGE)
+	opcodeAuthSession   uint32 = uint32(protocol.OpcodeCMSG_AUTH_SESSION)
+	opcodeAuthResponse  uint16 = uint16(protocol.OpcodeSMSG_AUTH_RESPONSE)
 	authOK              byte   = 12
 	authReject          byte   = 14
 	authUnknownAccount  byte   = 21

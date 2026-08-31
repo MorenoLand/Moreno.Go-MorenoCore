@@ -6,4 +6,4 @@ Every first-party reference source area must be mapped to a Go package or a gene
 
 ## Current inventory
 
-The reference contains 144 common files, 45 database files, 31 shared files, 610 game files, 707 script files, 8 authentication files, 9 worldserver files, 38 tool files, and 9 test files. Its database layer registers 84 login, 457 character, and 72 world prepared statements.
+The reference contains 144 common files, 45 database files, 31 shared files, 610 game files, 707 script files, 8 authentication files, 9 worldserver files, 38 tool files, and 9 test files. Its database layer registers 84 login, 457 character, and 71 world prepared statements; the three enum `MAX` values are sentinels, not SQL statements.

@@ -53,6 +53,9 @@ type account struct {
 	LastIP       string
 	FailedLogins uint32
 	Security     uint8
+	Banned       bool
+	PermanentBan bool
+	TotpSecret   []byte
 	Salt         [crypto.SRP6SaltLength]byte
 	Verifier     [crypto.SRP6VerifierLength]byte
 }
@@ -88,6 +91,8 @@ type session struct {
 	postBC     bool
 	login      string
 	remoteIP   string
+	os         string
+	locale     uint8
 }
 
 const (
@@ -162,7 +167,9 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	s.build = uint32(binary.LittleEndian.Uint16(body[7:9]))
 	s.postBC = s.build > preBCMaxBuild
 	s.login = string(body[30 : 30+body[29]])
-	loaded, err := loadAccount(ctx, s.server.Store, s.login, s.remoteIP, s.server.RealmID)
+	s.os = reverseCode(string(body[13:17]))
+	s.locale = localeID(reverseCode(string(body[17:21])))
+	loaded, err := loadAccount(ctx, s.server.Store, s.login, s.remoteIP)
 	if err != nil {
 		return err
 	}
@@ -173,12 +180,12 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	if s.account.Locked && s.account.LastIP != s.remoteIP {
 		return writePacket(s.conn, []byte{logonChallenge, 0, wowLockedEnforced})
 	}
-	banned, err := accountBanned(ctx, s.server.Store, s.account.ID)
-	if err != nil {
-		return err
-	}
-	if banned {
-		return writePacket(s.conn, []byte{logonChallenge, 0, wowBanned})
+	if s.account.Banned {
+		result := wowSuspended
+		if s.account.PermanentBan {
+			result = wowBanned
+		}
+		return writePacket(s.conn, []byte{logonChallenge, 0, result})
 	}
 	info, err := loadBuildInfo(ctx, s.server.Store, s.build)
 	if err != nil {
@@ -229,7 +236,7 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 		return errors.New("invalid SRP6 proof")
 	}
 	s.sessionKey = key
-	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.ID, s.sessionKey[:], s.remoteIP); err != nil {
+	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
 		return err
 	}
 	m2 := crypto.SessionVerifier(A, clientM, s.sessionKey)
@@ -334,12 +341,16 @@ func (s *session) handleRealmList(ctx context.Context) error {
 	return writePacket(s.conn, header.Bytes())
 }
 
-func loadAccount(ctx context.Context, store *database.Store, login, remoteIP string, realmID uint32) (*account, error) {
-	row := store.DB.QueryRowContext(ctx, "SELECT id, username, locked, lock_country, last_ip, failed_logins, salt, verifier FROM account WHERE username = ? LIMIT 1", login)
+func loadAccount(ctx context.Context, store *database.Store, login, remoteIP string) (*account, error) {
+	row, err := store.QueryRowStatement(ctx, "LOGIN_SEL_LOGONCHALLENGE", login)
+	if err != nil {
+		return nil, err
+	}
 	var result account
-	var locked, failed uint64
+	var locked, failed, banned, permanent, security uint64
+	var totp []byte
 	var salt, verifier []byte
-	if err := row.Scan(&result.ID, &result.Login, &locked, &result.LockCountry, &result.LastIP, &failed, &salt, &verifier); err != nil {
+	if err := row.Scan(&result.ID, &result.Login, &locked, &result.LockCountry, &result.LastIP, &failed, &banned, &permanent, &security, &totp, &salt, &verifier); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -347,16 +358,15 @@ func loadAccount(ctx context.Context, store *database.Store, login, remoteIP str
 	}
 	result.Locked = locked != 0
 	result.FailedLogins = uint32(failed)
+	result.Banned = banned != 0
+	result.PermanentBan = permanent != 0
+	result.Security = uint8(security)
+	result.TotpSecret = totp
 	if len(salt) != crypto.SRP6SaltLength || len(verifier) != crypto.SRP6VerifierLength {
 		return nil, errors.New("account SRP6 data has invalid length")
 	}
 	copy(result.Salt[:], salt)
 	copy(result.Verifier[:], verifier)
-	var security int64
-	if err := store.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND (RealmID = -1 OR RealmID = ?)", result.ID, realmID).Scan(&security); err != nil {
-		return nil, err
-	}
-	result.Security = uint8(security)
 	if result.Locked && result.LastIP != remoteIP {
 		return &result, nil
 	}
@@ -369,8 +379,8 @@ func accountBanned(ctx context.Context, store *database.Store, id uint32) (bool,
 	return count != 0, err
 }
 
-func updateAuthenticatedAccount(ctx context.Context, store *database.Store, id uint32, sessionKey []byte, ip string) error {
-	_, err := store.DB.ExecContext(ctx, "UPDATE account SET session_key_auth = ?, last_ip = ?, last_login = CURRENT_TIMESTAMP, failed_logins = 0, online = 1 WHERE id = ?", sessionKey, ip, id)
+func updateAuthenticatedAccount(ctx context.Context, store *database.Store, login string, sessionKey []byte, ip string, locale uint8, osName string) error {
+	_, err := store.ExecStatement(ctx, "LOGIN_UPD_LOGONPROOF", sessionKey, ip, locale, osName, login)
 	return err
 }
 
@@ -448,6 +458,23 @@ func writePacket(conn net.Conn, data []byte) error {
 		data = data[n:]
 	}
 	return nil
+}
+
+func reverseCode(value string) string {
+	runes := []rune(value)
+	for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+		runes[i], runes[j] = runes[j], runes[i]
+	}
+	return strings.TrimRight(string(runes), "\x00")
+}
+
+func localeID(value string) uint8 {
+	for i, code := range []string{"enUS", "koKR", "frFR", "deDE", "zhCN", "zhTW", "esES", "esMX", "ruRU", "ptBR", "itIT"} {
+		if value == code {
+			return uint8(i)
+		}
+	}
+	return 0
 }
 
 func remoteAddress(conn net.Conn) string {
