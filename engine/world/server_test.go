@@ -140,6 +140,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if newWorldOpcode != uint16(protocol.OpcodeSMSG_NEW_WORLD) || len(newWorldPayload) != 20 {
 		t.Fatalf("new world opcode=%x payload=%d", newWorldOpcode, len(newWorldPayload))
 	}
+	timeOpcode, timePayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if timeOpcode != uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED) || len(timePayload) != 12 {
+		t.Fatalf("time opcode=%x payload=%d", timeOpcode, len(timePayload))
+	}
 	deletePayload := protocol.NewBuffer(8)
 	deletePayload.WritePackedGUID(99)
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_CHAR_DELETE), deletePayload.Bytes(), clientCrypt); err != nil {

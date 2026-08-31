@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -207,7 +208,14 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
 	packet.WriteF32(y)
 	packet.WriteF32(z)
 	packet.WriteF32(orientation)
-	return s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true) == nil
+	if err := s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true); err != nil {
+		return false
+	}
+	timePacket := protocol.NewBuffer(12)
+	timePacket.WritePackedTime(time.Now())
+	timePacket.WriteF32(0.5)
+	timePacket.WriteU32(0)
+	return s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), timePacket.Bytes(), true) == nil
 }
 
 func scanEnumCharacter(rows *sql.Rows) (enumCharacter, error) {
