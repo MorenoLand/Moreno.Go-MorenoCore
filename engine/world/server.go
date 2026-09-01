@@ -86,6 +86,7 @@ type session struct {
 	channels     map[string]struct{}
 	tutorials    [8]uint32
 	tutorialsInDB bool
+	activeLoot   *activeLootState
 }
 
 type account struct {
@@ -256,6 +257,22 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_TRAINER_BUY_SPELL):
 			if !state.authed || !state.handleTrainerBuySpell(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LOOT):
+			if !state.authed || !state.handleLoot(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LOOT_MONEY):
+			if !state.authed || !state.handleLootMoney(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUTOSTORE_LOOT_ITEM):
+			if !state.authed || !state.handleAutostoreLootItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LOOT_RELEASE):
+			if !state.authed || !state.handleLootRelease(payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_ATTACK_SWING):
