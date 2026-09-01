@@ -77,15 +77,37 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagStart, castTime, target), true); err != nil {
 		return false
 	}
+
+	if castTime > 0 {
+		time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
+			s.finishSpellCast(context.Background(), castID, spellID, spell, target)
+		})
+	} else {
+		s.finishSpellCast(ctx, castID, spellID, spell, target)
+	}
+
+	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime, "cost", cost)
+	return true
+}
+
+func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData) {
+	if s.player == nil {
+		return
+	}
 	hitTargets := []uint64{s.playerGUID}
 	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
 		hitTargets[0] = target.UnitGUID
+	} else if s.selection != 0 {
+		hitTargets[0] = s.selection
 	}
+	targetGUID := hitTargets[0]
+
 	castTimeStamp := uint32(time.Now().UnixMilli())
-	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, target), true); err != nil {
-		return false
-	}
-	if pType < 7 && cost > 0 {
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, target), true)
+
+	pType := spell.PowerType
+	cost := spell.ManaCost
+	if pType < 7 && cost > 0 && s.player.Powers[pType] >= cost {
 		s.player.Powers[pType] -= cost
 		s.sendPlayerUpdate()
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
@@ -94,6 +116,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 	}
 	if spell.RecoveryTime > 0 {
+		nowUnix := time.Now().Unix()
 		cooldownEnd := nowUnix + int64((spell.RecoveryTime+999)/1000)
 		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, End: cooldownEnd})
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, uint32(spell.RecoveryTime)), true)
@@ -101,8 +124,157 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell_cooldown (guid, spell, item, time, categoryId, categoryEnd) VALUES (?, ?, 0, ?, 0, 0)", s.playerGUID, spellID, cooldownEnd)
 		}
 	}
-	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime, "cost", cost)
-	return true
+
+	// Apply spell effects
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		switch eff.Effect {
+		case 2, 87, 108, 17: // Damage effects (School damage, Weapon damage, etc.)
+			damage := uint32(eff.BasePoints + 1)
+			if damage == 0 {
+				damage = uint32(20 + int(s.player.Level)*10)
+			}
+			if targetGUID != 0 && targetGUID != s.playerGUID {
+				s.executeSpellDamage(ctx, targetGUID, spellID, damage)
+			}
+		case 10, 136, 105: // Heal effects
+			heal := uint32(eff.BasePoints + 1)
+			if heal == 0 {
+				heal = uint32(30 + int(s.player.Level)*15)
+			}
+			s.executeSpellHeal(ctx, s.playerGUID, spellID, heal)
+		case 6: // Apply Aura
+			s.auras[spellID] = struct{}{}
+			s.sendPlayerUpdate()
+		}
+	}
+}
+
+func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32) {
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok || target.Health == 0 {
+		return
+	}
+	overkill := uint32(0)
+	if damage >= target.Health {
+		overkill = damage - target.Health
+	}
+
+	// Determine school mask (1 Phys, 2 Holy, 4 Fire, 8 Nature, 16 Frost, 32 Shadow, 64 Arcane)
+	var schoolMask uint8 = 4 // default to Fire
+	switch spellID {
+	case 116, 205, 837, 7300, 7301, 8406, 8407, 8408, 10179, 10180, 10181, 25304, 27071, 27072, 42841, 42842: // Frostbolt
+		schoolMask = 16
+	case 120, 8492, 10159, 10160, 10161, 27088, 42930, 42931: // Cone of Cold
+		schoolMask = 16
+	case 122, 865, 6131, 10230, 42917: // Frost Nova
+		schoolMask = 16
+	case 5143, 5144, 5145, 6117, 8416, 8417, 10211, 10212, 25345, 27075, 38697, 42843, 42846: // Arcane Missiles
+		schoolMask = 64
+	case 1459, 1460, 1461, 10156, 10157, 27126, 42995, 43002: // Arcane Intellect
+		schoolMask = 64
+	case 585, 591, 598, 970, 992, 1004, 6060, 10888, 10892, 10893, 10894, 25298, 25364: // Smite
+		schoolMask = 2
+	case 589, 594, 15267, 15268, 25367, 25368: // Shadow Word: Pain
+		schoolMask = 32
+	case 403, 529, 548, 915, 943, 2060, 10391, 10392, 15207, 15208: // Lightning Bolt
+		schoolMask = 8
+	default:
+		schoolMask = 4
+	}
+
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask), true)
+
+	if damage >= target.Health {
+		// Target dies
+		s.server.motionMu.Lock()
+		if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+			motion.Health = 0
+			motion.InCombat = false
+			motion.TargetGUID = 0
+			motion.Moving = false
+		}
+		s.server.motionMu.Unlock()
+
+		s.server.stopCreatureMotion(target.Map, target.GUID, target.X, target.Y, target.Z)
+		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+			unitFieldHealth:       0,
+			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+		})
+		_ = s.sendAttackStop(target.GUID, true)
+		s.attackTarget = 0
+		s.onCreatureKilled(ctx, target)
+		s.debug("target slain by spell", "account", s.accountName, "spell", spellID, "guid", target.GUID)
+	} else {
+		newHealth := target.Health - damage
+		s.server.motionMu.Lock()
+		if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+			motion.Health = newHealth
+			motion.InCombat = true
+			motion.TargetGUID = s.playerGUID
+			motion.Moving = true
+		}
+		s.server.motionMu.Unlock()
+		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
+		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+	}
+}
+
+func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spellID, heal uint32) {
+	if s.player == nil {
+		return
+	}
+	effectiveHeal := heal
+	if s.player.Health+heal > s.player.MaxHealth {
+		effectiveHeal = s.player.MaxHealth - s.player.Health
+		s.player.Health = s.player.MaxHealth
+	} else {
+		s.player.Health += heal
+	}
+	overheal := heal - effectiveHeal
+
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), buildSpellHealLog(s.playerGUID, s.playerGUID, spellID, heal, overheal, 0, false), true)
+	s.sendPlayerUpdate()
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", s.player.Health, s.playerGUID)
+	}
+}
+
+func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8) []byte {
+	buf := protocol.NewBuffer(64)
+	buf.WritePackedGUID(targetGUID)
+	buf.WritePackedGUID(attackerGUID)
+	buf.WriteU32(spellID)
+	buf.WriteU32(damage)
+	buf.WriteU32(overkill)
+	buf.WriteU8(schoolMask)
+	buf.WriteU32(0) // Absorbed
+	buf.WriteU32(0) // Resist
+	buf.WriteU8(0)  // Periodic log
+	buf.WriteU8(0)  // Unused
+	buf.WriteU32(0) // Blocked
+	buf.WriteU32(2) // HitInfo: HITINFO_NORMALSWING2
+	buf.WriteU8(0)  // Debug
+	return buf.Bytes()
+}
+
+func buildSpellHealLog(targetGUID, healerGUID uint64, spellID, healAmount, overheal, absorb uint32, crit bool) []byte {
+	buf := protocol.NewBuffer(32)
+	buf.WritePackedGUID(targetGUID)
+	buf.WritePackedGUID(healerGUID)
+	buf.WriteU32(spellID)
+	buf.WriteU32(healAmount)
+	buf.WriteU32(overheal)
+	buf.WriteU32(absorb)
+	if crit {
+		buf.WriteU8(1)
+	} else {
+		buf.WriteU8(0)
+	}
+	buf.WriteU8(0)
+	return buf.Bytes()
 }
 
 func (s *session) hasActiveSpell(spellID uint32) bool {
