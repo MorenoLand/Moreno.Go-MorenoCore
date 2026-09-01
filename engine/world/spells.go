@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -69,7 +70,21 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, target), true); err != nil {
 		return false
 	}
-	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime)
+	cost := spell.ManaCost
+	pType := spell.PowerType
+	if pType < 7 && cost > 0 {
+		if s.player.Powers[pType] >= cost {
+			s.player.Powers[pType] -= cost
+		} else {
+			s.player.Powers[pType] = 0
+		}
+		s.sendPlayerUpdate()
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			col := fmt.Sprintf("power%d", pType+1)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), s.player.Powers[pType], s.playerGUID)
+		}
+	}
+	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime, "cost", cost)
 	return true
 }
 
