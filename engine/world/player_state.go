@@ -41,12 +41,22 @@ const (
 	unitFieldKnownCurrencies          = 632
 	unitFieldWatchedFaction           = 1230
 	unitFieldAmmoID                   = 1198
+	playerSkillInfoStart              = 636
+	playerMaxSkills                   = 128
 	playerVisibleItemStart            = 283
 	playerVisibleItemCount            = 19
 	unitFieldMaxHealth                = 32
 	unitFieldMaxPower1                = 33
 	unitFlagPlayerControlled   uint32 = 0x00000008
 )
+
+type playerSkill struct {
+	Skill uint16
+	Step  uint16
+	Value uint16
+	Max   uint16
+	Bonus uint16
+}
 
 type playerState struct {
 	GUID           uint64
@@ -82,6 +92,7 @@ type playerState struct {
 	WatchedFaction uint32
 	AmmoID         uint32
 	ActionBars     uint32
+	Skills         []playerSkill
 	Spells         []learnedSpell
 	Actions        [144]uint32
 	Cooldowns      []spellCooldown
@@ -106,6 +117,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if err := s.CharGuild(ctx, &state); err != nil {
 		return playerState{}, err
 	}
+	_ = s.loadPlayerSkills(ctx, &state)
 	if err := s.loadPlayerPacketsState(ctx, &state); err != nil {
 		return playerState{}, err
 	}
@@ -156,6 +168,88 @@ func (s *session) CharGuild(ctx context.Context, state *playerState) error {
 	return nil
 }
 
+func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) error {
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		state.Skills = defaultRacialSkills(state.Race, state.Class)
+		return nil
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT skill, value, max FROM character_skills WHERE guid = ?", state.GUID)
+	if err != nil {
+		if isMissingColumn(err) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			state.Skills = defaultRacialSkills(state.Race, state.Class)
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	skills := make([]playerSkill, 0, 16)
+	hasLanguage := false
+	for rows.Next() {
+		var skill, value, max uint16
+		if err := rows.Scan(&skill, &value, &max); err == nil {
+			if isLanguageSkill(skill) {
+				hasLanguage = true
+			}
+			skills = append(skills, playerSkill{Skill: skill, Step: 1, Value: value, Max: max})
+		}
+	}
+	if !hasLanguage || len(skills) == 0 {
+		defaults := defaultRacialSkills(state.Race, state.Class)
+		for _, def := range defaults {
+			found := false
+			for _, sk := range skills {
+				if sk.Skill == def.Skill {
+					found = true
+					break
+				}
+			}
+			if !found {
+				skills = append(skills, def)
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, def.Skill, def.Value, def.Max)
+			}
+		}
+	}
+	state.Skills = skills
+	return nil
+}
+
+func isLanguageSkill(skill uint16) bool {
+	switch skill {
+	case 98, 109, 111, 113, 115, 137, 313, 315, 673, 759:
+		return true
+	}
+	return false
+}
+
+func defaultRacialSkills(race, class uint8) []playerSkill {
+	skills := make([]playerSkill, 0, 8)
+	switch race {
+	case 1: // Human
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1})
+	case 2: // Orc
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1})
+	case 3: // Dwarf
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 111, Value: 300, Max: 300, Step: 1})
+	case 4: // Night Elf
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 113, Value: 300, Max: 300, Step: 1})
+	case 5: // Undead
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 673, Value: 300, Max: 300, Step: 1})
+	case 6: // Tauren
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 115, Value: 300, Max: 300, Step: 1})
+	case 7: // Gnome
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 313, Value: 300, Max: 300, Step: 1})
+	case 8: // Troll
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 315, Value: 300, Max: 300, Step: 1})
+	case 10: // Blood Elf
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 137, Value: 300, Max: 300, Step: 1})
+	case 11: // Draenei
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 759, Value: 300, Max: 300, Step: 1})
+	default:
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1})
+	}
+	return skills
+}
+
 func isMissingColumn(err error) bool {
 	value := strings.ToLower(err.Error())
 	return strings.Contains(value, "no such column") || strings.Contains(value, "unknown column")
@@ -194,6 +288,15 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldKnownCurrencies] = state.KnownCurrency
 	values[unitFieldWatchedFaction] = state.WatchedFaction
 	values[unitFieldAmmoID] = state.AmmoID
+	for i, sk := range state.Skills {
+		if i >= playerMaxSkills {
+			break
+		}
+		idx := playerSkillInfoStart + i*3
+		values[idx] = uint32(sk.Skill) | uint32(sk.Step)<<16
+		values[idx+1] = uint32(sk.Value) | uint32(sk.Max)<<16
+		values[idx+2] = uint32(sk.Bonus)
+	}
 	equipment := strings.Fields(state.Equipment)
 	for slot := 0; slot < playerVisibleItemCount; slot++ {
 		base := slot * 2
