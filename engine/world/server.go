@@ -113,7 +113,24 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 }
 
 func (s *Server) Initialize(ctx context.Context) error {
-	return s.Features.Initialize(ctx)
+	if err := s.Features.Initialize(ctx); err != nil {
+		return err
+	}
+	go s.runWorldTick(ctx)
+	return nil
+}
+
+func (s *Server) runWorldTick(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.updateActiveCreatures(ctx)
+		}
+	}
 }
 
 func (s *Server) Handle(ctx context.Context, conn net.Conn) {
@@ -195,6 +212,26 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_ITEM_QUERY_SINGLE):
 			if !state.authed || !state.handleItemQuerySingle(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUTOEQUIP_ITEM):
+			if !state.authed || !state.handleAutoEquipItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUTOEQUIP_ITEM_SLOT):
+			if !state.authed || !state.handleAutoEquipItemSlot(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SWAP_INV_ITEM):
+			if !state.authed || !state.handleSwapInvItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SWAP_ITEM):
+			if !state.authed || !state.handleSwapItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_DESTROYITEM):
+			if !state.authed || !state.handleDestroyItem(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_ATTACK_SWING):
@@ -624,6 +661,9 @@ func (s *session) decrypt(data []byte) error {
 }
 
 func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
+	if s == nil || s.conn == nil {
+		return nil
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	frame, headerSize, err := protocol.EncodeServerFrame(opcode, payload)
