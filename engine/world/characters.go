@@ -296,16 +296,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES), buildLearnedDanceMoves(), true); err != nil {
 		return false
 	}
-	updates, err := s.server.buildPlayerUpdate(state)
-	if err != nil {
-		return false
-	}
-	if err := s.write(updates.Opcode, updates.Payload.Bytes(), true); err != nil {
-		return false
-	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state), true); err != nil {
-		return false
-	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficulty(), true); err != nil {
 		return false
 	}
@@ -341,6 +331,16 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		if err := s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), message, true); err != nil {
 			return false
 		}
+	}
+	updates, err := s.server.buildPlayerUpdate(state)
+	if err != nil {
+		return false
+	}
+	if err := s.write(updates.Opcode, updates.Payload.Bytes(), true); err != nil {
+		return false
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state), true); err != nil {
+		return false
 	}
 	if nearby, count, err := s.server.buildNearbyCreatureUpdates(ctx, state); err != nil {
 		s.debug("nearby creature load failed", "account", s.accountName, "error", err)

@@ -169,35 +169,6 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if danceOpcode != uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES) || len(dancePayload) != 8 {
 		t.Fatalf("dance opcode=%x payload=%d", danceOpcode, len(dancePayload))
 	}
-	updateOpcode, updatePayload, err := readServerFrame(clientConn, clientCrypt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updateOpcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
-		updatePayload, err = protocol.DecompressUpdatePayload(updatePayload)
-		if err != nil {
-			t.Fatal(err)
-		}
-	} else if updateOpcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) {
-		t.Fatalf("update opcode=%x", updateOpcode)
-	}
-	updates := protocol.NewReader(updatePayload)
-	if blocks, err := updates.ReadU32(); err != nil || blocks != 1 {
-		t.Fatalf("update blocks=%d err=%v", blocks, err)
-	}
-	if updateType, err := updates.ReadU8(); err != nil || updateType != protocol.UpdateCreateObject2 {
-		t.Fatalf("update type=%d err=%v", updateType, err)
-	}
-	if updateGUID, err := updates.ReadPackedGUID(); err != nil || updateGUID != 99 {
-		t.Fatalf("update guid=%d err=%v", updateGUID, err)
-	}
-	worldStateOpcode, worldStatePayload, err := readServerFrame(clientConn, clientCrypt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if worldStateOpcode != uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES) || len(worldStatePayload) < 14 {
-		t.Fatalf("world states opcode=%x payload=%d", worldStateOpcode, len(worldStatePayload))
-	}
 	instanceOpcode, instancePayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
@@ -239,6 +210,35 @@ func TestAuthSessionAndPing(t *testing.T) {
 	}
 	if chatOpcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) || len(chatPayload) == 0 {
 		t.Fatalf("chat opcode=%x payload=%d", chatOpcode, len(chatPayload))
+	}
+	updateOpcode, updatePayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updateOpcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		updatePayload, err = protocol.DecompressUpdatePayload(updatePayload)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if updateOpcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) {
+		t.Fatalf("update opcode=%x", updateOpcode)
+	}
+	updates := protocol.NewReader(updatePayload)
+	if blocks, err := updates.ReadU32(); err != nil || blocks != 1 {
+		t.Fatalf("update blocks=%d err=%v", blocks, err)
+	}
+	if updateType, err := updates.ReadU8(); err != nil || updateType != protocol.UpdateCreateObject2 {
+		t.Fatalf("update type=%d err=%v", updateType, err)
+	}
+	if updateGUID, err := updates.ReadPackedGUID(); err != nil || updateGUID != 99 {
+		t.Fatalf("update guid=%d err=%v", updateGUID, err)
+	}
+	worldStateOpcode, worldStatePayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worldStateOpcode != uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES) || len(worldStatePayload) < 14 {
+		t.Fatalf("world states opcode=%x payload=%d", worldStateOpcode, len(worldStatePayload))
 	}
 	timeSyncOpcode, timeSyncPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
