@@ -86,8 +86,9 @@ type session struct {
 	channels     map[string]struct{}
 	tutorials    [8]uint32
 	tutorialsInDB bool
-	activeLoot   *activeLootState
-	trade        *playerTradeState
+	activeLoot     *activeLootState
+	trade          *playerTradeState
+	guildInvitedID uint32
 }
 
 type account struct {
@@ -376,6 +377,38 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleCancelTrade(ctx) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_GUILD_QUERY):
+			if !state.authed || !state.handleGuildQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_ROSTER):
+			if !state.authed || !state.handleGuildRoster(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_INVITE):
+			if !state.authed || !state.handleGuildInvite(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_ACCEPT):
+			if !state.authed || !state.handleGuildAccept(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_DECLINE):
+			if !state.authed || !state.handleGuildDecline(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_LEAVE):
+			if !state.authed || !state.handleGuildLeave(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_MOTD):
+			if !state.authed || !state.handleGuildMotd(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_BANK_QUERY_TAB):
+			if !state.authed || !state.handleGuildBankQueryTab(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_ATTACK_SWING):
 			if !state.authed || !state.handleAttackSwing(ctx, payload) {
 				return
@@ -467,10 +500,6 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_NAME_QUERY):
 			if !state.authed || !state.handleNameQuery(ctx, payload) {
-				return
-			}
-		case uint32(protocol.OpcodeCMSG_GUILD_QUERY):
-			if !state.authed || !state.handleGuildQuery(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_QUERY_TIME):
