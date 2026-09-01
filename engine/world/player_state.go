@@ -439,3 +439,69 @@ func (s *Server) raceFaction(race uint8) uint32 {
 	}
 	return 0
 }
+
+// buildPlayerValuesUpdate assembles an UPDATETYPE_VALUES block (packed GUID,
+// update mask, changed values) the way Object::_BuildValuesUpdate does for
+// in-place field changes such as quest log slots.
+func (s *Server) buildPlayerValuesUpdate(guid uint64, fields map[int]uint32) (*protocol.Packet, error) {
+	values := make([]uint32, playerValuesCount)
+	mask := protocol.NewUpdateMask(playerValuesCount)
+	for index, value := range fields {
+		if index < 0 || index >= playerValuesCount {
+			continue
+		}
+		values[index] = value
+		if err := mask.Set(index); err != nil {
+			return nil, err
+		}
+	}
+	block := protocol.NewBuffer(64 + len(fields)*4)
+	block.WriteU8(protocol.UpdateValues)
+	block.WritePackedGUID(guid)
+	block.WriteU8(uint8(mask.BlockCount()))
+	mask.AppendTo(block)
+	for index := 0; index < playerValuesCount; index++ {
+		if mask.Has(index) {
+			block.WriteU32(values[index])
+		}
+	}
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(block.Bytes())
+	return updates.BuildPacket(0)
+}
+
+// sendPlayerQuestLogUpdate pushes one quest log slot (or its clearing) to
+// the owning client via a values update, mirroring SetQuestSlot + the
+// resulting _BuildValuesUpdate on accept/abandon.
+func (s *session) sendPlayerQuestLogUpdate(slot int) {
+	if s.player == nil || slot < 0 || slot >= playerQuestLogSlots {
+		return
+	}
+	base := playerQuestLogStart + slot*5
+	entry := s.player.QuestLog[slot]
+	fields := map[int]uint32{
+		base:     entry.QuestID,
+		base + 1: entry.State,
+		base + 2: uint32(entry.Counters[0]) | uint32(entry.Counters[1])<<16,
+		base + 3: uint32(entry.Counters[2]) | uint32(entry.Counters[3])<<16,
+		base + 4: entry.Timer,
+	}
+	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
+	if err != nil {
+		s.debug("quest log values update build failed", "account", s.accountName, "error", err)
+		return
+	}
+	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+}
+
+// sendPlayerMoneyUpdate pushes PLAYER_FIELD_COINAGE as a values update.
+func (s *session) sendPlayerMoneyUpdate() {
+	if s.player == nil {
+		return
+	}
+	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{unitFieldCoinage: s.player.Money})
+	if err != nil {
+		return
+	}
+	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+}

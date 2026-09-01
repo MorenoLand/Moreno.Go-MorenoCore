@@ -122,15 +122,16 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 		return false
 	}
 	// Player::AddQuest claims a free log slot and updates PLAYER_QUEST_LOG
-	// so the client shows the quest immediately.
+	// so the client shows the quest immediately; the field change rides a
+	// values update, not an object re-create.
 	if s.player != nil {
 		for slot := 0; slot < playerQuestLogSlots; slot++ {
 			if s.player.QuestLog[slot].QuestID == 0 {
 				s.player.QuestLog[slot] = questLogEntry{QuestID: questID}
+				s.sendPlayerQuestLogUpdate(slot)
 				break
 			}
 		}
-		s.sendPlayerUpdate()
 	}
 	s.debug("quest accepted", "account", s.accountName, "quest", questID)
 	return s.sendGossipComplete()

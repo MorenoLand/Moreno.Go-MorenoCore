@@ -79,9 +79,8 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		}
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
-		s.player.XP += 45 * uint32(s.player.Level)
-		s.sendPlayerUpdate()
-		s.debug("target slain", "account", s.accountName, "guid", target.GUID, "xp_gained", 45*uint32(s.player.Level))
+		s.onCreatureKilled(ctx, target)
+		s.debug("target slain", "account", s.accountName, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage
 		if cdb != nil {
