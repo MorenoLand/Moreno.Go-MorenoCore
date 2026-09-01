@@ -62,6 +62,10 @@ func (s *session) handleJoinChannel(payload []byte) bool {
 	}
 	key := channelKey(name)
 	flags := channelFlags(channelID, name)
+	if flags&channelFlagCity != 0 && !isCityZone(s.player.Zone) {
+		s.debug("city channel join rejected: outside city zone", "account", s.accountName, "zone", s.player.Zone, "channel", name)
+		return s.sendChannelNotify(channelNotMemberNotice, name, nil) == nil
+	}
 	s.server.channelsMu.Lock()
 	if s.server.channels == nil {
 		s.server.channels = make(map[string]*worldChannel)
@@ -293,4 +297,37 @@ func (s *Server) removeSessionChannels(member *session) {
 	}
 	s.channelsMu.Unlock()
 	member.channels = nil
+}
+
+func isCityZone(zone uint32) bool {
+	switch zone {
+	case 1519, 1537, 1657, 3557, 1637, 1638, 1497, 3487, 3703, 4395, 4375, 4378, 4742, 4814, 4815:
+		return true
+	}
+	return false
+}
+
+func (s *session) updateLocalChannels(newZone uint32) {
+	if !s.playerLoaded || s.player == nil || s.server == nil {
+		return
+	}
+	s.player.Zone = newZone
+	if !isCityZone(newZone) {
+		// Player left city: remove from all city-only channels (Trade, GuildRecruitment)
+		s.server.channelsMu.Lock()
+		defer s.server.channelsMu.Unlock()
+		if s.channels == nil || s.server.channels == nil {
+			return
+		}
+		for key := range s.channels {
+			if ch := s.server.channels[key]; ch != nil && ch.Flags&channelFlagCity != 0 {
+				delete(ch.Members, s)
+				delete(s.channels, key)
+				_ = s.sendChannelNotify(channelYouLeftNotice, ch.Name, nil)
+				if len(ch.Members) == 0 {
+					delete(s.server.channels, key)
+				}
+			}
+		}
+	}
 }
