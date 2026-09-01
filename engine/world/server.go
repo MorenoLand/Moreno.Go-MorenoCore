@@ -132,7 +132,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 }
 
 func (s *Server) runWorldTick(ctx context.Context) {
-	ticker := time.NewTicker(200 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
@@ -158,8 +158,8 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 
 	now := time.Now()
 	for _, sess := range combatSessions {
-		target, err := sess.loadCombatTarget(ctx, sess.attackTarget)
-		if err != nil || target.Health == 0 {
+		target, ok := sess.getCombatTarget(ctx, sess.attackTarget)
+		if !ok || target.Health == 0 {
 			_ = sess.sendAttackStop(sess.attackTarget, target.Health == 0)
 			sess.attackTarget = 0
 			continue
