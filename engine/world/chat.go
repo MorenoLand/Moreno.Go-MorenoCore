@@ -190,7 +190,7 @@ func (s *session) chatTag() uint8 {
 		return 0
 	}
 	var tag uint8
-	if s.player.ExtraFlags&0x20 != 0 {
+	if s.gmChat || s.player.ExtraFlags&0x20 != 0 {
 		tag |= 0x04
 	}
 	return tag

@@ -111,5 +111,17 @@ func TestBroadcastGMChatUsesGMMessageOpcode(t *testing.T) {
 	if value, err := reader.ReadCString(); err != nil || value != "Tester" {
 		t.Fatalf("sender name=%q err=%v", value, err)
 	}
+	if _, err := reader.ReadU64(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReadCString(); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := reader.ReadU8(); err != nil || value != 4 {
+		t.Fatalf("chat tag=%d err=%v", value, err)
+	}
 	<-done
 }
