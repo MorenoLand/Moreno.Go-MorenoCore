@@ -303,6 +303,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(updates.Opcode, updates.Payload.Bytes(), true); err != nil {
 		return false
 	}
+	if nearby, count, err := s.server.buildNearbyCreatureUpdates(ctx, state); err != nil {
+		s.debug("nearby creature load failed", "account", s.accountName, "error", err)
+		return false
+	} else if nearby != nil {
+		if err := s.write(nearby.Opcode, nearby.Payload.Bytes(), true); err != nil {
+			return false
+		}
+		s.debug("nearby creatures sent", "account", s.accountName, "count", count)
+	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state), true); err != nil {
 		return false
 	}
