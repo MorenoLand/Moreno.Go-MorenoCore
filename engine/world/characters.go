@@ -351,6 +351,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}
 		s.debug("nearby creatures sent", "account", s.accountName, "count", count)
 	}
+	if nearby, count, err := s.server.buildNearbyGameObjectUpdates(ctx, state); err != nil {
+		s.debug("nearby gameobjects load failed", "account", s.accountName, "error", err)
+		return false
+	} else if nearby != nil {
+		if err := s.write(nearby.Opcode, nearby.Payload.Bytes(), true); err != nil {
+			return false
+		}
+		s.debug("nearby gameobjects sent", "account", s.accountName, "count", count)
+	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
 	}
