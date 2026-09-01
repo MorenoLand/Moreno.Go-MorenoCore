@@ -275,6 +275,18 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleLootRelease(payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_TAXINODE_STATUS_QUERY):
+			if !state.authed || !state.handleTaxiNodeStatusQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_TAXIQUERYAVAILABLENODES):
+			if !state.authed || !state.handleTaxiQueryAvailableNodes(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ACTIVATETAXI), uint32(protocol.OpcodeCMSG_ACTIVATETAXIEXPRESS):
+			if !state.authed || !state.handleActivateTaxi(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_ATTACK_SWING):
 			if !state.authed || !state.handleAttackSwing(ctx, payload) {
 				return

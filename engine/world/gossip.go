@@ -135,6 +135,9 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		if item.Action == 2 { // GOSSIP_OPTION_VENDOR
 			s.sendVendorList(ctx, guid)
 			s.gossipClosed = true
+		} else if item.Action == 3 { // GOSSIP_OPTION_TAXIVENDOR
+			s.sendTaxiMenu(ctx, guid)
+			s.gossipClosed = true
 		} else if item.Action == 4 { // GOSSIP_OPTION_TRAINER
 			s.sendTrainerList(ctx, guid)
 			s.gossipClosed = true
