@@ -87,6 +87,7 @@ type session struct {
 	tutorials    [8]uint32
 	tutorialsInDB bool
 	activeLoot   *activeLootState
+	trade        *playerTradeState
 }
 
 type account struct {
@@ -341,6 +342,38 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_AUCTION_REMOVE_ITEM):
 			if !state.authed || !state.handleAuctionRemoveItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_INITIATE_TRADE):
+			if !state.authed || !state.handleInitiateTrade(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BEGIN_TRADE):
+			if !state.authed || !state.handleBeginTrade(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_TRADE_GOLD):
+			if !state.authed || !state.handleSetTradeGold(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_TRADE_ITEM):
+			if !state.authed || !state.handleSetTradeItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CLEAR_TRADE_ITEM):
+			if !state.authed || !state.handleClearTradeItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ACCEPT_TRADE):
+			if !state.authed || !state.handleAcceptTrade(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_UNACCEPT_TRADE):
+			if !state.authed || !state.handleUnacceptTrade(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CANCEL_TRADE), uint32(protocol.OpcodeCMSG_IGNORE_TRADE), uint32(protocol.OpcodeCMSG_BUSY_TRADE):
+			if !state.authed || !state.handleCancelTrade(ctx) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_ATTACK_SWING):
