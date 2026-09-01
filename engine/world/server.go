@@ -88,15 +88,18 @@ type session struct {
 	lastSwing    time.Time
 	logoutHook   bool
 	gossip       *gossipMenuState
-	gossipClosed bool
-	channels     map[string]struct{}
-	tutorials    [8]uint32
-	tutorialsInDB bool
-	activeLoot     *activeLootState
-	trade          *playerTradeState
+	gossipClosed       bool
+	channels           map[string]struct{}
+	tutorials          [8]uint32
+	tutorialsInDB      bool
+	activeLoot         *activeLootState
+	trade              *playerTradeState
 	guildInvitedID     uint32
 	groupID            uint64 // GUID of the group this player is in (0 = no group)
 	pendingGroupLeader uint64 // GUID of the player who invited us (0 = no invite pending)
+	lastStreamX        float32
+	lastStreamY        float32
+	lastStreamZ        float32
 }
 
 type account struct {

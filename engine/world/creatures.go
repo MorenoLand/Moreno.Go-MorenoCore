@@ -68,7 +68,8 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	var eventArgs []any
 	eventClause := gameEventSpawnClause("gec.eventEntry", s.activeEventList(ctx), &eventArgs)
 	fullQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,
-		COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.faction, (t.npcflag | ` + npcFlagExpr + `), t.unit_flags, t.dynamicflags,
+		COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), NULLIF(t.modelid2, 0), NULLIF(t.modelid3, 0), NULLIF(t.modelid4, 0), 1),
+		t.faction, (t.npcflag | ` + npcFlagExpr + `), t.unit_flags, t.dynamicflags,
 		t.maxlevel, c.curhealth, c.curmana, t.scale, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime,
 		COALESCE(ca.mount, cta.mount, 0),
 		COALESCE(ca.bytes1, cta.bytes1, 0),
@@ -95,7 +96,8 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, queryArgs...)
 	if err != nil {
 		fallbackQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,
-			COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.faction, t.npcflag, t.unit_flags, t.dynamicflags,
+			COALESCE(NULLIF(c.modelid, 0), NULLIF(t.modelid1, 0), 1),
+			t.faction, t.npcflag, t.unit_flags, t.dynamicflags,
 			t.maxlevel, c.curhealth, c.curmana, t.scale, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id

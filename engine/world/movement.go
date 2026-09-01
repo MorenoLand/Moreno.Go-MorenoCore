@@ -101,6 +101,11 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	writeMovementInfo(packet, info)
 	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), info, s)
 	s.debug("movement accepted", "account", s.accountName, "guid", guid, "x", info.X, "y", info.Y, "z", info.Z)
+	dx := float64(info.X - s.lastStreamX)
+	dy := float64(info.Y - s.lastStreamY)
+	if dx*dx+dy*dy > 30.0*30.0 {
+		s.streamNearbyObjects(ctx)
+	}
 	return true
 }
 
