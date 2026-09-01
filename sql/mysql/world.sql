@@ -178,7 +178,8 @@ CREATE TABLE IF NOT EXISTS `creature` (
   `VerifiedBuild` smallint DEFAULT '0',
   PRIMARY KEY (`guid`),
   KEY `idx_map` (`map`) USING BTREE,
-  KEY `idx_id` (`id`) USING BTREE
+  KEY `idx_id` (`id`) USING BTREE,
+  KEY `idx_map_coords` (`map`, `position_x`, `position_y`) USING BTREE
 ) ENGINE=MyISAM AUTO_INCREMENT=1022682 DEFAULT CHARSET=utf8mb3 COMMENT='Creature System';
 CREATE TABLE IF NOT EXISTS `creature_addon` (
   `guid` int unsigned NOT NULL DEFAULT '0',
@@ -722,7 +723,10 @@ CREATE TABLE IF NOT EXISTS `gameobject` (
   `state` tinyint unsigned NOT NULL DEFAULT '0',
   `ScriptName` char(64) DEFAULT '',
   `VerifiedBuild` smallint DEFAULT '0',
-  PRIMARY KEY (`guid`)
+  PRIMARY KEY (`guid`),
+  KEY `idx_map` (`map`) USING BTREE,
+  KEY `idx_id` (`id`) USING BTREE,
+  KEY `idx_map_coords` (`map`, `position_x`, `position_y`) USING BTREE
 ) ENGINE=MyISAM AUTO_INCREMENT=255094 DEFAULT CHARSET=utf8mb3 COMMENT='Gameobject System';
 CREATE TABLE IF NOT EXISTS `gameobject_addon` (
   `guid` int unsigned NOT NULL DEFAULT '0',

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -281,6 +282,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.mounts = mounts
+
+	// Stream core login verification and capabilities
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD), buildLoginVerifyWorld(state), true); err != nil {
 		return false
 	}
@@ -345,23 +348,40 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state), true); err != nil {
 		return false
 	}
-	if nearby, count, err := s.server.buildNearbyCreatureUpdates(ctx, state); err != nil {
-		s.debug("nearby creature load failed", "account", s.accountName, "error", err)
+
+	// Concurrently query nearby creatures and gameobjects
+	var nearbyCreatures, nearbyGameObjects *protocol.Packet
+	var creatureCount, goCount int
+	var creatureErr, goErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		nearbyCreatures, creatureCount, creatureErr = s.server.buildNearbyCreatureUpdates(ctx, state)
+	}()
+	go func() {
+		defer wg.Done()
+		nearbyGameObjects, goCount, goErr = s.server.buildNearbyGameObjectUpdates(ctx, state)
+	}()
+	wg.Wait()
+
+	if creatureErr != nil {
+		s.debug("nearby creature load failed", "account", s.accountName, "error", creatureErr)
 		return false
-	} else if nearby != nil {
-		if err := s.write(nearby.Opcode, nearby.Payload.Bytes(), true); err != nil {
+	} else if nearbyCreatures != nil {
+		if err := s.write(nearbyCreatures.Opcode, nearbyCreatures.Payload.Bytes(), true); err != nil {
 			return false
 		}
-		s.debug("nearby creatures sent", "account", s.accountName, "count", count)
+		s.debug("nearby creatures sent", "account", s.accountName, "count", creatureCount)
 	}
-	if nearby, count, err := s.server.buildNearbyGameObjectUpdates(ctx, state); err != nil {
-		s.debug("nearby gameobjects load failed", "account", s.accountName, "error", err)
+	if goErr != nil {
+		s.debug("nearby gameobjects load failed", "account", s.accountName, "error", goErr)
 		return false
-	} else if nearby != nil {
-		if err := s.write(nearby.Opcode, nearby.Payload.Bytes(), true); err != nil {
+	} else if nearbyGameObjects != nil {
+		if err := s.write(nearbyGameObjects.Opcode, nearbyGameObjects.Payload.Bytes(), true); err != nil {
 			return false
 		}
-		s.debug("nearby gameobjects sent", "account", s.accountName, "count", count)
+		s.debug("nearby gameobjects sent", "account", s.accountName, "count", goCount)
 	}
 	_ = s.sendInventoryItems(ctx)
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {

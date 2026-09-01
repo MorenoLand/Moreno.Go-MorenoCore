@@ -180,6 +180,7 @@ PRIMARY KEY (`guid`)
 );
 CREATE INDEX IF NOT EXISTS `creature__idx_map` ON `creature` (`map`);
 CREATE INDEX IF NOT EXISTS `creature__idx_id` ON `creature` (`id`);
+CREATE INDEX IF NOT EXISTS `creature__idx_map_coords` ON `creature` (`map`, `position_x`, `position_y`);
 CREATE TABLE IF NOT EXISTS `creature_addon` (
 `guid` INTEGER  NOT NULL DEFAULT '0',
 `path_id` INTEGER  NOT NULL DEFAULT '0',
@@ -724,6 +725,9 @@ CREATE TABLE IF NOT EXISTS `gameobject` (
 `VerifiedBuild` INTEGER DEFAULT '0',
 PRIMARY KEY (`guid`)
 );
+CREATE INDEX IF NOT EXISTS `gameobject__idx_map` ON `gameobject` (`map`);
+CREATE INDEX IF NOT EXISTS `gameobject__idx_id` ON `gameobject` (`id`);
+CREATE INDEX IF NOT EXISTS `gameobject__idx_map_coords` ON `gameobject` (`map`, `position_x`, `position_y`);
 CREATE TABLE IF NOT EXISTS `gameobject_addon` (
 `guid` INTEGER  NOT NULL DEFAULT '0',
 `parent_rotation0` REAL NOT NULL DEFAULT '0',
