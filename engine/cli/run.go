@@ -39,6 +39,7 @@ func Run(kind *service.Kind) int {
 	if *dataDir != "" {
 		c.DataDir = *dataDir
 	}
+	c.ResolvePaths()
 	if err := c.Validate(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -80,6 +81,7 @@ func RunCombined() int {
 	if *dataDir != "" {
 		c.DataDir = *dataDir
 	}
+	c.ResolvePaths()
 	if err := c.Validate(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1

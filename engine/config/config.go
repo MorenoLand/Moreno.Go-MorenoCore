@@ -132,6 +132,24 @@ func (c *Config) ApplyEnv() {
 
 func (c *Config) Set(key, value string) error { return c.set(key, value) }
 
+func (c *Config) ResolvePaths() {
+	c.GameDataDir = resolvePath(c.GameDataDir, filepath.Join("bin", c.GameDataDir), filepath.Join("..", c.GameDataDir))
+	c.SchemaDir = resolvePath(c.SchemaDir, filepath.Join("bin", c.SchemaDir), filepath.Join("..", c.SchemaDir))
+	c.LuaScriptPath = resolvePath(c.LuaScriptPath, filepath.Join("bin", c.LuaScriptPath), filepath.Join("..", c.LuaScriptPath))
+}
+
+func resolvePath(path string, alternatives ...string) string {
+	if path == "" || filepath.IsAbs(path) {
+		return path
+	}
+	for _, candidate := range append([]string{path}, alternatives...) {
+		if _, err := os.Stat(candidate); err == nil {
+			return filepath.Clean(candidate)
+		}
+	}
+	return filepath.Clean(path)
+}
+
 func (c Config) DatabasePath(name string) string {
 	return filepath.Clean(filepath.Join(c.DataDir, name))
 }
