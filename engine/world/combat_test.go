@@ -1,0 +1,86 @@
+package world
+
+import (
+	"context"
+	"database/sql"
+	"net"
+	"testing"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+)
+
+func TestAttackPacketBuilders(t *testing.T) {
+	start := protocol.NewReader(buildAttackStart(11, 22))
+	if attacker, err := start.ReadU64(); err != nil || attacker != 11 {
+		t.Fatalf("attacker=%d err=%v", attacker, err)
+	}
+	if victim, err := start.ReadU64(); err != nil || victim != 22 {
+		t.Fatalf("victim=%d err=%v", victim, err)
+	}
+	reader := protocol.NewReader(buildAttackStop(11, 22, true))
+	if attacker, err := reader.ReadPackedGUID(); err != nil || attacker != 11 {
+		t.Fatalf("stop attacker=%d err=%v", attacker, err)
+	}
+	if victim, err := reader.ReadPackedGUID(); err != nil || victim != 22 {
+		t.Fatalf("stop victim=%d err=%v", victim, err)
+	}
+	if dead, err := reader.ReadU32(); err != nil || dead != 1 {
+		t.Fatalf("dead=%d err=%v", dead, err)
+	}
+}
+
+func TestHandleAttackSwingStartsAndStopsCombat(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, curhealth INTEGER NOT NULL)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO creature VALUES (7, 68, 0, 3, 4, 0, 100)"); err != nil {
+		t.Fatal(err)
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}}
+	state := &session{server: server, conn: serverConn, playerLoaded: true, playerGUID: 26, player: &playerState{GUID: 26, Map: 0, X: 0, Y: 0, Z: 0}}
+	victim := creatureWorldGUID(7, 68)
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(victim)
+	started := make(chan bool, 1)
+	go func() { started <- state.handleAttackSwing(context.Background(), payload.Bytes()) }()
+	opcode, response, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !<-started || opcode != uint16(protocol.OpcodeSMSG_ATTACK_START) {
+		t.Fatalf("start result=%v opcode=%x", state.attackTarget, opcode)
+	}
+	reader := protocol.NewReader(response)
+	if attacker, err := reader.ReadU64(); err != nil || attacker != 26 {
+		t.Fatalf("attacker=%d err=%v", attacker, err)
+	}
+	if target, err := reader.ReadU64(); err != nil || target != victim {
+		t.Fatalf("target=%x err=%v", target, err)
+	}
+	stopped := make(chan bool, 1)
+	go func() { stopped <- state.handleAttackStop() }()
+	opcode, response, err = readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !<-stopped || opcode != uint16(protocol.OpcodeSMSG_ATTACK_STOP) {
+		t.Fatalf("stop result=%v opcode=%x", state.attackTarget, opcode)
+	}
+	reader = protocol.NewReader(response)
+	if attacker, err := reader.ReadPackedGUID(); err != nil || attacker != 26 {
+		t.Fatalf("stop attacker=%d err=%v", attacker, err)
+	}
+	if target, err := reader.ReadPackedGUID(); err != nil || target != victim {
+		t.Fatalf("stop target=%x err=%v", target, err)
+	}
+}

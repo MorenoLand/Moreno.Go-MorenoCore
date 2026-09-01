@@ -79,7 +79,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 
 func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	values := make([]uint32, creatureValuesCount)
-	rawGUID := uint64(spawn.GUID) | uint64(spawn.Entry)<<24 | uint64(0xF130)<<48
+	rawGUID := creatureWorldGUID(spawn.GUID, spawn.Entry)
 	values[0] = uint32(rawGUID)
 	values[1] = uint32(rawGUID >> 32)
 	values[2] = creatureTypeMask
@@ -132,6 +132,10 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 		}
 	}
 	return block.Bytes()
+}
+
+func creatureWorldGUID(guid, entry uint32) uint64 {
+	return uint64(guid) | uint64(entry)<<24 | uint64(0xF130)<<48
 }
 
 func maxUint32(value, fallback uint32) uint32 {

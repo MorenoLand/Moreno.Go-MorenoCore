@@ -74,6 +74,7 @@ type session struct {
 	emoteState   uint32
 	playerLocked bool
 	rooted       bool
+	attackTarget uint64
 	logoutHook   bool
 	gossip       *gossipMenuState
 	gossipClosed bool
@@ -186,6 +187,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_ITEM_QUERY_SINGLE):
 			if !state.authed || !state.handleItemQuerySingle(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ATTACK_SWING):
+			if !state.authed || !state.handleAttackSwing(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ATTACK_STOP):
+			if !state.authed || !state.handleAttackStop() {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_GOSSIP_HELLO):
