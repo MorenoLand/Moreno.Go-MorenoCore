@@ -3,8 +3,10 @@ package world
 import (
 	"context"
 	"database/sql"
+	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -237,6 +239,17 @@ func (s *session) sendTaxiMenu(ctx context.Context, flightMasterGUID uint64) boo
 	return true
 }
 
+// ActivateTaxiReply codes from TrinityCore SharedDefines.h.
+const (
+	taxiErrOK             uint32 = 0
+	taxiErrUnspecified    uint32 = 1
+	taxiErrNoSuchPath     uint32 = 2
+	taxiErrNotEnoughMoney uint32 = 3
+	taxiErrTooFarAway     uint32 = 4
+	taxiErrNoVendorNearby uint32 = 5
+	taxiErrNotVisited     uint32 = 6
+)
+
 func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 16 {
 		return true
@@ -254,11 +267,101 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	packet := protocol.NewBuffer(4)
-	packet.WriteU32(0) // ERR_TAXIOK = 0
-	_ = s.write(uint16(protocol.OpcodeSMSG_ACTIVATETAXIREPLY), packet.Bytes(), true)
-	s.debug("taxi flight activated", "account", s.accountName, "master", guid, "source", sourceNode, "dest", destNode)
-	return true
+	reply := func(code uint32) bool {
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(code)
+		_ = s.write(uint16(protocol.OpcodeSMSG_ACTIVATETAXIREPLY), packet.Bytes(), true)
+		return true
+	}
+	// Player::ActivateTaxiPathTo validation order: vendor/nearest node,
+	// known source node, existing path, money.
+	nearest, ok := s.nearestCreatureTaxiNode(ctx, guid)
+	if !ok {
+		return reply(taxiErrNoVendorNearby)
+	}
+	if !s.isTaxiMaskNodeKnown(sourceNode) && !s.isTaxiCheater() {
+		return reply(taxiErrNotVisited)
+	}
+	if s.server.Data == nil {
+		return reply(taxiErrUnspecified)
+	}
+	pathID, price, found, err := s.server.Data.TaxiPathLinks(sourceNode, destNode)
+	if err != nil || !found {
+		return reply(taxiErrNoSuchPath)
+	}
+	if uint64(s.player.Money) < uint64(price) {
+		return reply(taxiErrNotEnoughMoney)
+	}
+	if price > 0 {
+		s.player.Money -= price
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+		}
+		s.sendPlayerMoneyUpdate()
+	}
+	// SendDoFlight: mount and run the TaxiPathNode spline as a flying
+	// monster move (Flying 0x2000 | Catmullrom 0x40000 per MoveSplineFlag).
+	mount := uint32(0)
+	if mountDisplay, err := s.server.Data.TaxiNodeMount(sourceNode, s.playerAlliance()); err == nil {
+		mount = mountDisplay
+	}
+	s.startTaxiFlight(pathID, mount, nearest == sourceNode)
+	s.debug("taxi flight activated", "account", s.accountName, "master", guid, "source", sourceNode, "dest", destNode, "cost", price)
+	return reply(taxiErrOK)
+}
+
+// startTaxiFlight mounts the player and broadcasts the taxi spline.
+func (s *session) startTaxiFlight(pathID, mountDisplay uint32, takeoff bool) {
+	points, err := s.server.Data.TaxiPathPoints(pathID)
+	if err != nil || len(points) == 0 {
+		return
+	}
+	if mountDisplay != 0 {
+		s.player.MountDisplayID = mountDisplay
+		s.sendPlayerMountUpdate()
+	}
+	packet := protocol.NewBuffer(32 + len(points)*12)
+	packet.WritePackedGUID(s.playerGUID)
+	packet.WriteU8(0) // MOVEMENTFLAG2_UNK7
+	packet.WriteF32(s.player.X)
+	packet.WriteF32(s.player.Y)
+	packet.WriteF32(s.player.Z)
+	packet.WriteU32(uint32(time.Now().UnixMilli())) // SplineID
+	packet.WriteU8(0)                               // MonsterMoveNormal
+	packet.WriteU32(0x00042000)                     // Flying | Catmullrom
+	total := float64(0)
+	prevX, prevY, prevZ := s.player.X, s.player.Y, s.player.Z
+	for _, point := range points {
+		total += math.Sqrt(float64((point.X-prevX)*(point.X-prevX) + (point.Y-prevY)*(point.Y-prevY) + (point.Z-prevZ)*(point.Z-prevZ)))
+		prevX, prevY, prevZ = point.X, point.Y, point.Z
+	}
+	// Intercontinental flight speed baseline; the client scales the spline
+	// by the provided duration.
+	speed := 28.0
+	duration := uint32((total / speed) * 1000)
+	if duration < 500 {
+		duration = 500
+	}
+	packet.WriteU32(duration)
+	packet.WriteU32(uint32(len(points)))
+	for _, point := range points {
+		packet.WriteF32(point.X)
+		packet.WriteF32(point.Y)
+		packet.WriteF32(point.Z)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet.Bytes(), true)
+	last := points[len(points)-1]
+	s.player.X, s.player.Y, s.player.Z = last.X, last.Y, last.Z
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "UPDATE characters SET position_x = ?, position_y = ?, position_z = ? WHERE guid = ?", last.X, last.Y, last.Z, s.playerGUID)
+	}
+	// Dismount when the flight window elapses.
+	time.AfterFunc(time.Duration(duration)*time.Millisecond, func() {
+		if s.currentPlayer() != nil {
+			s.player.MountDisplayID = 0
+			s.sendPlayerMountUpdate()
+		}
+	})
 }
 
 // initTaxiNodesForLevel mirrors PlayerTaxi::InitTaxiNodesForLevel for the
