@@ -315,6 +315,34 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleQueryNextMailTime(ctx) {
 				return
 			}
+		case uint32(protocol.OpcodeMSG_AUCTION_HELLO):
+			if !state.authed || !state.handleAuctionHello(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUCTION_LIST_ITEMS):
+			if !state.authed || !state.handleAuctionListItems(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUCTION_SELL_ITEM):
+			if !state.authed || !state.handleAuctionSellItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUCTION_PLACE_BID):
+			if !state.authed || !state.handleAuctionPlaceBid(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUCTION_LIST_OWNER_ITEMS):
+			if !state.authed || !state.handleAuctionListOwnerItems(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUCTION_LIST_BIDDER_ITEMS):
+			if !state.authed || !state.handleAuctionListBidderItems(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUCTION_REMOVE_ITEM):
+			if !state.authed || !state.handleAuctionRemoveItem(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_ATTACK_SWING):
 			if !state.authed || !state.handleAttackSwing(ctx, payload) {
 				return
