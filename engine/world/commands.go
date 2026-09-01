@@ -110,6 +110,7 @@ func (s *session) handleCmdGM(args []string) {
 			s.player.ExtraFlags |= playerExtraGMOn
 			s.persistExtraFlags()
 			s.sendPlayerUpdate()
+			s.refreshNearbyObjects(context.Background())
 		}
 		s.sendNotification("Game Master mode is ON")
 		s.sendSysMessage("GM mode is ON")
@@ -119,6 +120,7 @@ func (s *session) handleCmdGM(args []string) {
 			s.player.ExtraFlags &= ^playerExtraGMOn
 			s.persistExtraFlags()
 			s.sendPlayerUpdate()
+			s.refreshNearbyObjects(context.Background())
 		}
 		s.sendNotification("Game Master mode is OFF")
 		s.sendSysMessage("GM mode is OFF")
@@ -192,6 +194,53 @@ func (s *session) setFlyMode(enable bool) {
 	} else {
 		_ = s.write(uint16(protocol.OpcodeSMSG_MOVE_UNSET_CAN_FLY), buf.Bytes(), true)
 	}
+}
+
+func (s *session) refreshNearbyObjects(ctx context.Context) {
+	if !s.playerLoaded || s.player == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0)
+	if !isGM {
+		// When GM mode is turned OFF, destroy any GM-only creatures that were previously visible
+		distance := float64(s.server.Config.VisibilityDistanceContinents)
+		if distance <= 0 {
+			distance = 150.0
+		}
+		query := `SELECT c.guid, c.id
+			FROM creature AS c
+			JOIN creature_template AS t ON t.entry = c.id
+			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
+			AND ((c.phaseMask <> 0 AND (c.phaseMask & 1) = 0) OR (COALESCE(t.flags_extra, 0) & 1) <> 0)`
+		if rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance); err == nil {
+			for rows.Next() {
+				var low, entry int64
+				if err := rows.Scan(&low, &entry); err == nil {
+					rawGUID := creatureWorldGUID(uint32(low), uint32(entry))
+					s.sendDestroyObject(rawGUID, false)
+				}
+			}
+			rows.Close()
+		}
+	}
+	// Stream creature and gameobject updates for current visibility mode
+	if packet, count, err := s.server.buildNearbyCreatureUpdates(ctx, *s.player); err == nil && count > 0 && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	}
+	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player); err == nil && count > 0 && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	}
+}
+
+func (s *session) sendDestroyObject(guid uint64, onDeath bool) {
+	buf := protocol.NewBuffer(9)
+	buf.WriteU64(guid)
+	if onDeath {
+		buf.WriteU8(1)
+	} else {
+		buf.WriteU8(0)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), buf.Bytes(), true)
 }
 
 func (s *session) handleCmdTele(ctx context.Context, args []string) {
