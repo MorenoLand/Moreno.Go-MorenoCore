@@ -407,4 +407,48 @@ func (s *Server) pruneCreatureMotion(now time.Time) {
 	}
 }
 
+// stopCreatureMotion immediately halts creature movement and broadcasts MonsterMoveStop.
+func (s *Server) stopCreatureMotion(mapID uint32, guid uint64, x, y, z float32) {
+	s.motionMu.Lock()
+	if s.creatureMotion != nil {
+		if motion, ok := s.creatureMotion[guid]; ok && motion != nil {
+			motion.Moving = false
+			motion.InCombat = false
+			motion.TargetGUID = 0
+			if motion.X != 0 || motion.Y != 0 {
+				x = motion.X
+				y = motion.Y
+				z = motion.Z
+			}
+		}
+	}
+	s.motionMu.Unlock()
+	s.broadcastMonsterMoveStop(mapID, guid, x, y, z)
+}
+
+func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z float32) {
+	packet := protocol.NewBuffer(32)
+	packet.WritePackedGUID(guid)
+	packet.WriteU8(0) // Transport flag
+	packet.WriteF32(x)
+	packet.WriteF32(y)
+	packet.WriteF32(z)
+	packet.WriteU32(0) // Spline ID
+	packet.WriteU8(1) // MonsterMoveStop = 1
+	distance := s.Config.VisibilityDistanceContinents
+	if distance <= 0 {
+		distance = 150.0
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
+			continue
+		}
+		if math.Hypot(float64(x-sess.player.X), float64(y-sess.player.Y)) <= distance {
+			_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet.Bytes(), true)
+		}
+	}
+}
+
 
