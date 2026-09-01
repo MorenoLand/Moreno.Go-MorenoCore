@@ -41,6 +41,8 @@ const (
 	unitFieldKnownCurrencies          = 632
 	unitFieldWatchedFaction           = 1230
 	unitFieldAmmoID                   = 1198
+	playerQuestLogStart               = 158 // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
+	playerQuestLogSlots               = 25
 	playerSkillInfoStart              = 636
 	playerMaxSkills                   = 128
 	playerVisibleItemStart            = 283
@@ -49,6 +51,24 @@ const (
 	unitFieldMaxPower1                = 33
 	unitFlagPlayerControlled   uint32 = 0x00000008
 )
+
+// questCompleteStateFlag sets the per-slot complete bit the client reads
+// from PLAYER_QUEST_LOG_x_2 (nonzero marks objectives complete).
+func questCompleteStateFlag(status int64) uint32 {
+	if status == questStatusComplete {
+		return 1
+	}
+	return 0
+}
+
+// questLogEntry mirrors one PLAYER_QUEST_LOG slot: quest id, state byte,
+// four objective counters packed into two uint32 fields and the timer.
+type questLogEntry struct {
+	QuestID  uint32
+	State    uint32
+	Timer    uint32
+	Counters [4]uint16
+}
 
 type playerSkill struct {
 	Skill uint16
@@ -99,6 +119,7 @@ type playerState struct {
 	Equipment      string
 	SheathState    uint8
 	TaxiMask       [taxiMaskSize]uint32
+	QuestLog       [playerQuestLogSlots]questLogEntry
 }
 
 func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState, error) {
@@ -123,6 +144,28 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if loginState == 1 || (loginState == 2 && state.ExtraFlags&playerExtraGMOn != 0) {
 		state.ExtraFlags |= playerExtraGMOn
 		state.PlayerFlags |= playerFlagGM
+	}
+	// Rebuild the quest log slots from character_queststatus rows like
+	// Player::LoadFromDB does for QUEST_STATUS_INCOMPLETE/COMPLETE quests.
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		qRows, qErr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest, status, explored, timer, mobcount1, mobcount2, mobcount3, mobcount4 FROM character_queststatus WHERE guid = ? AND status IN (1, 3) ORDER BY quest", guid)
+		if qErr == nil {
+			slot := 0
+			for qRows.Next() && slot < playerQuestLogSlots {
+				var questID, status, explored, timer, mob1, mob2, mob3, mob4 int64
+				if err := qRows.Scan(&questID, &status, &explored, &timer, &mob1, &mob2, &mob3, &mob4); err != nil {
+					continue
+				}
+				state.QuestLog[slot] = questLogEntry{
+					QuestID:  uint32(questID),
+					State:    questCompleteStateFlag(status),
+					Timer:    uint32(timer),
+					Counters: [4]uint16{uint16(mob1), uint16(mob2), uint16(mob3), uint16(mob4)},
+				}
+				slot++
+			}
+			qRows.Close()
+		}
 	}
 	s.player = &state
 	var taximask sql.NullString
@@ -309,6 +352,15 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldKnownCurrencies] = state.KnownCurrency
 	values[unitFieldWatchedFaction] = state.WatchedFaction
 	values[unitFieldAmmoID] = state.AmmoID
+	for slot := 0; slot < playerQuestLogSlots; slot++ {
+		entry := state.QuestLog[slot]
+		base := playerQuestLogStart + slot*5
+		values[base] = entry.QuestID
+		values[base+1] = entry.State
+		values[base+2] = uint32(entry.Counters[0]) | uint32(entry.Counters[1])<<16
+		values[base+3] = uint32(entry.Counters[2]) | uint32(entry.Counters[3])<<16
+		values[base+4] = entry.Timer
+	}
 	for i, sk := range state.Skills {
 		if i >= playerMaxSkills {
 			break
