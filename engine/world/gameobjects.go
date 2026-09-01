@@ -98,7 +98,7 @@ func buildGameObjectUpdate(spawn gameObjectSpawn) []byte {
 	values[0] = uint32(rawGUID)
 	values[1] = uint32(rawGUID >> 32)
 	values[2] = gameObjectTypeMask
-	values[3] = spawn.Entry
+	values[objectFieldEntry] = spawn.Entry
 	values[4] = math.Float32bits(spawn.Size)
 	values[gameObjectDisplayID] = spawn.DisplayID
 	values[gameObjectFlags] = spawn.Flags

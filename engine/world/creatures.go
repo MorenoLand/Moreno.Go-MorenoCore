@@ -83,6 +83,7 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	values[0] = uint32(rawGUID)
 	values[1] = uint32(rawGUID >> 32)
 	values[2] = creatureTypeMask
+	values[objectFieldEntry] = spawn.Entry
 	values[unitFieldHealth] = maxUint32(spawn.Health, 1)
 	values[unitFieldLevel] = maxUint32(spawn.Level, 1)
 	values[unitFieldFaction] = spawn.Faction

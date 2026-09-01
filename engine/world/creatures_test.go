@@ -84,4 +84,24 @@ func TestBuildNearbyCreatureUpdates(t *testing.T) {
 	if maskBlocks, err := reader.ReadU8(); err != nil || maskBlocks != 5 {
 		t.Fatalf("mask blocks=%d err=%v", maskBlocks, err)
 	}
+	mask := make([]uint32, 5)
+	for index := range mask {
+		if mask[index], err = reader.ReadU32(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	values := make(map[int]uint32)
+	for index := 0; index < creatureValuesCount; index++ {
+		if mask[index/32]&(1<<uint(index%32)) == 0 {
+			continue
+		}
+		value, readErr := reader.ReadU32()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		values[index] = value
+	}
+	if values[objectFieldEntry] != 68 {
+		t.Fatalf("creature entry=%d", values[objectFieldEntry])
+	}
 }

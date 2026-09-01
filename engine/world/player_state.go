@@ -15,6 +15,7 @@ import (
 const (
 	playerValuesCount                 = 1326
 	objectFieldType                   = 2
+	objectFieldEntry                  = 3
 	objectFieldScale                  = 4
 	unitFieldHealth                   = 24
 	unitFieldLevel                    = 54
