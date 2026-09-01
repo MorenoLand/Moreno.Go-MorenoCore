@@ -167,6 +167,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleCharEnum(ctx) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_READY_FOR_ACCOUNT_DATA_TIMES):
+			if !state.authed || !state.handleReadyForAccountDataTimes() {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REALM_SPLIT):
+			if !state.authed || !state.handleRealmSplit(payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_CHAR_CREATE):
 			if !state.authed || !state.handleCharCreate(ctx, payload) {
 				return
@@ -225,6 +233,27 @@ func opcodeName(opcode uint32) string {
 		return name
 	}
 	return fmt.Sprintf("0x%03X", opcode)
+}
+
+func (s *session) handleReadyForAccountDataTimes() bool {
+	if err := s.write(uint16(protocol.OpcodeSMSG_ACCOUNT_DATA_TIMES), buildAccountDataTimes(time.Now(), globalAccountDataMask), true); err != nil {
+		s.debug("global account data times failed", "account", s.accountName, "error", err)
+		return false
+	}
+	return true
+}
+
+func (s *session) handleRealmSplit(payload []byte) bool {
+	response, err := buildRealmSplit(payload)
+	if err != nil {
+		s.debug("realm split rejected", "account", s.accountName, "error", err)
+		return false
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_REALM_SPLIT), response, true); err != nil {
+		s.debug("realm split response failed", "account", s.accountName, "error", err)
+		return false
+	}
+	return true
 }
 
 func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
