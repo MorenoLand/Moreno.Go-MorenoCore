@@ -56,9 +56,18 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	if distance <= 0 {
 		return nil, 0, nil
 	}
-	isGM := state.ExtraFlags&0x01 != 0 || state.PlayerFlags&0x08 != 0
+	isGM := state.ExtraFlags&playerExtraGMOn != 0 || state.PlayerFlags&playerFlagGM != 0
+	// Event creatures spawn only while their event runs; game_event_npcflag
+	// flags OR into the template npcflag during events (guards gaining
+	// seasonal gossip/questgiver flags).
+	eventArgs := make([]any, 0, 4)
+	eventClause := gameEventSpawnClause("gec.eventEntry", s.activeEventList(ctx), &eventArgs)
+	npcFlagExpr := "0"
+	if flagClause, ok := s.gameEventNPCFlagClause(ctx, &eventArgs); ok {
+		npcFlagExpr = flagClause
+	}
 	fullQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,
-		COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.faction, t.npcflag, t.unit_flags, t.dynamicflags,
+		COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.faction, (t.npcflag | ` + npcFlagExpr + `), t.unit_flags, t.dynamicflags,
 		t.maxlevel, c.curhealth, c.curmana, t.scale, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime,
 		COALESCE(ca.mount, cta.mount, 0),
 		COALESCE(ca.bytes1, cta.bytes1, 0),
@@ -76,9 +85,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
 		AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
 		AND (? OR (COALESCE(t.flags_extra, 0) & 1) = 0)
-		AND (gec.eventEntry IS NULL OR gec.eventEntry = 0)
+		AND ` + eventClause + `
 		ORDER BY c.guid`
-	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM)
+	queryArgs := append([]any{state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM}, eventArgs...)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, queryArgs...)
 	if err != nil {
 		fallbackQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,
 			COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.faction, t.npcflag, t.unit_flags, t.dynamicflags,

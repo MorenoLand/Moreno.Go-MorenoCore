@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"math"
+	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -60,7 +61,12 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		AND (geg.eventEntry IS NULL OR geg.eventEntry = 0)
 		ORDER BY g.guid`
 	isGM := state.ExtraFlags&playerExtraGMOn != 0 || state.PlayerFlags&playerFlagGM != 0
-	rows, err := s.WorldStore.DB.QueryContext(ctx, query, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM)
+	// Event gameobjects spawn only while their event runs.
+	goArgs := make([]any, 0, 4)
+	goEventClause := gameEventSpawnClause("geg.eventEntry", s.activeEventList(ctx), &goArgs)
+	query = strings.Replace(query, "AND (geg.eventEntry IS NULL OR geg.eventEntry = 0)", "AND "+goEventClause, 1)
+	queryArgs := append([]any{state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM}, goArgs...)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		fallbackQuery := `SELECT g.guid, g.id, g.map, g.position_x, g.position_y, g.position_z, g.orientation, g.rotation0, g.rotation1, g.rotation2, g.rotation3, g.state, g.animprogress, t.type, t.displayId, t.size, COALESCE(ta.flags, 0), COALESCE(ta.faction, 0), COALESCE(ta.artkit0, 0), COALESCE(ga.parent_rotation0, 0), COALESCE(ga.parent_rotation1, 0), COALESCE(ga.parent_rotation2, 0), COALESCE(ga.parent_rotation3, 1)
 			FROM gameobject AS g

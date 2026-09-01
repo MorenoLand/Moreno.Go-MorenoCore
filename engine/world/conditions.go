@@ -351,3 +351,72 @@ func reputationRank(standing int64) uint32 {
 		return 0
 	}
 }
+
+// activeEventList returns the cached active event ids as a slice.
+func (s *Server) activeEventList(ctx context.Context) []int64 {
+	active := s.cachedActiveGameEvents(ctx)
+	list := make([]int64, 0, len(active))
+	for entry := range active {
+		list = append(list, entry)
+	}
+	return list
+}
+
+// gameEventSpawnClause builds the SQL fragment and args filtering event
+// spawns: positive entries spawn only while active, negative entries are
+// removed while active (TC mGameEventCreatureGuids semantics).
+func gameEventSpawnClause(column string, active []int64, args *[]any) string {
+	if len(active) == 0 {
+		return "(" + column + " IS NULL OR " + column + " = 0)"
+	}
+	positive := "(" + column + " IS NULL OR " + column + " = 0"
+	placeholders := ""
+	for _, entry := range active {
+		if entry <= 0 {
+			continue
+		}
+		if placeholders != "" {
+			placeholders += ", "
+		}
+		placeholders += "?"
+		*args = append(*args, entry)
+	}
+	if placeholders != "" {
+		positive += " OR " + column + " IN (" + placeholders + ")"
+	}
+	positive += ")"
+	negative := column + " IS NULL"
+	negPlaceholders := ""
+	for _, entry := range active {
+		if entry >= 0 {
+			continue
+		}
+		if negPlaceholders != "" {
+			negPlaceholders += ", "
+		}
+		negPlaceholders += "?"
+		*args = append(*args, -entry)
+	}
+	if negPlaceholders != "" {
+		negative = "(" + column + " IS NULL OR " + column + " NOT IN (" + negPlaceholders + "))"
+	}
+	return positive + " AND " + negative
+}
+
+// gameEventNPCFlagJoin returns a COALESCE-able sum of event npc flags that
+// apply to a spawn while their events run (game_event_npcflag).
+func (s *Server) gameEventNPCFlagClause(ctx context.Context, args *[]any) (string, bool) {
+	active := s.activeEventList(ctx)
+	if len(active) == 0 {
+		return "0", false
+	}
+	placeholders := ""
+	for i, entry := range active {
+		if i > 0 {
+			placeholders += ", "
+		}
+		placeholders += "?"
+		*args = append(*args, entry)
+	}
+	return "(SELECT COALESCE(SUM(nf.npcflag), 0) FROM game_event_npcflag nf WHERE nf.guid = c.guid AND nf.eventEntry IN (" + placeholders + "))", true
+}
