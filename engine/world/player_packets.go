@@ -76,7 +76,8 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race uint8
 			}
 			if !found {
 				result = append(result, def)
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, def.ID)
+				if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, def.ID); err != nil {
+				}
 			}
 		}
 	}
