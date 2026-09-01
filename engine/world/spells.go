@@ -55,6 +55,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", spellCastIgnoreReason(spell, found, learned))
 		return true
 	}
+	nowUnix := time.Now().Unix()
+	for _, cd := range s.player.Cooldowns {
+		if cd.Spell == spellID && cd.End > nowUnix {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_NOT_READY = 47
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "on cooldown")
+			return true
+		}
+	}
 	cost := spell.ManaCost
 	pType := spell.PowerType
 	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
@@ -83,6 +91,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			col := fmt.Sprintf("power%d", pType+1)
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), s.player.Powers[pType], s.playerGUID)
+		}
+	}
+	if spell.RecoveryTime > 0 {
+		cooldownEnd := nowUnix + int64((spell.RecoveryTime+999)/1000)
+		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, End: cooldownEnd})
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, uint32(spell.RecoveryTime)), true)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO character_spell_cooldown (guid, spell, item, time, categoryId, categoryEnd) VALUES (?, ?, 0, ?, 0, 0)", s.playerGUID, spellID, cooldownEnd)
 		}
 	}
 	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime, "cost", cost)
@@ -137,5 +153,14 @@ func buildCastFailed(castID uint8, spellID uint32, result uint8) []byte {
 	buf.WriteU8(castID)
 	buf.WriteU32(spellID)
 	buf.WriteU8(result)
+	return buf.Bytes()
+}
+
+func buildSpellCooldown(playerGUID uint64, spellID uint32, cooldownDurationMs uint32) []byte {
+	buf := protocol.NewBuffer(8 + 1 + 4 + 4)
+	buf.WriteU64(playerGUID)
+	buf.WriteU8(0) // flags = 0
+	buf.WriteU32(spellID)
+	buf.WriteU32(cooldownDurationMs)
 	return buf.Bytes()
 }
