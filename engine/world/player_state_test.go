@@ -54,7 +54,31 @@ func TestBuildPlayerUpdateKeepsMovementAndUpdateMaskAligned(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if maskBlocks, err := reader.ReadU8(); err != nil || maskBlocks != 42 {
+	maskBlocks, err := reader.ReadU8()
+	if err != nil || maskBlocks != 42 {
 		t.Fatalf("mask blocks=%d err=%v", maskBlocks, err)
+	}
+	mask := make([]uint32, maskBlocks)
+	for index := range mask {
+		if mask[index], err = reader.ReadU32(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mask[0]&0x3 != 0x3 {
+		t.Fatalf("object guid mask=%x", mask[0])
+	}
+	values := make(map[int]uint32)
+	for index := 0; index < playerValuesCount; index++ {
+		if mask[index/32]&(1<<uint(index%32)) == 0 {
+			continue
+		}
+		value, readErr := reader.ReadU32()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		values[index] = value
+	}
+	if values[0] != 26 || values[1] != 0 || values[2] != 0x19 {
+		t.Fatalf("object values=%x/%x/%x", values[0], values[1], values[2])
 	}
 }

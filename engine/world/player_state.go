@@ -223,6 +223,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 			}
 		}
 	}
+	if err := mask.Set(1); err != nil {
+		return nil, err
+	}
 	block := protocol.NewBuffer(256)
 	block.WriteU8(protocol.UpdateCreateObject2)
 	block.WritePackedGUID(state.GUID)
