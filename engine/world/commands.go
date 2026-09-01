@@ -72,66 +72,10 @@ func (s *session) executeCommand(ctx context.Context, line string) bool {
 	if len(fields) == 0 {
 		return false
 	}
-	cmd := strings.ToLower(fields[0])
-	args := fields[1:]
-
-	switch cmd {
-	case "help", "?":
-		s.handleCmdHelp(args)
-		return true
-	case "gm":
-		s.handleCmdGM(args)
-		return true
-	case "tele":
-		s.handleCmdTele(ctx, args)
-		return true
-	case "go":
-		s.handleCmdGo(ctx, args)
-		return true
-	case "modify", "mod":
-		s.handleCmdModify(ctx, args)
-		return true
-	case "additem", "item":
-		s.handleCmdAddItem(ctx, args)
-		return true
-	case "learn":
-		s.handleCmdLearn(ctx, args)
-		return true
-	case "unlearn":
-		s.handleCmdUnlearn(ctx, args)
-		return true
-	case "cast":
-		s.handleCmdCast(ctx, args)
-		return true
-	case "lookup":
-		s.handleCmdLookup(ctx, args)
-		return true
-	case "server":
-		s.handleCmdServer(ctx, args)
-		return true
-	case "character", "char":
-		s.handleCmdCharacter(ctx, args)
-		return true
-	case "account", "acct":
-		s.handleCmdAccount(ctx, args)
-		return true
-	case "npc":
-		s.handleCmdNPC(ctx, args)
-		return true
-	case "gob", "gobject":
-		s.handleCmdGObject(ctx, args)
-		return true
-	case "revive", "resurrect", "res":
-		s.handleCmdRevive(ctx, args)
-		return true
-	case "dismount":
-		s.handleCmdDismount(ctx)
-		return true
-	case "save", "saveall":
-		s.handleCmdSave(ctx)
-		return true
-	}
-	return false
+	// Commands resolve through the prefix-matching command tree
+	// (ChatCommandNode::TryExecuteCommand), so '.mod spee 10' dispatches
+	// to '.modify speed 10'.
+	return s.dispatchCommand(ctx, fields)
 }
 
 func (s *session) handleCmdHelp(args []string) {
