@@ -600,10 +600,7 @@ func (s *session) loadMountState(ctx context.Context, guid uint64) (*MountState,
 			continue
 		}
 		spell, found, err := s.server.Data.Spell(spellID)
-		if err != nil {
-			return nil, err
-		}
-		if !found {
+		if err != nil || !found {
 			continue
 		}
 		for _, effect := range spell.Effects {

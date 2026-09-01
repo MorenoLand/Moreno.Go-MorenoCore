@@ -26,7 +26,7 @@ type spellCooldown struct {
 }
 
 func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState) error {
-	spells, err := s.loadLearnedSpells(ctx, state.GUID)
+	spells, err := s.loadLearnedSpells(ctx, state.GUID, state.Race)
 	if err != nil {
 		return err
 	}
@@ -42,24 +42,83 @@ func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState
 	return nil
 }
 
-func (s *session) loadLearnedSpells(ctx context.Context, guid uint64) ([]learnedSpell, error) {
+func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race uint8) ([]learnedSpell, error) {
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return defaultRacialSpells(race), nil
+	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell, active, disabled FROM character_spell WHERE guid = ? ORDER BY spell", guid)
 	if err != nil {
-		if missingTable(err) {
-			return nil, nil
-		}
-		return nil, err
+		return defaultRacialSpells(race), nil
 	}
-	defer rows.Close()
 	result := make([]learnedSpell, 0)
+	hasLanguage := false
 	for rows.Next() {
 		var spell, active, disabled int64
 		if err := rows.Scan(&spell, &active, &disabled); err != nil {
+			_ = rows.Close()
 			return nil, err
+		}
+		if isLanguageSpell(uint32(spell)) {
+			hasLanguage = true
 		}
 		result = append(result, learnedSpell{ID: uint32(spell), Active: active != 0, Disabled: disabled != 0})
 	}
-	return result, rows.Err()
+	_ = rows.Close()
+	if !hasLanguage || len(result) == 0 {
+		defaults := defaultRacialSpells(race)
+		for _, def := range defaults {
+			found := false
+			for _, sp := range result {
+				if sp.ID == def.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				result = append(result, def)
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, def.ID)
+			}
+		}
+	}
+	return result, nil
+}
+
+func defaultRacialSpells(race uint8) []learnedSpell {
+	spells := make([]learnedSpell, 0, 4)
+	spells = append(spells, learnedSpell{ID: 6603, Active: true})
+	switch race {
+	case 1:
+		spells = append(spells, learnedSpell{ID: 668, Active: true})
+	case 2:
+		spells = append(spells, learnedSpell{ID: 669, Active: true})
+	case 3:
+		spells = append(spells, learnedSpell{ID: 668, Active: true}, learnedSpell{ID: 672, Active: true})
+	case 4:
+		spells = append(spells, learnedSpell{ID: 668, Active: true}, learnedSpell{ID: 671, Active: true})
+	case 5:
+		spells = append(spells, learnedSpell{ID: 669, Active: true}, learnedSpell{ID: 17737, Active: true})
+	case 6:
+		spells = append(spells, learnedSpell{ID: 669, Active: true}, learnedSpell{ID: 670, Active: true})
+	case 7:
+		spells = append(spells, learnedSpell{ID: 668, Active: true}, learnedSpell{ID: 7340, Active: true})
+	case 8:
+		spells = append(spells, learnedSpell{ID: 669, Active: true}, learnedSpell{ID: 7341, Active: true})
+	case 10:
+		spells = append(spells, learnedSpell{ID: 669, Active: true}, learnedSpell{ID: 813, Active: true})
+	case 11:
+		spells = append(spells, learnedSpell{ID: 668, Active: true}, learnedSpell{ID: 29932, Active: true})
+	default:
+		spells = append(spells, learnedSpell{ID: 668, Active: true})
+	}
+	return spells
+}
+
+func isLanguageSpell(spellID uint32) bool {
+	switch spellID {
+	case 668, 669, 670, 671, 672, 813, 7340, 7341, 17737, 29932:
+		return true
+	}
+	return false
 }
 
 func (s *session) loadActionButtons(ctx context.Context, guid uint64) ([144]uint32, error) {

@@ -346,6 +346,19 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handlePlayerLogin(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeMSG_MOVE_WORLDPORT_ACK):
+			if state.authed && state.player != nil {
+				state.sendPlayerUpdate()
+				if update, _, err := state.server.buildNearbyCreatureUpdates(ctx, *state.player); err == nil && update != nil {
+					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
+				}
+				if update, _, err := state.server.buildNearbyGameObjectUpdates(ctx, *state.player); err == nil && update != nil {
+					_ = state.write(update.Opcode, update.Payload.Bytes(), true)
+				}
+				_ = state.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true)
+			}
+		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK):
+			// Movement acknowledged by client
 		case uint32(protocol.OpcodeCMSG_MESSAGECHAT):
 			if !state.authed || !state.handleMessageChat(ctx, payload) {
 				return

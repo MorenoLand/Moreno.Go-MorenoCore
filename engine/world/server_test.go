@@ -180,7 +180,7 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if initialSpellsOpcode != uint16(protocol.OpcodeSMSG_INITIAL_SPELLS) || len(initialSpellsPayload) != 5 {
+	if initialSpellsOpcode != uint16(protocol.OpcodeSMSG_INITIAL_SPELLS) || len(initialSpellsPayload) < 5 {
 		t.Fatalf("initial spells opcode=%x payload=%d", initialSpellsOpcode, len(initialSpellsPayload))
 	}
 	unlearnOpcode, unlearnPayload, err := readServerFrame(clientConn, clientCrypt)
