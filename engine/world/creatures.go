@@ -73,7 +73,11 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		LEFT JOIN creature_addon AS ca ON ca.guid = c.guid
 		LEFT JOIN creature_template_addon AS cta ON cta.entry = c.id
 		LEFT JOIN creature_equip_template AS eq ON eq.CreatureID = c.id AND eq.ID = COALESCE(NULLIF(c.equipment_id, 0), 1)
-		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ? AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0) AND (? OR (COALESCE(t.flags_extra, 0) & 1) = 0)
+		LEFT JOIN game_event_creature AS gec ON gec.guid = c.guid
+		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
+		AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
+		AND (? OR (COALESCE(t.flags_extra, 0) & 1) = 0)
+		AND (gec.eventEntry IS NULL OR gec.eventEntry = 0)
 		ORDER BY c.guid`
 	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM)
 	if err != nil {
@@ -82,7 +86,9 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			t.maxlevel, c.curhealth, c.curmana, t.scale, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id
-			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ? AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0) AND (? OR (COALESCE(t.flags_extra, 0) & 1) = 0)
+			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
+			AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
+			AND (? OR (COALESCE(t.flags_extra, 0) & 1) = 0)
 			ORDER BY c.guid`
 		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM)
 		if err != nil {
