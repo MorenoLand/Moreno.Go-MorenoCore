@@ -87,3 +87,9 @@ func buildInstanceDifficulty() []byte {
 	packet.WriteU32(0)
 	return packet.Bytes()
 }
+
+func buildTimeSyncRequest(counter uint32) []byte {
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(counter)
+	return packet.Bytes()
+}

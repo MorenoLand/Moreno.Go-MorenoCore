@@ -240,6 +240,16 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if chatOpcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) || len(chatPayload) == 0 {
 		t.Fatalf("chat opcode=%x payload=%d", chatOpcode, len(chatPayload))
 	}
+	timeSyncOpcode, timeSyncPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if timeSyncOpcode != uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ) || len(timeSyncPayload) != 4 {
+		t.Fatalf("time sync opcode=%x payload=%d", timeSyncOpcode, len(timeSyncPayload))
+	}
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_TIME_SYNC_RESP), []byte{0, 0, 0, 0, 0, 0, 0, 0}, clientCrypt); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST), nil, clientCrypt); err != nil {
 		t.Fatal(err)
 	}

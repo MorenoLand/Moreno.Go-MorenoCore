@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"encoding/hex"
 	"math"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -69,7 +70,11 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		return false
 	}
 	if guid != s.playerGUID {
-		s.debug("movement rejected", "account", s.accountName, "reason", "mover mismatch", "guid", guid, "expected", s.playerGUID)
+		prefix := payload
+		if len(prefix) > 24 {
+			prefix = prefix[:24]
+		}
+		s.debug("movement rejected", "account", s.accountName, "reason", "mover mismatch", "guid", guid, "expected", s.playerGUID, "prefix", hex.EncodeToString(prefix))
 		return true
 	}
 	info, err := readMovementInfo(b)
@@ -89,6 +94,30 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	writeMovementInfo(packet, info)
 	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), info, s)
 	s.debug("movement accepted", "account", s.accountName, "guid", guid, "x", info.X, "y", info.Y, "z", info.Z)
+	return true
+}
+
+func (s *session) handleSetActiveMover(payload []byte) bool {
+	reader := protocol.NewReader(payload)
+	guid, err := reader.ReadU64()
+	if err != nil {
+		return false
+	}
+	s.debug("active mover received", "account", s.accountName, "guid", guid, "expected", s.playerGUID)
+	return true
+}
+
+func (s *session) handleTimeSyncResponse(payload []byte) bool {
+	reader := protocol.NewReader(payload)
+	counter, err := reader.ReadU32()
+	if err != nil {
+		return false
+	}
+	clientTime, err := reader.ReadU32()
+	if err != nil {
+		return false
+	}
+	s.debug("time sync response", "account", s.accountName, "counter", counter, "client_time", clientTime)
 	return true
 }
 

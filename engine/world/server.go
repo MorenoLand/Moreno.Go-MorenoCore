@@ -163,6 +163,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handlePing(payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_TIME_SYNC_RESP):
+			if !state.authed || !state.handleTimeSyncResponse(payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_CHAR_ENUM):
 			if !state.authed || !state.handleCharEnum(ctx) {
 				return
@@ -237,6 +241,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_SET_SELECTION):
 			if !state.authed || !state.handleSetSelection(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_ACTIVE_MOVER):
+			if !state.authed || !state.handleSetActiveMover(payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_LFG_JOIN):
