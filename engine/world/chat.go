@@ -161,9 +161,11 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	}
 	s.sessionsMu.RUnlock()
 	for _, target := range targets {
-		receiverGUID := source.playerGUID
+		receiverGUID := uint64(0)
 		if receiver != nil {
 			receiverGUID = target.playerGUID
+		} else if chatType == chatChannel {
+			receiverGUID = source.playerGUID
 		}
 		payload := protocol.BuildChatMessage(chatType, language, source.playerGUID, receiverGUID, message, channel)
 		if err := target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"testing"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -32,4 +33,42 @@ func TestLuaChatHookCanCancelMessage(t *testing.T) {
 			t.Fatalf("message %q closed the session", message.text)
 		}
 	}
+}
+
+func TestBroadcastSayUsesEmptyReceiverGUID(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Map: 0}}
+	server.sessions[state] = struct{}{}
+	done := make(chan struct{})
+	go func() {
+		server.broadcastChat(state, nil, chatSay, 1, "hello", "")
+		close(done)
+	}()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	if value, err := reader.ReadU8(); err != nil || value != chatSay {
+		t.Fatalf("type=%d err=%v", value, err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := reader.ReadU64(); err != nil || value != 99 {
+		t.Fatalf("sender=%d err=%v", value, err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := reader.ReadU64(); err != nil || value != 0 {
+		t.Fatalf("receiver=%d err=%v", value, err)
+	}
+	<-done
 }
