@@ -351,7 +351,7 @@ func (s *session) handleCmdModify(ctx context.Context, args []string) {
 		buf := protocol.NewBuffer(17)
 		buf.WritePackedGUID(s.playerGUID)
 		buf.WriteU32(0)
-		buf.WriteU8(0)
+		buf.WriteU8(1)
 		buf.WriteF32(speed)
 		_ = s.write(uint16(protocol.OpcodeSMSG_FORCE_RUN_SPEED_CHANGE), buf.Bytes(), true)
 		s.sendSysMessage(fmt.Sprintf("Speed set to %.2fx (%.2f).", val, speed))
@@ -362,10 +362,9 @@ func (s *session) handleCmdModify(ctx context.Context, args []string) {
 			return
 		}
 		speed := float32(val) * 7.0
-		buf := protocol.NewBuffer(17)
+		buf := protocol.NewBuffer(16)
 		buf.WritePackedGUID(s.playerGUID)
 		buf.WriteU32(0)
-		buf.WriteU8(0)
 		buf.WriteF32(speed)
 		_ = s.write(uint16(protocol.OpcodeSMSG_FORCE_FLIGHT_SPEED_CHANGE), buf.Bytes(), true)
 		s.sendSysMessage(fmt.Sprintf("Flight speed set to %.2fx (%.2f).", val, speed))
