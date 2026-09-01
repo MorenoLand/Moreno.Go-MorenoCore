@@ -182,6 +182,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleGameObjectQuery(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_ITEM_QUERY_SINGLE):
+			if !state.authed || !state.handleItemQuerySingle(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_NAME_QUERY):
 			if !state.authed || !state.handleNameQuery(ctx, payload) {
 				return
