@@ -39,15 +39,14 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 	if err != nil {
 		return false
 	}
-	if status == 0 {
-		return true
-	}
 	view, err := s.loadQuestRewardView(ctx, questID)
 	if err != nil {
-		s.debug("quest completion load failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
 	}
-	canComplete := status == questStatusComplete
+	if status == 0 && view.Detail.Flags&questAutoCompleteFlags == 0 {
+		return true
+	}
+	canComplete := status == questStatusComplete || view.Detail.Flags&questAutoCompleteFlags != 0
 	if canComplete && len(view.RequiredItems) != 0 {
 		canComplete, err = s.hasQuestRequiredItems(ctx, view.RequiredItems)
 		if err != nil {
@@ -79,12 +78,12 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 	if err != nil {
 		return false
 	}
-	if status != questStatusComplete {
-		return true
-	}
 	view, err := s.loadQuestRewardView(ctx, questID)
 	if err != nil {
 		return false
+	}
+	if status != questStatusComplete && view.Detail.Flags&questAutoCompleteFlags == 0 {
+		return true
 	}
 	if len(view.RequiredItems) != 0 {
 		complete, itemErr := s.hasQuestRequiredItems(ctx, view.RequiredItems)

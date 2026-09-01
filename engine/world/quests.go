@@ -161,7 +161,7 @@ func (s *session) loadQuestMenuItem(ctx context.Context, questID, icon uint32, p
 	if minLevel > int64(playerLevel) {
 		return nil, nil
 	}
-	return &gossipQuestItem{ID: questID, Icon: icon, Level: int32(level), Flags: uint32(flags), Title: title.String}, nil
+	return &gossipQuestItem{ID: questID, Icon: icon, Level: int32(level), Flags: uint32(flags), AutoComplete: uint32(flags)&questAutoCompleteFlags != 0, Title: title.String}, nil
 }
 
 func loadQuestRelationIDs(ctx context.Context, db *sql.DB, table string, entry uint32) ([]uint32, error) {

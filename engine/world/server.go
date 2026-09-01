@@ -48,6 +48,7 @@ type Server struct {
 	sessionsMu        sync.RWMutex
 	sessions          map[*session]struct{}
 	objectsMu         sync.RWMutex
+	inventoryMu       sync.Mutex
 	hiddenGameObjects map[uint64]struct{}
 	creatureAuras     map[uint64]map[uint32]struct{}
 	channelsMu        sync.RWMutex
@@ -266,6 +267,15 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleQuestgiverRequestReward(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_QUESTGIVER_CHOOSE_REWARD):
+			if !state.authed || !state.handleQuestgiverChooseReward(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_QUESTGIVER_QUEST_AUTOLAUNCH):
+			if !state.authed {
+				return
+			}
+			state.debug("quest autolaunch received", "account", state.accountName, "size", len(payload))
 		case uint32(protocol.OpcodeCMSG_QUESTGIVER_CANCEL):
 			if !state.authed || !state.handleQuestgiverCancel() {
 				return

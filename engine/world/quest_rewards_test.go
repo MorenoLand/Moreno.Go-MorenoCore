@@ -81,3 +81,32 @@ func TestBuildQuestGiverOfferReward(t *testing.T) {
 		t.Fatalf("remaining=%d", reader.Remaining())
 	}
 }
+
+func TestBuildQuestRewardPackets(t *testing.T) {
+	reader := protocol.NewReader(buildQuestRewardComplete(1, 2, 3, 4, 5, 6))
+	for expected := uint32(1); expected <= 6; expected++ {
+		if value, err := reader.ReadU32(); err != nil || value != expected {
+			t.Fatalf("value=%d expected=%d err=%v", value, expected, err)
+		}
+	}
+	if reader.Remaining() != 0 {
+		t.Fatalf("remaining=%d", reader.Remaining())
+	}
+	reader = protocol.NewReader(buildItemPushResult(7, 0, 23, 8, 9, 10, false))
+	if value, err := reader.ReadU64(); err != nil || value != 7 {
+		t.Fatalf("guid=%d err=%v", value, err)
+	}
+	for _, expected := range []uint32{1, 0, 0} {
+		if value, err := reader.ReadU32(); err != nil || value != expected {
+			t.Fatalf("header=%d expected=%d err=%v", value, expected, err)
+		}
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []uint32{23, 8, 0, 0, 9, 10} {
+		if value, err := reader.ReadU32(); err != nil || value != expected {
+			t.Fatalf("item=%d expected=%d err=%v", value, expected, err)
+		}
+	}
+}
