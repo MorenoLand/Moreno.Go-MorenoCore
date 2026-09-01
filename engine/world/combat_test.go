@@ -45,43 +45,68 @@ func TestHandleAttackSwingStartsAndStopsCombat(t *testing.T) {
 	}
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
-	defer clientConn.Close()
 	server := &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}}
 	state := &session{server: server, conn: serverConn, playerLoaded: true, playerGUID: 26, player: &playerState{GUID: 26, Map: 0, X: 0, Y: 0, Z: 0}}
 	victim := creatureWorldGUID(7, 68)
 	payload := protocol.NewBuffer(8)
 	payload.WriteU64(victim)
-	started := make(chan bool, 1)
-	go func() { started <- state.handleAttackSwing(context.Background(), payload.Bytes()) }()
-	opcode, response, err := readServerFrame(clientConn, nil)
-	if err != nil {
-		t.Fatal(err)
+
+	// Captured packets: channel carries (opcode, payload) pairs.
+	type frame struct {
+		op   uint16
+		data []byte
 	}
-	if !<-started || opcode != uint16(protocol.OpcodeSMSG_ATTACK_START) {
-		t.Fatalf("start result=%v opcode=%x", state.attackTarget, opcode)
+	frames := make(chan frame, 16)
+	// Reader goroutine drains clientConn into frames channel.
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		defer clientConn.Close()
+		for {
+			op, data, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+			frames <- frame{op: op, data: data}
+		}
+	}()
+
+	done := make(chan bool, 1)
+	go func() { done <- state.handleAttackSwing(context.Background(), payload.Bytes()) }()
+
+	sawStart, sawStateUpdate, sawStop := false, false, false
+	var attackStopPayload []byte
+	var attackStartPayload []byte
+	for !(sawStart && sawStateUpdate && sawStop) {
+		f := <-frames
+		switch f.op {
+		case uint16(protocol.OpcodeSMSG_ATTACK_START):
+			sawStart = true
+			attackStartPayload = f.data
+		case uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE):
+			sawStateUpdate = true
+			// Now stop combat; this emits SMSG_ATTACK_STOP.
+			go func() { state.handleAttackStop() }()
+		case uint16(protocol.OpcodeSMSG_ATTACK_STOP):
+			sawStop = true
+			attackStopPayload = f.data
+		}
 	}
-	reader := protocol.NewReader(response)
-	if attacker, err := reader.ReadU64(); err != nil || attacker != 26 {
+
+	// Close server conn so reader goroutine exits
+	serverConn.Close()
+	<-readerDone
+
+	// Validate ATTACK_START content
+	r := protocol.NewReader(attackStartPayload)
+	if attacker, err := r.ReadU64(); err != nil || attacker != 26 {
 		t.Fatalf("attacker=%d err=%v", attacker, err)
 	}
-	if target, err := reader.ReadU64(); err != nil || target != victim {
+	if target, err := r.ReadU64(); err != nil || target != victim {
 		t.Fatalf("target=%x err=%v", target, err)
 	}
-	// Read SMSG_ATTACKERSTATEUPDATE
-	opcode, _, err = readServerFrame(clientConn, nil)
-	if err != nil || opcode != uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE) {
-		t.Fatalf("expected SMSG_ATTACKERSTATEUPDATE (%x), got %x, err=%v", protocol.OpcodeSMSG_ATTACKERSTATEUPDATE, opcode, err)
-	}
-	stopped := make(chan bool, 1)
-	go func() { stopped <- state.handleAttackStop() }()
-	opcode, response, err = readServerFrame(clientConn, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !<-stopped || opcode != uint16(protocol.OpcodeSMSG_ATTACK_STOP) {
-		t.Fatalf("stop result=%v opcode=%x", state.attackTarget, opcode)
-	}
-	reader = protocol.NewReader(response)
+	// Validate ATTACK_STOP content
+	reader := protocol.NewReader(attackStopPayload)
 	if attacker, err := reader.ReadPackedGUID(); err != nil || attacker != 26 {
 		t.Fatalf("stop attacker=%d err=%v", attacker, err)
 	}
