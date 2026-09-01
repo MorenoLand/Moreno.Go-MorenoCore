@@ -265,10 +265,10 @@ func (s *session) luaPlayer() *scripting.Object {
 		s.playerLocked = value
 		return nil, nil
 	}
-	methods["GossipComplete"] = luaNoArgs(func() any { return nil })
-	methods["GossipClearMenu"] = luaNoArgs(func() any { return nil })
-	methods["GossipMenuAddItem"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
-	methods["GossipSendMenu"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
+	methods["GossipComplete"] = s.luaGossipComplete
+	methods["GossipClearMenu"] = s.luaGossipClearMenu
+	methods["GossipMenuAddItem"] = s.luaGossipMenuAddItem
+	methods["GossipSendMenu"] = s.luaGossipSendMenu
 	methods["SetBinding"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	methods["SetNotRefundable"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	methods["PlayDirectSound"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }

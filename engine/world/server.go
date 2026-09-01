@@ -75,6 +75,8 @@ type session struct {
 	playerLocked bool
 	rooted       bool
 	logoutHook   bool
+	gossip       *gossipMenuState
+	gossipClosed bool
 }
 
 type account struct {
@@ -184,6 +186,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_ITEM_QUERY_SINGLE):
 			if !state.authed || !state.handleItemQuerySingle(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GOSSIP_HELLO):
+			if !state.authed || !state.handleGossipHello(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GOSSIP_SELECT_OPTION):
+			if !state.authed || !state.handleGossipSelectOption(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_NAME_QUERY):
