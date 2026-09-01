@@ -223,15 +223,20 @@ func (s *session) luaPlayer() *scripting.Object {
 		_, err = s.server.AuthStore.DB.Exec("UPDATE account SET mutetime = ? WHERE id = ?", seconds, s.accountID)
 		return nil, err
 	}
-	methods["GetSelection"] = func(_ context.Context, _ []any) ([]any, error) {
+	methods["GetSelection"] = func(ctx context.Context, _ []any) ([]any, error) {
 		if s.selection == 0 {
 			return []any{nil}, nil
 		}
-		player := s.server.findPlayer(s.selection)
-		if player == nil {
-			return []any{nil}, nil
+		if player := s.server.findPlayer(s.selection); player != nil {
+			return []any{player}, nil
 		}
-		return []any{player}, nil
+		if creature := s.luaCreature(ctx, s.selection); creature != nil {
+			return []any{creature}, nil
+		}
+		if object := s.luaGameObject(ctx, s.selection); object != nil {
+			return []any{object}, nil
+		}
+		return []any{nil}, nil
 	}
 	methods["SetScale"] = func(_ context.Context, args []any) ([]any, error) {
 		value, err := luaFloat32Arg(args, 0)
@@ -268,7 +273,17 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["SetNotRefundable"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	methods["PlayDirectSound"] = func(_ context.Context, _ []any) ([]any, error) { return nil, nil }
 	methods["GetItemByPos"] = func(_ context.Context, _ []any) ([]any, error) { return []any{nil}, nil }
-	methods["GetNearestGameObject"] = func(_ context.Context, _ []any) ([]any, error) { return []any{nil}, nil }
+	methods["GetNearestGameObject"] = func(ctx context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return []any{nil}, nil
+		}
+		rangeValue, err := luaFloat32Arg(args, 0)
+		if err != nil || rangeValue < 0 {
+			return []any{nil}, err
+		}
+		object := s.nearestGameObject(ctx, state.Map, state.X, state.Y, rangeValue)
+		return []any{object}, nil
+	}
 	return &scripting.Object{Type: "Player", Fields: fields, Methods: methods}
 }
 

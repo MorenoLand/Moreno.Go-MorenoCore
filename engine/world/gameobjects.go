@@ -76,6 +76,9 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		spawn.State, spawn.AnimProgress, spawn.ArtKit, spawn.Type = uint8(stateValue), uint8(animProgress), uint8(artKit), uint8(objectType)
 		spawn.DisplayID, spawn.Size, spawn.Flags, spawn.Faction = uint32(displayID), float32(size), uint32(flags), uint32(faction)
 		spawn.ParentRotation = [4]float32{float32(parentRotation0), float32(parentRotation1), float32(parentRotation2), float32(parentRotation3)}
+		if s.isGameObjectHidden(gameObjectGUID(spawn.GUID, spawn.Entry)) {
+			continue
+		}
 		updates.AddUpdateBlock(buildGameObjectUpdate(spawn))
 		count++
 	}
@@ -90,7 +93,7 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 }
 
 func buildGameObjectUpdate(spawn gameObjectSpawn) []byte {
-	rawGUID := uint64(spawn.GUID) | uint64(spawn.Entry)<<24 | uint64(0xF110)<<48
+	rawGUID := gameObjectGUID(spawn.GUID, spawn.Entry)
 	values := make([]uint32, gameObjectValuesCount)
 	values[0] = uint32(rawGUID)
 	values[1] = uint32(rawGUID >> 32)
@@ -136,6 +139,10 @@ func buildGameObjectUpdate(spawn gameObjectSpawn) []byte {
 		}
 	}
 	return block.Bytes()
+}
+
+func gameObjectGUID(guid, entry uint32) uint64 {
+	return uint64(guid) | uint64(entry)<<24 | uint64(0xF110)<<48
 }
 
 func packGameObjectRotation(x, y, z, w float32) uint64 {
