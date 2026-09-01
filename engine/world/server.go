@@ -234,6 +234,30 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleDestroyItem(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_LIST_INVENTORY):
+			if !state.authed || !state.handleListInventory(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BUY_ITEM):
+			if !state.authed || !state.handleBuyItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BUY_ITEM_IN_SLOT):
+			if !state.authed || !state.handleBuyItemInSlot(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SELL_ITEM):
+			if !state.authed || !state.handleSellItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_TRAINER_LIST):
+			if !state.authed || !state.handleTrainerList(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_TRAINER_BUY_SPELL):
+			if !state.authed || !state.handleTrainerBuySpell(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_ATTACK_SWING):
 			if !state.authed || !state.handleAttackSwing(ctx, payload) {
 				return

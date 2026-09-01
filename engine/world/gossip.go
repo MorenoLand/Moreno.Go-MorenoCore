@@ -131,16 +131,24 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			s.debug("gossip selection hook failed", "account", s.accountName, "entry", entry, "error", err)
 		}
 	}
-	if s.gossip == nil && !s.gossipClosed && item.Action == 1 && item.ActionMenuID != 0 {
-		defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID)
-		if loadErr != nil {
-			s.debug("gossip submenu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
-			return true
-		}
-		s.gossip = defaultMenu
-		if sendErr := s.sendGossipMenu(); sendErr != nil {
-			s.debug("gossip submenu response failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", sendErr)
-			return true
+	if s.gossip == nil && !s.gossipClosed {
+		if item.Action == 2 { // GOSSIP_OPTION_VENDOR
+			s.sendVendorList(ctx, guid)
+			s.gossipClosed = true
+		} else if item.Action == 4 { // GOSSIP_OPTION_TRAINER
+			s.sendTrainerList(ctx, guid)
+			s.gossipClosed = true
+		} else if item.Action == 1 && item.ActionMenuID != 0 {
+			defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID)
+			if loadErr != nil {
+				s.debug("gossip submenu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
+				return true
+			}
+			s.gossip = defaultMenu
+			if sendErr := s.sendGossipMenu(); sendErr != nil {
+				s.debug("gossip submenu response failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", sendErr)
+				return true
+			}
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
