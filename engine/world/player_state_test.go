@@ -49,6 +49,9 @@ func TestBuildPlayerUpdateKeepsMovementAndUpdateMaskAligned(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if fallTime, err := reader.ReadU32(); err != nil || fallTime != 0 {
+		t.Fatalf("fall time=%d err=%v", fallTime, err)
+	}
 	for index := 0; index < 9; index++ {
 		if _, err := reader.ReadF32(); err != nil {
 			t.Fatal(err)

@@ -238,6 +238,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	block.WriteF32(state.Y)
 	block.WriteF32(state.Z)
 	block.WriteF32(state.Orientation)
+	block.WriteU32(0)
 	for _, speed := range []float32{2.5, 7, 4.5, 4.722222, 2.5, 7, 4.5, 3.141594, 3.14} {
 		block.WriteF32(speed)
 	}
