@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"sort"
 	"strconv"
@@ -11,13 +12,15 @@ import (
 )
 
 type gossipMenuItem struct {
-	Icon       uint8
-	Coded      bool
-	BoxMoney   uint32
-	Message    string
-	BoxMessage string
-	Sender     uint32
-	Action     uint32
+	Icon         uint8
+	Coded        bool
+	BoxMoney     uint32
+	Message      string
+	BoxMessage   string
+	Sender       uint32
+	Action       uint32
+	ActionMenuID uint32
+	ActionPoiID  uint32
 }
 
 type gossipMenuState struct {
@@ -51,7 +54,12 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
-		s.gossip = &gossipMenuState{SenderGUID: guid, Items: make(map[uint32]gossipMenuItem)}
+		defaultMenu, err := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), objectUint32OrZero(creature, "GossipMenuID"))
+		if err != nil {
+			s.debug("default gossip load failed", "account", s.accountName, "entry", entry, "error", err)
+			return false
+		}
+		s.gossip = defaultMenu
 		if err := s.sendGossipMenu(); err != nil {
 			s.debug("gossip hello response failed", "account", s.accountName, "entry", entry, "error", err)
 			return false
@@ -109,6 +117,16 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			s.debug("gossip selection hook failed", "account", s.accountName, "entry", entry, "error", err)
 		}
 	}
+	if s.gossip == nil && !s.gossipClosed && item.Action == 1 && item.ActionMenuID != 0 {
+		defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID)
+		if loadErr != nil {
+			return false
+		}
+		s.gossip = defaultMenu
+		if sendErr := s.sendGossipMenu(); sendErr != nil {
+			return false
+		}
+	}
 	if s.gossip == nil && !s.gossipClosed {
 		s.gossipClosed = true
 		if err := s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true); err != nil {
@@ -117,6 +135,64 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	}
 	s.debug("gossip selection handled", "account", s.accountName, "entry", entry, "list", listID)
 	return true
+}
+
+func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry, npcFlags, menuID uint32) (*gossipMenuState, error) {
+	menu := &gossipMenuState{SenderGUID: guid, MenuID: menuID, TitleID: 0x00FFFFFF, Items: make(map[uint32]gossipMenuItem)}
+	var titleID int64
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT TextID FROM gossip_menu WHERE MenuID = ? ORDER BY TextID LIMIT 1", menuID).Scan(&titleID)
+	if err == nil {
+		menu.TitleID = uint32(titleID)
+	} else if err != sql.ErrNoRows && !missingTable(err) {
+		return nil, err
+	}
+	options, err := s.loadCreatureGossipOptions(ctx, menuID, npcFlags)
+	if err != nil {
+		return nil, err
+	}
+	if len(options) == 0 && menuID != 0 {
+		options, err = s.loadCreatureGossipOptions(ctx, 0, npcFlags)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, option := range options {
+		menu.Items[option.ID] = option.Item
+	}
+	_ = entry
+	return menu, nil
+}
+
+type loadedGossipOption struct {
+	ID   uint32
+	Item gossipMenuItem
+}
+
+func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlags uint32) ([]loadedGossipOption, error) {
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT OptionID, OptionIcon, COALESCE(OptionText, ''), OptionType, OptionNpcFlag, ActionMenuID, ActionPoiID, BoxCoded, BoxMoney, COALESCE(BoxText, '') FROM gossip_menu_option WHERE MenuID = ? ORDER BY OptionID", menuID)
+	if err != nil {
+		if missingTable(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	options := make([]loadedGossipOption, 0, 32)
+	for rows.Next() {
+		var id, icon, optionType, requiredFlags, actionMenuID, actionPoiID, coded, boxMoney int64
+		var message, boxMessage string
+		if err := rows.Scan(&id, &icon, &message, &optionType, &requiredFlags, &actionMenuID, &actionPoiID, &coded, &boxMoney, &boxMessage); err != nil {
+			return nil, err
+		}
+		if requiredFlags != 0 && uint32(requiredFlags)&npcFlags == 0 {
+			continue
+		}
+		if len(options) >= 32 {
+			break
+		}
+		options = append(options, loadedGossipOption{ID: uint32(id), Item: gossipMenuItem{Icon: uint8(icon), Coded: coded != 0, BoxMoney: uint32(boxMoney), Message: message, BoxMessage: boxMessage, Action: uint32(optionType), ActionMenuID: uint32(actionMenuID), ActionPoiID: uint32(actionPoiID)}})
+	}
+	return options, rows.Err()
 }
 
 func (s *session) luaGossipComplete(_ context.Context, _ []any) ([]any, error) {
@@ -281,6 +357,11 @@ func objectUint32Field(object *scripting.Object, name string) (uint32, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func objectUint32OrZero(object *scripting.Object, name string) uint32 {
+	value, _ := objectUint32Field(object, name)
+	return value
 }
 
 func objectUint64Field(object *scripting.Object, name string) (uint64, bool) {

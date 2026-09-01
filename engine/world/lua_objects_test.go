@@ -19,11 +19,11 @@ func TestLuaWorldObjectBindings(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	for _, statement := range []string{
 		"CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL, modelid INTEGER NOT NULL, curhealth INTEGER NOT NULL)",
-		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, name TEXT NOT NULL, modelid1 INTEGER NOT NULL, maxlevel INTEGER NOT NULL)",
+		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, name TEXT NOT NULL, modelid1 INTEGER NOT NULL, maxlevel INTEGER NOT NULL, gossip_menu_id INTEGER NOT NULL, npcflag INTEGER NOT NULL)",
 		"CREATE TABLE gameobject (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL)",
 		"CREATE TABLE gameobject_template (entry INTEGER PRIMARY KEY, displayId INTEGER NOT NULL, name TEXT NOT NULL)",
 		"INSERT INTO creature VALUES (321, 68, 3167, 100)",
-		"INSERT INTO creature_template VALUES (68, 'Stormwind Guard', 3167, 80)",
+		"INSERT INTO creature_template VALUES (68, 'Stormwind Guard', 3167, 80, 0, 1)",
 		"INSERT INTO gameobject VALUES (654, 9001, 0, 4, 3, 2)",
 		"INSERT INTO gameobject_template VALUES (9001, 1234, 'Test Chest')",
 	} {

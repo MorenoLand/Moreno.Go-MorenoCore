@@ -23,9 +23,9 @@ func TestCreatureGossipLuaHookWritesClientMenu(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	for _, statement := range []string{
 		"CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL, modelid INTEGER NOT NULL, curhealth INTEGER NOT NULL)",
-		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, name TEXT NOT NULL, modelid1 INTEGER NOT NULL, maxlevel INTEGER NOT NULL)",
+		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, name TEXT NOT NULL, modelid1 INTEGER NOT NULL, maxlevel INTEGER NOT NULL, gossip_menu_id INTEGER NOT NULL, npcflag INTEGER NOT NULL)",
 		"INSERT INTO creature VALUES (321, 68, 0, 100)",
-		"INSERT INTO creature_template VALUES (68, 'Stormwind Guard', 3167, 80)",
+		"INSERT INTO creature_template VALUES (68, 'Stormwind Guard', 3167, 80, 0, 1)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -104,5 +104,37 @@ func TestCreatureGossipLuaHookWritesClientMenu(t *testing.T) {
 	}
 	if result := <-selectDone; !result {
 		t.Fatalf("gossip selection failed")
+	}
+}
+
+func TestPrepareCreatureGossipLoadsDatabaseOptions(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE gossip_menu (MenuID INTEGER NOT NULL, TextID INTEGER NOT NULL)",
+		"CREATE TABLE gossip_menu_option (MenuID INTEGER NOT NULL, OptionID INTEGER NOT NULL, OptionIcon INTEGER NOT NULL, OptionText TEXT, OptionType INTEGER NOT NULL, OptionNpcFlag INTEGER NOT NULL, ActionMenuID INTEGER NOT NULL, ActionPoiID INTEGER NOT NULL, BoxCoded INTEGER NOT NULL, BoxMoney INTEGER NOT NULL, BoxText TEXT)",
+		"INSERT INTO gossip_menu VALUES (7, 123)",
+		"INSERT INTO gossip_menu_option VALUES (7, 2, 3, 'Open', 1, 1, 8, 9, 0, 10, '')",
+		"INSERT INTO gossip_menu_option VALUES (7, 3, 4, 'Hidden', 1, 2, 0, 0, 0, 0, '')",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}}
+	state := &session{server: server}
+	menu, err := state.prepareCreatureGossip(context.Background(), 99, 68, 1, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if menu.TitleID != 123 || menu.MenuID != 7 || len(menu.Items) != 1 {
+		t.Fatalf("menu=%+v", menu)
+	}
+	item, ok := menu.Items[2]
+	if !ok || item.Message != "Open" || item.Action != 1 || item.ActionMenuID != 8 || item.ActionPoiID != 9 || item.BoxMoney != 10 {
+		t.Fatalf("item=%+v", item)
 	}
 }

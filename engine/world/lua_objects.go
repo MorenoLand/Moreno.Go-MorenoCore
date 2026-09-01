@@ -9,12 +9,14 @@ import (
 )
 
 type luaCreatureState struct {
-	GUID      uint64
-	Entry     uint32
-	Name      string
-	DisplayID uint32
-	Health    uint32
-	MaxHealth uint32
+	GUID         uint64
+	Entry        uint32
+	Name         string
+	DisplayID    uint32
+	Health       uint32
+	MaxHealth    uint32
+	GossipMenuID uint32
+	NPCFlags     uint32
 }
 
 type luaGameObjectState struct {
@@ -36,8 +38,8 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	low := uint32(guid & 0x00FFFFFF)
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	var state luaCreatureState
-	var displayID, health, maxLevel int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), c.curhealth, t.maxlevel FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &health, &maxLevel); err != nil {
+	var displayID, health, maxLevel, gossipMenuID, npcFlags int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), c.curhealth, t.maxlevel, t.gossip_menu_id, t.npcflag FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &health, &maxLevel, &gossipMenuID, &npcFlags); err != nil {
 		if !errorsIsNoRows(err) {
 			s.debug("lua creature lookup failed", "account", s.accountName, "guid", guid, "error", err)
 		}
@@ -49,6 +51,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	if maxLevel > 0 && state.MaxHealth < uint32(maxLevel) {
 		state.MaxHealth = uint32(maxLevel)
 	}
+	state.GossipMenuID, state.NPCFlags = uint32(gossipMenuID), uint32(npcFlags)
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetEntry"] = luaNoArgs(func() any { return state.Entry })
@@ -88,7 +91,7 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		return nil, err
 	}
 	methods["SendBroadcastMessage"] = s.luaMessageMethod()
-	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry}, Methods: methods}
+	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "GossipMenuID": state.GossipMenuID, "NPCFlags": state.NPCFlags}, Methods: methods}
 }
 
 func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Object {
