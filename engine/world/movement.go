@@ -90,6 +90,13 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	info.Flags &^= movementRoot
 	info.Flags = sanitizeMovementFlags(info.Flags)
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+	if opcode == uint32(protocol.OpcodeMSG_MOVE_STOP) || opcode == uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT) || opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+				"UPDATE characters SET position_x = ?, position_y = ?, position_z = ?, orientation = ?, map = ?, zone = ? WHERE guid = ?",
+				info.X, info.Y, info.Z, info.Orientation, s.player.Map, s.player.Zone, s.playerGUID)
+		}
+	}
 	packet := protocol.NewBuffer(len(payload))
 	writeMovementInfo(packet, info)
 	s.server.broadcastMovement(uint16(opcode), packet.Bytes(), info, s)
