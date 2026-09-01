@@ -218,9 +218,15 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	if nextMailID <= 0 {
 		nextMailID = 1
 	}
+	// TrinityCore MailDraft::SendMailTo stores checked as MAIL_CHECK_MASK_HAS_BODY (0x10)
+	// when a body text is present and MAIL_CHECK_MASK_COPIED (0x04) otherwise.
+	checked := uint32(0x04)
+	if body != "" {
+		checked = 0x10
+	}
 	_, err = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
-		VALUES (?, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-		nextMailID, stationery, s.playerGUID, receiverGUID, subject, body, hasItems, expire, now, money, cod)
+		VALUES (?, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		nextMailID, stationery, s.playerGUID, receiverGUID, subject, body, hasItems, expire, now, money, cod, checked)
 	if err != nil {
 		return true
 	}
@@ -371,9 +377,69 @@ func (s *session) handleQueryNextMailTime(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	buf := protocol.NewBuffer(8)
-	buf.WriteF32(0) // time remaining (0 = delivered)
-	buf.WriteU32(0) // count of unread mails
+	// TrinityCore HandleQueryNextMailTime: unread and already delivered mails
+	// (checked & MAIL_CHECK_MASK_READ) == 0 are listed once per sender (max 3
+	// entries); when none exist the client is told -DAY so no mail icon shows.
+	type nextMailEntry struct {
+		Sender      uint64
+		AltSender   uint32
+		MessageType uint8
+		Stationery  uint32
+		TimeLeft    float32
+	}
+	var entries []nextMailEntry
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT messageType, stationery, sender, deliver_time
+			FROM mail WHERE receiver = ? AND (checked & 1) = 0 AND deliver_time <= ? ORDER BY id DESC`, s.playerGUID, time.Now().Unix())
+		if err == nil {
+			seenSenders := make(map[uint64]struct{})
+			for rows.Next() {
+				var msgType, stationery, sender int64
+				var deliverTime int64
+				if err := rows.Scan(&msgType, &stationery, &sender, &deliverTime); err != nil {
+					continue
+				}
+				senderGUID := uint64(sender)
+				if _, dup := seenSenders[senderGUID]; dup {
+					continue
+				}
+				seenSenders[senderGUID] = struct{}{}
+				entries = append(entries, nextMailEntry{
+					Sender:      senderGUID,
+					MessageType: uint8(msgType),
+					Stationery:  uint32(stationery),
+					TimeLeft:    float32(deliverTime - time.Now().Unix()),
+				})
+				if len(seenSenders) > 2 {
+					break
+				}
+			}
+			rows.Close()
+		}
+	}
+	buf := protocol.NewBuffer(32)
+	if len(entries) > 0 {
+		buf.WriteF32(0) // NextMailTime: mail is ready now
+	} else {
+		buf.WriteF32(-86400) // -DAY: no unread mail, hides the notification
+	}
+	buf.WriteU32(uint32(len(entries)))
+	for _, entry := range entries {
+		if entry.MessageType == 0 { // MAIL_NORMAL sends the full player GUID
+			buf.WriteU64(entry.Sender)
+		} else {
+			buf.WriteU64(0)
+		}
+		if entry.MessageType != 0 {
+			buf.WriteU32(entry.AltSender) // AltSenderID
+			buf.WriteU32(uint32(entry.MessageType))
+		} else {
+			buf.WriteU32(0)
+			buf.WriteU32(0)
+		}
+		buf.WriteU32(entry.Stationery)
+		buf.WriteF32(entry.TimeLeft)
+	}
 	_ = s.write(uint16(protocol.OpcodeMSG_QUERY_NEXT_MAIL_TIME), buf.Bytes(), true)
 	return true
 }
