@@ -171,6 +171,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleCharEnum(ctx) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_CREATURE_QUERY):
+			if !state.authed || !state.handleCreatureQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GAMEOBJECT_QUERY):
+			if !state.authed || !state.handleGameObjectQuery(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_NAME_QUERY):
 			if !state.authed || !state.handleNameQuery(ctx, payload) {
 				return
