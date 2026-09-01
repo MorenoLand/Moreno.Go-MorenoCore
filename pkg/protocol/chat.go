@@ -14,7 +14,7 @@ func BuildChatMessageWithOptions(chatType uint8, language uint32, senderGUID, re
 		packet.WriteU32(uint32(len(senderName) + 1))
 		packet.WriteCString(senderName)
 	}
-	if chatType == 0x11 && channel != "" {
+	if chatType == 0x11 {
 		packet.WriteCString(channel)
 	}
 	packet.WriteU64(receiverGUID)

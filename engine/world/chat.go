@@ -83,19 +83,12 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid characters")
 		return true
 	}
-	if language == languageUniversal && typeID != chatAFK && typeID != chatDND {
-		s.debug("chat rejected", "account", s.accountName, "reason", "universal language")
-		return true
-	}
-	if language != languageAddon && (s.player.ExtraFlags&0x00000001 != 0 || s.twoSideChat) {
-		language = languageUniversal
-	}
-	if message == "" && typeID != chatAFK && typeID != chatDND {
-		return true
-	}
 	if strings.HasPrefix(message, ".") || strings.HasPrefix(message, "!") {
 		command := strings.TrimSpace(message[1:])
 		if command == "" {
+			return true
+		}
+		if s.executeCommand(ctx, command) {
 			return true
 		}
 		values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, 42, scripting.PlayerEventCommand, s.luaPlayer(), command)
@@ -103,6 +96,16 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			s.debug("lua command hook failed", "account", s.accountName, "error", hookErr)
 		}
 		return !luaCancelled(values)
+	}
+	if message == "" && typeID != chatAFK && typeID != chatDND {
+		return true
+	}
+	if language == languageUniversal && typeID != chatAFK && typeID != chatDND {
+		s.debug("chat rejected", "account", s.accountName, "reason", "universal language")
+		return true
+	}
+	if language != languageAddon && s.player.ExtraFlags&0x00000001 != 0 {
+		language = languageUniversal
 	}
 	values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, scripting.PlayerEventChat, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
 	if hookErr != nil {
@@ -140,6 +143,17 @@ func (s *Server) findSessionByName(name string) *session {
 	defer s.sessionsMu.RUnlock()
 	for value := range s.sessions {
 		if value.playerLoaded && value.player != nil && strings.EqualFold(value.player.Name, name) {
+			return value
+		}
+	}
+	return nil
+}
+
+func (s *Server) findSessionByGUID(guid uint64) *session {
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for value := range s.sessions {
+		if value.playerLoaded && value.player != nil && value.player.GUID == guid {
 			return value
 		}
 	}

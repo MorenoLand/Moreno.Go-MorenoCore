@@ -137,10 +137,62 @@ func (c *Config) ApplyEnv() {
 
 func (c *Config) Set(key, value string) error { return c.set(key, value) }
 
+func (c *Config) ApplyWorkDir(workDir string) {
+	if workDir == "" {
+		return
+	}
+	cleanWork := filepath.Clean(workDir)
+	if !filepath.IsAbs(c.DataDir) {
+		cleanData := filepath.Clean(c.DataDir)
+		if cleanData == "." || cleanData == "" || strings.EqualFold(cleanData, cleanWork) {
+			c.DataDir = cleanWork
+		} else {
+			if _, err := os.Stat(c.DataDir); err != nil {
+				c.DataDir = filepath.Clean(filepath.Join(cleanWork, c.DataDir))
+			}
+		}
+	}
+	if !filepath.IsAbs(c.LogsDir) {
+		cleanLogs := filepath.Clean(c.LogsDir)
+		if cleanLogs == "." || cleanLogs == "" || strings.EqualFold(cleanLogs, cleanWork) {
+			c.LogsDir = filepath.Join(cleanWork, "logs")
+		} else {
+			c.LogsDir = filepath.Clean(filepath.Join(cleanWork, c.LogsDir))
+		}
+	}
+	c.GameDataDir = resolvePath(
+		filepath.Join(cleanWork, c.GameDataDir),
+		filepath.Join(cleanWork, "data"),
+		c.GameDataDir,
+		filepath.Join("bin", c.GameDataDir),
+		filepath.Join("bin", "data"),
+		"data",
+		filepath.Join("..", c.GameDataDir),
+	)
+	c.SchemaDir = resolvePath(
+		filepath.Join(cleanWork, c.SchemaDir),
+		filepath.Join(cleanWork, "sql"),
+		c.SchemaDir,
+		filepath.Join("bin", c.SchemaDir),
+		filepath.Join("bin", "sql"),
+		"sql",
+		filepath.Join("..", c.SchemaDir),
+	)
+	c.LuaScriptPath = resolvePath(
+		filepath.Join(cleanWork, c.LuaScriptPath),
+		filepath.Join(cleanWork, "lua_scripts"),
+		c.LuaScriptPath,
+		filepath.Join("bin", c.LuaScriptPath),
+		filepath.Join("bin", "lua_scripts"),
+		"lua_scripts",
+		filepath.Join("..", c.LuaScriptPath),
+	)
+}
+
 func (c *Config) ResolvePaths() {
-	c.GameDataDir = resolvePath(c.GameDataDir, filepath.Join("bin", c.GameDataDir), filepath.Join("..", c.GameDataDir))
-	c.SchemaDir = resolvePath(c.SchemaDir, filepath.Join("bin", c.SchemaDir), filepath.Join("..", c.SchemaDir))
-	c.LuaScriptPath = resolvePath(c.LuaScriptPath, filepath.Join("bin", c.LuaScriptPath), filepath.Join("..", c.LuaScriptPath))
+	c.GameDataDir = resolvePath(c.GameDataDir, filepath.Join("bin", c.GameDataDir), filepath.Join("bin", "data"), filepath.Join("..", c.GameDataDir))
+	c.SchemaDir = resolvePath(c.SchemaDir, filepath.Join("bin", c.SchemaDir), filepath.Join("bin", "sql"), filepath.Join("..", c.SchemaDir))
+	c.LuaScriptPath = resolvePath(c.LuaScriptPath, filepath.Join("bin", c.LuaScriptPath), filepath.Join("bin", "lua_scripts"), filepath.Join("..", c.LuaScriptPath))
 }
 
 func resolvePath(path string, alternatives ...string) string {
@@ -156,6 +208,19 @@ func resolvePath(path string, alternatives ...string) string {
 }
 
 func (c Config) DatabasePath(name string) string {
+	if filepath.IsAbs(name) {
+		return filepath.Clean(name)
+	}
+	candidates := []string{
+		filepath.Join(c.DataDir, name),
+		name,
+		filepath.Join("bin", name),
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return filepath.Clean(candidate)
+		}
+	}
 	return filepath.Clean(filepath.Join(c.DataDir, name))
 }
 

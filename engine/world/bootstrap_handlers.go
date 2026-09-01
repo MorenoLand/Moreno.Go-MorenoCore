@@ -24,21 +24,33 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 	packet.WritePackedGUID(guid)
 	var name string
 	var race, gender, class int64
-	err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ? AND deleteInfos_Name IS NULL", guid).Scan(&name, &race, &gender, &class)
-	if errors.Is(err, sql.ErrNoRows) {
-		packet.WriteU8(1)
-	} else if err != nil {
-		s.debug("name query failed", "account", s.accountName, "guid", guid, "error", err)
-		return false
+	if s.player != nil && s.player.GUID == guid {
+		name = s.player.Name
+		race = int64(s.player.Race)
+		gender = int64(s.player.Gender)
+		class = int64(s.player.Class)
+	} else if online := s.server.findSessionByGUID(guid); online != nil && online.player != nil {
+		name = online.player.Name
+		race = int64(online.player.Race)
+		gender = int64(online.player.Gender)
+		class = int64(online.player.Class)
 	} else {
-		packet.WriteU8(0)
-		packet.WriteCString(name)
-		packet.WriteU8(0)
-		packet.WriteU8(uint8(race))
-		packet.WriteU8(uint8(gender))
-		packet.WriteU8(uint8(class))
-		packet.WriteU8(0)
+		err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, race, gender, class FROM characters WHERE guid = ? AND (deleteInfos_Name IS NULL OR deleteInfos_Name = '')", guid).Scan(&name, &race, &gender, &class)
+		if errors.Is(err, sql.ErrNoRows) {
+			packet.WriteU8(1)
+			return s.write(uint16(protocol.OpcodeSMSG_NAME_QUERY_RESPONSE), packet.Bytes(), true) == nil
+		} else if err != nil {
+			s.debug("name query failed", "account", s.accountName, "guid", guid, "error", err)
+			return false
+		}
 	}
+	packet.WriteU8(0)
+	packet.WriteCString(name)
+	packet.WriteU8(0)
+	packet.WriteU8(uint8(race))
+	packet.WriteU8(uint8(gender))
+	packet.WriteU8(uint8(class))
+	packet.WriteU8(0)
 	return s.write(uint16(protocol.OpcodeSMSG_NAME_QUERY_RESPONSE), packet.Bytes(), true) == nil
 }
 
