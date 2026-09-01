@@ -33,14 +33,21 @@ type LFGQueueEntry struct {
 }
 
 type LFGManager struct {
-	mu      sync.RWMutex
-	enabled bool
-	solo    bool
-	queue   map[uint64]LFGQueueEntry
+	mu              sync.RWMutex
+	enabled         bool
+	solo            bool
+	queue           map[uint64]LFGQueueEntry
+	validateDungeon func(uint32) bool
 }
 
 func NewLFGManager(enabled bool) *LFGManager {
 	return &LFGManager{enabled: enabled, queue: make(map[uint64]LFGQueueEntry)}
+}
+
+func (m *LFGManager) SetDungeonValidator(validate func(uint32) bool) {
+	m.mu.Lock()
+	m.validateDungeon = validate
+	m.mu.Unlock()
 }
 
 func (m *LFGManager) OnLogin() {
@@ -88,6 +95,15 @@ func (m *LFGManager) Join(guid uint64, roles uint8, dungeons []uint32, comment s
 		return LFGJoinNotMeetReqs, LFGQueueEntry{GUID: guid, Roles: roles, State: LFGStateNone}
 	}
 	filtered := append([]uint32(nil), dungeons...)
+	if m.validateDungeon != nil {
+		valid := filtered[:0]
+		for _, dungeon := range filtered {
+			if m.validateDungeon(dungeon) {
+				valid = append(valid, dungeon)
+			}
+		}
+		filtered = valid
+	}
 	sort.Slice(filtered, func(i, j int) bool { return filtered[i] < filtered[j] })
 	filtered = uniqueUint32(filtered)
 	if len(filtered) == 0 {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -21,6 +22,7 @@ const (
 	characterFlagRename          uint32 = 0x00004000
 	characterFlagLockedByBilling uint32 = 0x01000000
 	characterFlagDeclined        uint32 = 0x02000000
+	playerFlagGhost              uint32 = 0x00000010
 	characterCustomizeNone       uint32 = 0
 	characterCustomizeCustomize  uint32 = 0x00000001
 	characterCustomizeFaction    uint32 = 0x00010000
@@ -96,7 +98,7 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 		if character.Race == 0 || character.Class == 0 || character.Gender > 2 {
 			continue
 		}
-		buildEnumCharacter(packet, character)
+		s.buildEnumCharacter(ctx, packet, character)
 		if !character.Banned {
 			s.legitimate[character.GUID] = struct{}{}
 		}
@@ -374,7 +376,7 @@ func scanEnumCharacter(rows *sql.Rows) (enumCharacter, error) {
 	return c, nil
 }
 
-func buildEnumCharacter(packet *protocol.Buffer, c enumCharacter) {
+func (s *session) buildEnumCharacter(ctx context.Context, packet *protocol.Buffer, c enumCharacter) {
 	packet.WritePackedGUID(c.GUID)
 	packet.WriteCString(c.Name)
 	packet.WriteU8(c.Race)
@@ -399,7 +401,7 @@ func buildEnumCharacter(packet *protocol.Buffer, c enumCharacter) {
 	if c.PlayerFlags&characterFlagHideCloak != 0 {
 		flags |= characterFlagHideCloak
 	}
-	if c.PlayerFlags&characterFlagGhost != 0 {
+	if c.PlayerFlags&playerFlagGhost != 0 {
 		flags |= characterFlagGhost
 	}
 	if c.AtLogin&uint16(atLoginRename) != 0 {
@@ -427,18 +429,40 @@ func buildEnumCharacter(packet *protocol.Buffer, c enumCharacter) {
 		packet.WriteU8(0)
 	}
 	petDisplay, petLevel, petFamily := uint32(0), uint32(0), uint32(0)
-	if c.PetEntry != 0 && c.PlayerFlags&characterFlagGhost == 0 && (c.Class == 3 || c.Class == 6 || c.Class == 9) {
+	if c.PetEntry != 0 && c.PlayerFlags&playerFlagGhost == 0 && (c.Class == 3 || c.Class == 6 || c.Class == 9) {
 		petDisplay, petLevel = c.PetDisplay, c.PetLevel
 	}
 	packet.WriteU32(petDisplay)
 	packet.WriteU32(petLevel)
 	packet.WriteU32(petFamily)
-	for i := 0; i < inventorySlotBagEnd; i++ {
-		packet.WriteU32(0)
-		packet.WriteU8(0)
+	equipment := strings.Fields(c.Equipment)
+	for slot := 0; slot < inventorySlotBagEnd; slot++ {
+		itemIndex := slot * 2
+		if itemIndex >= len(equipment) {
+			writeEmptyEnumEquipment(packet)
+			continue
+		}
+		itemID, err := strconv.ParseUint(equipment[itemIndex], 10, 32)
+		if err != nil || itemID == 0 || s.server == nil || s.server.WorldStore == nil {
+			writeEmptyEnumEquipment(packet)
+			continue
+		}
+		var displayID, inventoryType int64
+		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT displayid, InventoryType FROM item_template WHERE entry = ? LIMIT 1", itemID).Scan(&displayID, &inventoryType)
+		if err != nil {
+			writeEmptyEnumEquipment(packet)
+			continue
+		}
+		packet.WriteU32(uint32(displayID))
+		packet.WriteU8(uint8(inventoryType))
 		packet.WriteU32(0)
 	}
-	_ = strings.TrimSpace(c.Equipment)
+}
+
+func writeEmptyEnumEquipment(packet *protocol.Buffer) {
+	packet.WriteU32(0)
+	packet.WriteU8(0)
+	packet.WriteU32(0)
 }
 
 func sendCharacterResult(s *session, opcode uint16, result uint8) bool {

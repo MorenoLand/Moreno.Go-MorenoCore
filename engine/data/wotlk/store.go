@@ -44,6 +44,18 @@ type Spell struct {
 	Effects [3]SpellEffect
 }
 
+type LFGDungeon struct {
+	ID             uint32
+	MinLevel       uint32
+	MaxLevel       uint32
+	MapID          int32
+	Difficulty     uint32
+	Flags          uint32
+	TypeID         uint32
+	ExpansionLevel uint32
+	GroupID        uint32
+}
+
 func NewStore(dir string) *Store {
 	return &Store{Dir: dir, files: make(map[string]*dbc.File)}
 }
@@ -156,6 +168,45 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, Aura: aura}
 	}
 	return spell, true, nil
+}
+
+func (s *Store) LFGDungeon(id uint32) (LFGDungeon, bool, error) {
+	file, err := s.File("LFGDungeons")
+	if err != nil {
+		return LFGDungeon{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return LFGDungeon{}, false, nil
+	}
+	result := LFGDungeon{ID: id}
+	values := []struct {
+		field int
+		dest  *uint32
+	}{
+		{18, &result.MinLevel},
+		{19, &result.MaxLevel},
+		{24, &result.Difficulty},
+		{25, &result.Flags},
+		{26, &result.TypeID},
+		{29, &result.ExpansionLevel},
+		{31, &result.GroupID},
+	}
+	for _, value := range values {
+		if *value.dest, err = record.Uint32(value.field); err != nil {
+			return LFGDungeon{}, false, err
+		}
+	}
+	mapID, err := record.Int32(23)
+	if err != nil {
+		return LFGDungeon{}, false, err
+	}
+	result.MapID = mapID
+	return result, true, nil
+}
+
+func IsSupportedLFGType(typeID uint32) bool {
+	return typeID == 1 || typeID == 2 || typeID == 5 || typeID == 6
 }
 
 func IsPlayableRace(race Race) bool {
