@@ -44,6 +44,83 @@ func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byt
 	return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS), packet.Bytes(), true) == nil
 }
 
+func (s *session) isQuestRewarded(ctx context.Context, questID uint32) bool {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return false
+	}
+	var count int64
+	err := cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus WHERE guid = ? AND quest = ? AND status = 2", s.playerGUID, questID).Scan(&count)
+	if err == nil && count > 0 {
+		return true
+	}
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&count)
+	return count > 0
+}
+
+func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error) {
+	if s.player == nil {
+		return false, nil
+	}
+	status, err := s.characterQuestStatus(ctx, questID)
+	if err != nil {
+		return false, err
+	}
+	if status != 0 {
+		return false, nil
+	}
+	if s.isQuestRewarded(ctx, questID) {
+		return false, nil
+	}
+	wdb := s.server.WorldStore.DB
+	if wdb == nil {
+		return false, nil
+	}
+	var qLevel, minLvl, flags, prevQuest, maxLvl, reqClasses, reqRaces, exclGroup int64
+	var title string
+	err = wdb.QueryRowContext(ctx, `SELECT qt.QuestLevel, qt.MinLevel, qt.Flags, COALESCE(qt.LogTitle, ''),
+		COALESCE(qta.PrevQuestID, 0),
+		COALESCE(qta.MaxLevel, 0),
+		COALESCE(qta.AllowableClasses, 0),
+		COALESCE(qta.AllowableRaces, 0),
+		COALESCE(qta.ExclusiveGroup, 0)
+		FROM quest_template AS qt
+		LEFT JOIN quest_template_addon AS qta ON qta.ID = qt.ID
+		WHERE qt.ID = ? LIMIT 1`, questID).Scan(&qLevel, &minLvl, &flags, &title, &prevQuest, &maxLvl, &reqClasses, &reqRaces, &exclGroup)
+	if err != nil {
+		err = wdb.QueryRowContext(ctx, "SELECT QuestLevel, MinLevel, Flags, COALESCE(LogTitle, '') FROM quest_template WHERE ID = ?", questID).Scan(&qLevel, &minLvl, &flags, &title)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false, nil
+			}
+			return false, err
+		}
+	}
+	if minLvl > int64(s.player.Level) {
+		return false, nil
+	}
+	if maxLvl > 0 && int64(s.player.Level) > maxLvl {
+		return false, nil
+	}
+	if reqClasses > 0 && s.player.Class > 0 && (reqClasses&(1<<uint(s.player.Class-1))) == 0 {
+		return false, nil
+	}
+	if reqRaces > 0 && s.player.Race > 0 && (reqRaces&(1<<uint(s.player.Race-1))) == 0 {
+		return false, nil
+	}
+	if prevQuest > 0 {
+		if !s.isQuestRewarded(ctx, uint32(prevQuest)) {
+			return false, nil
+		}
+	} else if prevQuest < 0 {
+		prevActiveStatus, _ := s.characterQuestStatus(ctx, uint32(-prevQuest))
+		if prevActiveStatus != questStatusIncomplete && prevActiveStatus != questStatusComplete {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func (s *session) questDialogStatus(ctx context.Context, entry uint32) (uint8, error) {
 	enderIDs, err := loadQuestRelationIDs(ctx, s.server.WorldStore.DB, "creature_questender", entry)
 	if err != nil {
@@ -69,21 +146,11 @@ func (s *session) questDialogStatus(ctx context.Context, entry uint32) (uint8, e
 		return questDialogNone, err
 	}
 	for _, questID := range starterIDs {
-		status, err := s.characterQuestStatus(ctx, questID)
+		canTake, err := s.canTakeQuest(ctx, questID)
 		if err != nil {
 			return questDialogNone, err
 		}
-		if status != 0 {
-			continue
-		}
-		var minLevel int64
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT MinLevel FROM quest_template WHERE ID = ?", questID).Scan(&minLevel); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
-			}
-			return questDialogNone, err
-		}
-		if minLevel <= int64(s.player.Level) {
+		if canTake {
 			return questDialogAvailable, nil
 		}
 	}
@@ -131,11 +198,8 @@ func (s *session) loadCreatureQuestMenu(ctx context.Context, entry uint32, playe
 		if _, exists := seen[questID]; exists {
 			continue
 		}
-		status, err := s.characterQuestStatus(ctx, questID)
-		if err != nil {
-			return nil, err
-		}
-		if status != 0 {
+		canTake, err := s.canTakeQuest(ctx, questID)
+		if err != nil || !canTake {
 			continue
 		}
 		quest, err := s.loadQuestMenuItem(ctx, questID, 2, playerLevel)

@@ -1,0 +1,410 @@
+package world
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+)
+
+// FriendsResult mirrors TrinityCore's FriendsResult enum.
+// From SocialMgr.h.
+const (
+	friendsResultOK            uint8 = 0
+	friendsResultNotFound      uint8 = 1
+	friendsResultOffline       uint8 = 2
+	friendsResultEnemy         uint8 = 7
+	friendsResultIgnored       uint8 = 8
+	friendsResultMuted         uint8 = 9
+	friendsResultSelf          uint8 = 10
+	friendsResultAlready       uint8 = 11
+	friendsResultAddedOnline   uint8 = 12
+	friendsResultAddedOffline  uint8 = 13
+	friendsResultListFull      uint8 = 14
+	friendsResultRemoved       uint8 = 15
+	friendsResultIgnoreNotFound uint8 = 16
+	friendsResultIgnoreSelf    uint8 = 17
+	friendsResultIgnoreAlready uint8 = 18
+	friendsResultIgnoreAdded   uint8 = 19
+	friendsResultIgnoreRemoved uint8 = 20
+	friendsResultIgnoreFull    uint8 = 21
+)
+
+// FriendStatus mirrors TrinityCore's FriendStatus enum.
+const (
+	friendStatusOffline uint8 = 0
+	friendStatusOnline  uint8 = 1
+	friendStatusAFK     uint8 = 2
+	friendStatusUnknown uint8 = 3
+	friendStatusDND     uint8 = 4
+	friendStatusRAF     uint8 = 5
+)
+
+// Social contact flags from SocialMgr.h.
+const (
+	socialFlagFriend  uint8 = 0x01
+	socialFlagIgnored uint8 = 0x02
+	socialFlagMuted   uint8 = 0x04
+)
+
+// Max social list sizes from SocialMgr.h.
+const (
+	socialFriendLimit uint32 = 50
+	socialIgnoreLimit uint32 = 50
+)
+
+// -----------------------------------------------------------------
+// SMSG_CONTACT_LIST (0x067) builder
+// TrinityCore: PlayerSocial::SendSocialList
+// flags: 0x1=friends, 0x2=ignored, 0x4=muted
+// -----------------------------------------------------------------
+func (s *session) sendContactList(ctx context.Context, flags uint32) error {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return nil
+	}
+	rows, err := cdb.QueryContext(ctx,
+		"SELECT friend, flags, note FROM character_social WHERE guid = ?",
+		s.playerGUID)
+	if err != nil {
+		if missingTable(err) || errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+
+	type contactEntry struct {
+		GUID  uint64
+		Flags uint8
+		Note  string
+	}
+	var contacts []contactEntry
+	friendCount, ignoreCount := uint32(0), uint32(0)
+	for rows.Next() {
+		var friendGUID uint64
+		var f uint8
+		var note string
+		if err := rows.Scan(&friendGUID, &f, &note); err != nil {
+			continue
+		}
+		if (uint32(f) & flags) == 0 {
+			continue
+		}
+		if f&socialFlagFriend != 0 {
+			if friendCount >= socialFriendLimit {
+				continue
+			}
+			friendCount++
+		}
+		if f&socialFlagIgnored != 0 {
+			if ignoreCount >= socialIgnoreLimit {
+				continue
+			}
+			ignoreCount++
+		}
+		contacts = append(contacts, contactEntry{GUID: friendGUID, Flags: f, Note: note})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	b := protocol.NewBuffer(8 + len(contacts)*30)
+	b.WriteU32(flags)
+	b.WriteU32(uint32(len(contacts)))
+	for _, c := range contacts {
+		b.WriteU64(c.GUID)
+		b.WriteU32(uint32(c.Flags))
+		b.WriteCString(c.Note)
+		if c.Flags&socialFlagFriend != 0 {
+			// Check if online
+			friendSess := s.server.findSessionByGUID(c.GUID)
+			if friendSess != nil && friendSess.playerLoaded {
+				b.WriteU8(friendStatusOnline)
+				zone := uint32(0)
+				level := uint32(0)
+				class := uint32(0)
+				if friendSess.player != nil {
+					zone = uint32(friendSess.player.Zone)
+					level = uint32(friendSess.player.Level)
+					class = uint32(friendSess.player.Class)
+				}
+				b.WriteU32(zone)
+				b.WriteU32(level)
+				b.WriteU32(class)
+			} else {
+				b.WriteU8(friendStatusOffline)
+			}
+		}
+	}
+	return s.write(uint16(protocol.OpcodeSMSG_CONTACT_LIST), b.Bytes(), true)
+}
+
+// sendFriendStatus sends SMSG_FRIEND_STATUS (0x068) to this session.
+// TrinityCore: SocialMgr::SendFriendStatus.
+func (s *session) sendFriendStatus(result uint8, friendGUID uint64, note string) error {
+	b := protocol.NewBuffer(14)
+	b.WriteU8(result)
+	b.WriteU64(friendGUID)
+
+	switch result {
+	case friendsResultAddedOffline, friendsResultAddedOnline:
+		b.WriteCString(note)
+	}
+
+	switch result {
+	case friendsResultAddedOnline:
+		// If friend is online, add their status/zone/level/class
+		friendSess := s.server.findSessionByGUID(friendGUID)
+		if friendSess != nil && friendSess.playerLoaded && friendSess.player != nil {
+			b.WriteU8(friendStatusOnline)
+			b.WriteU32(uint32(friendSess.player.Zone))
+			b.WriteU32(uint32(friendSess.player.Level))
+			b.WriteU32(uint32(friendSess.player.Class))
+		} else {
+			b.WriteU8(friendStatusOffline)
+		}
+	}
+
+	return s.write(uint16(protocol.OpcodeSMSG_FRIEND_STATUS), b.Bytes(), true)
+}
+
+// -----------------------------------------------------------------
+// handleContactList processes CMSG_CONTACT_LIST (0x066).
+// TrinityCore: WorldSession::HandleContactListOpcode.
+// -----------------------------------------------------------------
+func (s *session) handleContactList(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded {
+		return false
+	}
+	r := protocol.NewReader(payload)
+	flags, _ := r.ReadU32()
+	if flags == 0 {
+		flags = 0x7 // all
+	}
+	return s.sendContactList(ctx, flags) == nil
+}
+
+// -----------------------------------------------------------------
+// handleAddFriend processes CMSG_ADD_FRIEND (0x069).
+// TrinityCore: WorldSession::HandleAddFriendOpcode.
+// -----------------------------------------------------------------
+func (s *session) handleAddFriend(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return false
+	}
+	r := protocol.NewReader(payload)
+	friendName, err := r.ReadCString()
+	if err != nil || friendName == "" {
+		return false
+	}
+	friendNote, _ := r.ReadCString()
+
+	// Can't friend yourself
+	if toLower(friendName) == toLower(s.player.Name) {
+		_ = s.sendFriendStatus(friendsResultSelf, 0, "")
+		return true
+	}
+
+	// Look up GUID by name from DB
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		_ = s.sendFriendStatus(friendsResultNotFound, 0, "")
+		return true
+	}
+	var friendGUID uint64
+	err = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ? LIMIT 1", friendName).Scan(&friendGUID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || missingTable(err) {
+			_ = s.sendFriendStatus(friendsResultNotFound, 0, "")
+			return true
+		}
+		return false
+	}
+	if friendGUID == s.playerGUID {
+		_ = s.sendFriendStatus(friendsResultSelf, 0, "")
+		return true
+	}
+
+	// Check if already friend
+	var count int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_social WHERE guid = ? AND friend = ? AND flags & 1 != 0", s.playerGUID, friendGUID).Scan(&count)
+	if count > 0 {
+		_ = s.sendFriendStatus(friendsResultAlready, friendGUID, "")
+		return true
+	}
+
+	// Check friend list limit
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_social WHERE guid = ? AND flags & 1 != 0", s.playerGUID).Scan(&count)
+	if uint32(count) >= socialFriendLimit {
+		_ = s.sendFriendStatus(friendsResultListFull, friendGUID, "")
+		return true
+	}
+
+	// Add/update
+	_, err = cdb.ExecContext(ctx,
+		"INSERT INTO character_social (guid, friend, flags, note) VALUES (?, ?, 1, ?) "+
+			"ON CONFLICT(guid, friend) DO UPDATE SET flags = flags | 1, note = excluded.note",
+		s.playerGUID, friendGUID, friendNote)
+	if err != nil {
+		// Try without ON CONFLICT for SQLite compatibility
+		_, err = cdb.ExecContext(ctx,
+			"INSERT OR REPLACE INTO character_social (guid, friend, flags, note) VALUES (?, ?, 1, ?)",
+			s.playerGUID, friendGUID, friendNote)
+		if err != nil {
+			return false
+		}
+	}
+
+	// Online or offline?
+	result := friendsResultAddedOffline
+	if s.server.findSessionByGUID(friendGUID) != nil {
+		result = friendsResultAddedOnline
+	}
+	_ = s.sendFriendStatus(result, friendGUID, friendNote)
+	return true
+}
+
+// -----------------------------------------------------------------
+// handleDelFriend processes CMSG_DEL_FRIEND (0x06A).
+// TrinityCore: WorldSession::HandleDelFriendOpcode.
+// -----------------------------------------------------------------
+func (s *session) handleDelFriend(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded {
+		return false
+	}
+	r := protocol.NewReader(payload)
+	friendGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return false
+	}
+	// Clear friend flag; delete if no other flags remain
+	_, _ = cdb.ExecContext(ctx,
+		"UPDATE character_social SET flags = flags & ~1 WHERE guid = ? AND friend = ?",
+		s.playerGUID, friendGUID)
+	_, _ = cdb.ExecContext(ctx,
+		"DELETE FROM character_social WHERE guid = ? AND friend = ? AND flags = 0",
+		s.playerGUID, friendGUID)
+	_ = s.sendFriendStatus(friendsResultRemoved, friendGUID, "")
+	return true
+}
+
+// -----------------------------------------------------------------
+// handleAddIgnore processes CMSG_ADD_IGNORE (0x06C).
+// TrinityCore: WorldSession::HandleAddIgnoreOpcode.
+// -----------------------------------------------------------------
+func (s *session) handleAddIgnore(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return false
+	}
+	r := protocol.NewReader(payload)
+	ignoreName, err := r.ReadCString()
+	if err != nil || ignoreName == "" {
+		return false
+	}
+
+	if toLower(ignoreName) == toLower(s.player.Name) {
+		_ = s.sendFriendStatus(friendsResultIgnoreSelf, 0, "")
+		return true
+	}
+
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		_ = s.sendFriendStatus(friendsResultIgnoreNotFound, 0, "")
+		return true
+	}
+	var ignoreGUID uint64
+	err = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ? LIMIT 1", ignoreName).Scan(&ignoreGUID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || missingTable(err) {
+			_ = s.sendFriendStatus(friendsResultIgnoreNotFound, 0, "")
+			return true
+		}
+		return false
+	}
+	if ignoreGUID == s.playerGUID {
+		_ = s.sendFriendStatus(friendsResultIgnoreSelf, 0, "")
+		return true
+	}
+
+	var count int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_social WHERE guid = ? AND friend = ? AND flags & 2 != 0", s.playerGUID, ignoreGUID).Scan(&count)
+	if count > 0 {
+		_ = s.sendFriendStatus(friendsResultIgnoreAlready, ignoreGUID, "")
+		return true
+	}
+
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM character_social WHERE guid = ? AND flags & 2 != 0", s.playerGUID).Scan(&count)
+	if uint32(count) >= socialIgnoreLimit {
+		_ = s.sendFriendStatus(friendsResultIgnoreFull, ignoreGUID, "")
+		return true
+	}
+
+	_, err = cdb.ExecContext(ctx,
+		"INSERT OR REPLACE INTO character_social (guid, friend, flags, note) VALUES (?, ?, COALESCE((SELECT flags FROM character_social WHERE guid = ? AND friend = ?) | 2, 2), COALESCE((SELECT note FROM character_social WHERE guid = ? AND friend = ?), ''))",
+		s.playerGUID, ignoreGUID, s.playerGUID, ignoreGUID, s.playerGUID, ignoreGUID)
+	if err != nil {
+		return false
+	}
+	_ = s.sendFriendStatus(friendsResultIgnoreAdded, ignoreGUID, "")
+	return true
+}
+
+// -----------------------------------------------------------------
+// handleDelIgnore processes CMSG_DEL_IGNORE (0x06D).
+// TrinityCore: WorldSession::HandleDelIgnoreOpcode.
+// -----------------------------------------------------------------
+func (s *session) handleDelIgnore(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded {
+		return false
+	}
+	r := protocol.NewReader(payload)
+	ignoreGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return false
+	}
+	_, _ = cdb.ExecContext(ctx,
+		"UPDATE character_social SET flags = flags & ~2 WHERE guid = ? AND friend = ?",
+		s.playerGUID, ignoreGUID)
+	_, _ = cdb.ExecContext(ctx,
+		"DELETE FROM character_social WHERE guid = ? AND friend = ? AND flags = 0",
+		s.playerGUID, ignoreGUID)
+	_ = s.sendFriendStatus(friendsResultIgnoreRemoved, ignoreGUID, "")
+	return true
+}
+
+// -----------------------------------------------------------------
+// handleSetContactNotes processes CMSG_SET_CONTACT_NOTES (0x1C6 in 3.3.5).
+// TrinityCore: WorldSession::HandleSetContactNotesOpcode.
+// -----------------------------------------------------------------
+func (s *session) handleSetContactNotes(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded {
+		return false
+	}
+	r := protocol.NewReader(payload)
+	friendGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	note, _ := r.ReadCString()
+	if len(note) > 48 {
+		note = note[:48]
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return false
+	}
+	_, _ = cdb.ExecContext(ctx,
+		"UPDATE character_social SET note = ? WHERE guid = ? AND friend = ?",
+		note, s.playerGUID, friendGUID)
+	return true
+}
