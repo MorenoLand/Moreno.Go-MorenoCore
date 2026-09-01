@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"path/filepath"
@@ -138,6 +139,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 		header, payload, err := protocol.ReadClientFrame(conn, state.decrypt)
 		if err != nil {
+			state.debug("world connection closed", "account", state.accountName, "error", err)
 			if !state.logoutAt.IsZero() && isReadTimeout(err) {
 				if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 					state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
@@ -145,6 +147,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 			return
 		}
+		state.debug("world packet received", "account", state.accountName, "opcode", opcodeName(header.Opcode), "size", len(payload))
 		if !state.logoutAt.IsZero() && !time.Now().Before(state.logoutAt) {
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
@@ -212,8 +215,16 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed {
 				return
 			}
+			state.debug("world packet ignored", "account", state.accountName, "opcode", opcodeName(header.Opcode), "size", len(payload))
 		}
 	}
+}
+
+func opcodeName(opcode uint32) string {
+	if name, ok := protocol.OpcodeNames[protocol.Opcode(opcode)]; ok {
+		return name
+	}
+	return fmt.Sprintf("0x%03X", opcode)
 }
 
 func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {

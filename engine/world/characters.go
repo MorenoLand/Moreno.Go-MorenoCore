@@ -254,7 +254,13 @@ func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_DELETE), 71)
 }
 
-func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
+func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (success bool) {
+	var guid uint64
+	defer func() {
+		if !success {
+			s.debug("player login failed", "account", s.accountName, "guid", guid)
+		}
+	}()
 	if s.playerLoaded {
 		return false
 	}
@@ -330,6 +336,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
 			return false
 		}
 	}
+	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true
 }
 
