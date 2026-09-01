@@ -43,9 +43,9 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		s.attackTarget = 0
 		return s.write(uint16(protocol.OpcodeSMSG_ATTACK_SWING_DEAD_TARGET), nil, true) == nil
 	}
-	if target.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > meleeAttackRange {
-		s.debug("attack out of range", "account", s.accountName, "guid", victim)
-		return s.write(uint16(protocol.OpcodeSMSG_ATTACK_SWING_NOT_IN_RANGE), nil, true) == nil
+	if target.Map != s.player.Map {
+		s.attackTarget = 0
+		return s.sendAttackStop(victim, false) == nil
 	}
 	if s.attackTarget != 0 && s.attackTarget != victim {
 		if err := s.sendAttackStop(s.attackTarget, false); err != nil {
@@ -54,7 +54,40 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	}
 	s.attackTarget = victim
 	s.debug("attack started", "account", s.accountName, "guid", victim)
-	return s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(s.playerGUID, victim), true) == nil
+	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(s.playerGUID, victim), true)
+	if distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) <= meleeAttackRange+2.0 {
+		s.executeMeleeSwing(ctx, target)
+	}
+	return true
+}
+
+func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
+	if s.player == nil || target.Health == 0 {
+		return
+	}
+	damage := uint32(20 + int(s.player.Level)*5)
+	overkill := uint32(0)
+	if damage >= target.Health {
+		overkill = damage - target.Health
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), buildAttackerStateUpdate(s.playerGUID, target.GUID, damage, overkill), true)
+	cdb := s.server.WorldStore.DB
+	if damage >= target.Health {
+		// Target dies
+		if cdb != nil {
+			_, _ = cdb.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", uint32(target.GUID&0xFFFFFF))
+		}
+		_ = s.sendAttackStop(target.GUID, true)
+		s.attackTarget = 0
+		s.player.XP += 45 * uint32(s.player.Level)
+		s.sendPlayerUpdate()
+		s.debug("target slain", "account", s.accountName, "guid", target.GUID, "xp_gained", 45*uint32(s.player.Level))
+	} else {
+		newHealth := target.Health - damage
+		if cdb != nil {
+			_, _ = cdb.ExecContext(ctx, "UPDATE creature SET curhealth = ? WHERE guid = ?", newHealth, uint32(target.GUID&0xFFFFFF))
+		}
+	}
 }
 
 func (s *session) handleAttackStop() bool {
@@ -128,4 +161,21 @@ func distance3D(x1, y1, z1, x2, y2, z2 float32) float64 {
 	dy := float64(y1 - y2)
 	dz := float64(z1 - z2)
 	return math.Sqrt(dx*dx + dy*dy + dz*dz)
+}
+
+func buildAttackerStateUpdate(attacker, victim uint64, damage, overkill uint32) []byte {
+	packet := protocol.NewBuffer(64)
+	packet.WriteU32(0x00000002) // HitInfo: HITINFO_NORMALSWING2
+	packet.WritePackedGUID(attacker)
+	packet.WritePackedGUID(victim)
+	packet.WriteU32(damage)          // Full damage
+	packet.WriteU32(overkill)        // Overkill
+	packet.WriteU8(1)                // Sub damage count
+	packet.WriteU32(1)                // Damage school: Physical (1)
+	packet.WriteF32(float32(damage)) // float sub damage
+	packet.WriteU32(damage)          // uint32 sub damage
+	packet.WriteU8(0)                // TargetState: VICTIMSTATE_HIT
+	packet.WriteU32(0)               // Unknown
+	packet.WriteU32(0)               // Melee spell ID
+	return packet.Bytes()
 }

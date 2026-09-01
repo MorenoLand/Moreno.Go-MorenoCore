@@ -67,6 +67,11 @@ func TestHandleAttackSwingStartsAndStopsCombat(t *testing.T) {
 	if target, err := reader.ReadU64(); err != nil || target != victim {
 		t.Fatalf("target=%x err=%v", target, err)
 	}
+	// Read SMSG_ATTACKERSTATEUPDATE
+	opcode, _, err = readServerFrame(clientConn, nil)
+	if err != nil || opcode != uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE) {
+		t.Fatalf("expected SMSG_ATTACKERSTATEUPDATE (%x), got %x, err=%v", protocol.OpcodeSMSG_ATTACKERSTATEUPDATE, opcode, err)
+	}
 	stopped := make(chan bool, 1)
 	go func() { stopped <- state.handleAttackStop() }()
 	opcode, response, err = readServerFrame(clientConn, nil)

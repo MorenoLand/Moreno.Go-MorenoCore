@@ -287,6 +287,34 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleActivateTaxi(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_GET_MAIL_LIST):
+			if !state.authed || !state.handleGetMailList(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SEND_MAIL):
+			if !state.authed || !state.handleSendMail(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MAIL_TAKE_MONEY):
+			if !state.authed || !state.handleMailTakeMoney(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MAIL_TAKE_ITEM):
+			if !state.authed || !state.handleMailTakeItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MAIL_DELETE):
+			if !state.authed || !state.handleMailDelete(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MAIL_MARK_AS_READ):
+			if !state.authed || !state.handleMailMarkAsRead(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_QUERY_NEXT_MAIL_TIME):
+			if !state.authed || !state.handleQueryNextMailTime(ctx) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_ATTACK_SWING):
 			if !state.authed || !state.handleAttackSwing(ctx, payload) {
 				return
@@ -451,7 +479,11 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				}
 				_ = state.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true)
 			}
-		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK):
+		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK),
+			uint32(protocol.OpcodeCMSG_FORCE_RUN_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK),
+			uint32(protocol.OpcodeCMSG_FORCE_SWIM_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_SWIM_BACK_SPEED_CHANGE_ACK),
+			uint32(protocol.OpcodeCMSG_FORCE_WALK_SPEED_CHANGE_ACK), uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_SPEED_CHANGE_ACK),
+			uint32(protocol.OpcodeCMSG_FORCE_FLIGHT_BACK_SPEED_CHANGE_ACK):
 			// Movement acknowledged by client
 		case uint32(protocol.OpcodeCMSG_MESSAGECHAT):
 			if !state.authed || !state.handleMessageChat(ctx, payload) {
