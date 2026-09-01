@@ -273,13 +273,19 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	s.mounts = mounts
-	packet := protocol.NewBuffer(20)
-	packet.WriteU32(state.Map)
-	packet.WriteF32(state.X)
-	packet.WriteF32(state.Y)
-	packet.WriteF32(state.Z)
-	packet.WriteF32(state.Orientation)
-	if err := s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD), buildLoginVerifyWorld(state), true); err != nil {
+		return false
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_ACCOUNT_DATA_TIMES), buildAccountDataTimes(time.Now()), true); err != nil {
+		return false
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_FEATURE_SYSTEM_STATUS), buildFeatureSystemStatus(), true); err != nil {
+		return false
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_MOTD), buildMotd(s.server.Config.Motd), true); err != nil {
+		return false
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES), buildLearnedDanceMoves(), true); err != nil {
 		return false
 	}
 	updates, err := s.server.buildPlayerUpdate(state)

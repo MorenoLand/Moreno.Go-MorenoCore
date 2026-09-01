@@ -134,12 +134,40 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_PLAYER_LOGIN), loginPayload.Bytes(), clientCrypt); err != nil {
 		t.Fatal(err)
 	}
-	newWorldOpcode, newWorldPayload, err := readServerFrame(clientConn, clientCrypt)
+	verifyOpcode, verifyPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if newWorldOpcode != uint16(protocol.OpcodeSMSG_NEW_WORLD) || len(newWorldPayload) != 20 {
-		t.Fatalf("new world opcode=%x payload=%d", newWorldOpcode, len(newWorldPayload))
+	if verifyOpcode != uint16(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD) || len(verifyPayload) != 20 {
+		t.Fatalf("verify world opcode=%x payload=%d", verifyOpcode, len(verifyPayload))
+	}
+	accountDataOpcode, accountDataPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accountDataOpcode != uint16(protocol.OpcodeSMSG_ACCOUNT_DATA_TIMES) || len(accountDataPayload) != 29 {
+		t.Fatalf("account data opcode=%x payload=%d", accountDataOpcode, len(accountDataPayload))
+	}
+	featureOpcode, featurePayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if featureOpcode != uint16(protocol.OpcodeSMSG_FEATURE_SYSTEM_STATUS) || !bytes.Equal(featurePayload, []byte{2, 0}) {
+		t.Fatalf("feature opcode=%x payload=%x", featureOpcode, featurePayload)
+	}
+	motdOpcode, motdPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if motdOpcode != uint16(protocol.OpcodeSMSG_MOTD) || len(motdPayload) < 5 {
+		t.Fatalf("motd opcode=%x payload=%d", motdOpcode, len(motdPayload))
+	}
+	danceOpcode, dancePayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if danceOpcode != uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES) || len(dancePayload) != 8 {
+		t.Fatalf("dance opcode=%x payload=%d", danceOpcode, len(dancePayload))
 	}
 	updateOpcode, updatePayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
