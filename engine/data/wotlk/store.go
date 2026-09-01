@@ -34,14 +34,26 @@ type Class struct {
 }
 
 type SpellEffect struct {
-	Effect     uint32
-	BasePoints int32
-	Aura       uint32
+	Effect          uint32
+	BasePoints      int32
+	Aura            uint32
+	ImplicitTargetA uint32
+	ImplicitTargetB uint32
+	RadiusIndex     uint32
+	MiscValue       int32
+	TriggerSpell    uint32
 }
 
 type Spell struct {
-	ID      uint32
-	Effects [3]SpellEffect
+	ID               uint32
+	Attributes       uint32
+	Targets          uint32
+	CastingTimeIndex uint32
+	RecoveryTime     uint32
+	PowerType        uint32
+	ManaCost         uint32
+	RangeIndex       uint32
+	Effects          [3]SpellEffect
 }
 
 type LFGDungeon struct {
@@ -152,6 +164,23 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		return Spell{}, false, nil
 	}
 	spell := Spell{ID: id}
+	values := []struct {
+		field int
+		dest  *uint32
+	}{
+		{4, &spell.Attributes},
+		{16, &spell.Targets},
+		{28, &spell.CastingTimeIndex},
+		{29, &spell.RecoveryTime},
+		{41, &spell.PowerType},
+		{42, &spell.ManaCost},
+		{46, &spell.RangeIndex},
+	}
+	for _, value := range values {
+		if *value.dest, err = record.Uint32(value.field); err != nil {
+			return Spell{}, false, err
+		}
+	}
 	for i := range spell.Effects {
 		effect, err := record.Uint32(71 + i)
 		if err != nil {
@@ -165,9 +194,48 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if err != nil {
 			return Spell{}, false, err
 		}
-		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, Aura: aura}
+		implicitTargetA, err := record.Uint32(86 + i)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		implicitTargetB, err := record.Uint32(89 + i)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		radiusIndex, err := record.Uint32(92 + i)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		miscValue, err := record.Int32(110 + i)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		triggerSpell, err := record.Uint32(116 + i)
+		if err != nil {
+			return Spell{}, false, err
+		}
+		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, Aura: aura, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, TriggerSpell: triggerSpell}
 	}
 	return spell, true, nil
+}
+
+func (s *Store) SpellCastTime(id uint32) (int32, bool, error) {
+	if id == 0 {
+		return 0, true, nil
+	}
+	file, err := s.File("SpellCastTimes")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false, nil
+	}
+	base, err := record.Int32(1)
+	if err != nil {
+		return 0, false, err
+	}
+	return base, true, nil
 }
 
 func (s *Store) LFGDungeon(id uint32) (LFGDungeon, bool, error) {

@@ -7,6 +7,8 @@ import (
 
 const permissionCommandGMChat uint32 = 372
 
+const permissionTwoSideInteractionChat uint32 = 25
+
 func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID uint32, security uint8, permissionID uint32) (bool, error) {
 	granted := make(map[uint32]struct{})
 	denied := make(map[uint32]struct{})

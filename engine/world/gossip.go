@@ -45,7 +45,7 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 	guid, err := reader.ReadU64()
 	if err != nil {
 		s.debug("gossip hello rejected", "account", s.accountName, "error", err)
-		return false
+		return true
 	}
 	creature := s.luaCreature(ctx, guid)
 	if creature == nil {
@@ -87,12 +87,15 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	}
 	menuID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		s.debug("gossip selection rejected", "account", s.accountName, "reason", "missing menu", "error", err)
+		return true
 	}
 	listID, err := reader.ReadU32()
 	if err != nil {
-		return false
+		s.debug("gossip selection rejected", "account", s.accountName, "reason", "missing list", "error", err)
+		return true
 	}
+	s.debug("gossip selection received", "account", s.accountName, "guid", guid, "menu", menuID, "list", listID)
 	if s.gossip == nil || s.gossip.SenderGUID != guid || s.gossip.MenuID != menuID {
 		s.debug("gossip selection rejected", "account", s.accountName, "guid", guid, "menu", menuID, "list", listID)
 		return true
@@ -105,7 +108,8 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	if item.Coded {
 		code, err = reader.ReadCString()
 		if err != nil {
-			return false
+			s.debug("gossip selection rejected", "account", s.accountName, "guid", guid, "menu", menuID, "list", listID, "reason", "malformed code", "error", err)
+			return true
 		}
 	}
 	creature := s.luaCreature(ctx, guid)
@@ -130,11 +134,13 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	if s.gossip == nil && !s.gossipClosed && item.Action == 1 && item.ActionMenuID != 0 {
 		defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID)
 		if loadErr != nil {
-			return false
+			s.debug("gossip submenu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
+			return true
 		}
 		s.gossip = defaultMenu
 		if sendErr := s.sendGossipMenu(); sendErr != nil {
-			return false
+			s.debug("gossip submenu response failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", sendErr)
+			return true
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
@@ -320,6 +326,7 @@ func (s *session) sendGossipMenu() error {
 	if s.gossip == nil {
 		return nil
 	}
+	s.debug("gossip menu response", "account", s.accountName, "guid", s.gossip.SenderGUID, "menu", s.gossip.MenuID, "title", s.gossip.TitleID, "options", len(s.gossip.Items), "quests", len(s.gossip.Quests))
 	return s.write(uint16(protocol.OpcodeSMSG_GOSSIP_MESSAGE), buildGossipMessage(*s.gossip), true)
 }
 

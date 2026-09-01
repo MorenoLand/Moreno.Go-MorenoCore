@@ -87,6 +87,9 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "universal language")
 		return true
 	}
+	if language != languageAddon && (s.player.ExtraFlags&0x00000001 != 0 || s.twoSideChat) {
+		language = languageUniversal
+	}
 	if message == "" && typeID != chatAFK && typeID != chatDND {
 		return true
 	}

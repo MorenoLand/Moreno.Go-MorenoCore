@@ -67,13 +67,13 @@ func TestHandleNPCTextQueryLoadsDatabaseRow(t *testing.T) {
 	placeholders := []string{"?"}
 	for index := 0; index < npcTextOptions; index++ {
 		suffix := strconv.Itoa(index)
-		columns = append(columns, "text0_"+suffix+" TEXT", "text1_"+suffix+" TEXT", "lang"+suffix+" INTEGER", "Probability"+suffix+" REAL")
+		columns = append(columns, "text"+suffix+"_0 TEXT", "text"+suffix+"_1 TEXT", "BroadcastTextID"+suffix+" INTEGER", "lang"+suffix+" INTEGER", "Probability"+suffix+" REAL")
 		if index == 0 {
-			values = append(values, "male", "female", 2, 0.5)
+			values = append(values, "male", "female", 0, 2, 0.5)
 		} else {
-			values = append(values, "", "", 0, 0)
+			values = append(values, "", "", 0, 0, 0)
 		}
-		placeholders = append(placeholders, "?", "?", "?", "?")
+		placeholders = append(placeholders, "?", "?", "?", "?", "?")
 		for emote := 0; emote < npcTextEmotes; emote++ {
 			columns = append(columns, "EmoteDelay"+suffix+"_"+strconv.Itoa(emote)+" INTEGER", "Emote"+suffix+"_"+strconv.Itoa(emote)+" INTEGER")
 			values = append(values, 0, 0)

@@ -33,12 +33,12 @@ func (s *session) handleNpcTextQuery(ctx context.Context, payload []byte) bool {
 	textID, err := reader.ReadU32()
 	if err != nil {
 		s.debug("npc text query rejected", "account", s.accountName, "error", err)
-		return false
+		return true
 	}
 	guid, err := reader.ReadU64()
 	if err != nil {
 		s.debug("npc text query rejected", "account", s.accountName, "error", err)
-		return false
+		return true
 	}
 	options, err := s.loadNPCText(ctx, textID)
 	if errors.Is(err, sql.ErrNoRows) || (err != nil && missingTable(err)) {
@@ -55,7 +55,7 @@ func (s *session) loadNPCText(ctx context.Context, textID uint32) ([]npcTextOpti
 	columns := make([]string, 0, npcTextOptions*10)
 	for index := 0; index < npcTextOptions; index++ {
 		suffix := strconv.Itoa(index)
-		columns = append(columns, "text0_"+suffix, "text1_"+suffix, "lang"+suffix, "Probability"+suffix)
+		columns = append(columns, "text"+suffix+"_0", "text"+suffix+"_1", "BroadcastTextID"+suffix, "lang"+suffix, "Probability"+suffix)
 		for emote := 0; emote < npcTextEmotes; emote++ {
 			columns = append(columns, "EmoteDelay"+suffix+"_"+strconv.Itoa(emote), "Emote"+suffix+"_"+strconv.Itoa(emote))
 		}
@@ -65,12 +65,13 @@ func (s *session) loadNPCText(ctx context.Context, textID uint32) ([]npcTextOpti
 	options := make([]npcTextOption, npcTextOptions)
 	targets := make([]any, 0, len(columns))
 	var text0, text1 [npcTextOptions]sql.NullString
+	var broadcastTextIDs [npcTextOptions]int64
 	var languages [npcTextOptions]int64
 	var probabilities [npcTextOptions]float64
 	var emoteDelays [npcTextOptions][npcTextEmotes]int64
 	var emoteIDs [npcTextOptions][npcTextEmotes]int64
 	for index := range options {
-		targets = append(targets, &text0[index], &text1[index], &languages[index], &probabilities[index])
+		targets = append(targets, &text0[index], &text1[index], &broadcastTextIDs[index], &languages[index], &probabilities[index])
 		for emote := 0; emote < npcTextEmotes; emote++ {
 			targets = append(targets, &emoteDelays[index][emote], &emoteIDs[index][emote])
 		}
@@ -81,6 +82,13 @@ func (s *session) loadNPCText(ctx context.Context, textID uint32) ([]npcTextOpti
 	for index := range options {
 		options[index].Probability = float32(probabilities[index])
 		options[index].Text0, options[index].Text1 = text0[index].String, text1[index].String
+		if broadcastTextIDs[index] != 0 {
+			var broadcast0, broadcast1 sql.NullString
+			err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text, Text1 FROM broadcast_text WHERE ID = ?", broadcastTextIDs[index]).Scan(&broadcast0, &broadcast1)
+			if err == nil {
+				options[index].Text0, options[index].Text1 = broadcast0.String, broadcast1.String
+			}
+		}
 		options[index].Language = uint32(languages[index])
 		for emote := 0; emote < npcTextEmotes; emote++ {
 			options[index].Emotes[emote] = npcTextEmote{Delay: uint32(emoteDelays[index][emote]), ID: uint32(emoteIDs[index][emote])}

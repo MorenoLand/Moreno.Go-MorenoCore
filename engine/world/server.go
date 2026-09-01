@@ -64,6 +64,7 @@ type session struct {
 	accountName  string
 	security     uint8
 	gmChat       bool
+	twoSideChat  bool
 	legitimate   map[uint64]struct{}
 	mounts       *MountState
 	playerGUID   uint64
@@ -199,6 +200,18 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_ATTACK_STOP):
 			if !state.authed || !state.handleAttackStop() {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CAST_SPELL):
+			if !state.authed || !state.handleCastSpell(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CANCEL_CAST):
+			if !state.authed || !state.handleCancelCast(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CANCEL_AURA):
+			if !state.authed || !state.handleCancelAura(payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_GOSSIP_HELLO):
@@ -487,7 +500,11 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		s.gmChat = false
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionCommandGMChat, "error", err)
 	}
-	s.debug("world authentication accepted", "account", accountName, "build", build, "gm_chat", s.gmChat, "remote", remoteAddress(s.conn))
+	if s.twoSideChat, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionTwoSideInteractionChat); err != nil {
+		s.twoSideChat = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionTwoSideInteractionChat, "error", err)
+	}
+	s.debug("world authentication accepted", "account", accountName, "build", build, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))
 	return s.write(opcodeAuthResponse, []byte{authOK}, true) == nil
 }
 
