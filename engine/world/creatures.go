@@ -75,11 +75,11 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		LEFT JOIN creature_equip_template AS eq ON eq.CreatureID = c.id AND eq.ID = COALESCE(NULLIF(c.equipment_id, 0), 1)
 		LEFT JOIN game_event_creature AS gec ON gec.guid = c.guid
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-		AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
+		AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
 		AND (? OR (COALESCE(t.flags_extra, 0) & 1) = 0)
 		AND (gec.eventEntry IS NULL OR gec.eventEntry = 0)
 		ORDER BY c.guid`
-	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM)
+	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM)
 	if err != nil {
 		fallbackQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,
 			COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.faction, t.npcflag, t.unit_flags, t.dynamicflags,
@@ -87,10 +87,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id
 			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-			AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
+			AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
 			AND (? OR (COALESCE(t.flags_extra, 0) & 1) = 0)
 			ORDER BY c.guid`
-		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM)
 		if err != nil {
 			if missingTable(err) {
 				return nil, 0, nil
