@@ -158,6 +158,33 @@ func (s *Store) Class(id uint32) (Class, bool, error) {
 	return Class{ID: id, SpellClassSet: spellClassSet, CinematicSequence: cinematic, RequiredExpansion: requiredExpansion}, true, nil
 }
 
+func (s *Store) CharStartOutfit(race, class, gender uint8) ([]uint32, error) {
+	file, err := s.File("CharStartOutfit")
+	if err != nil {
+		return nil, err
+	}
+	for i := 0; i < int(file.RecordCount); i++ {
+		record, err := file.Record(i)
+		if err != nil {
+			continue
+		}
+		r, _ := record.Uint32(1)
+		c, _ := record.Uint32(2)
+		g, _ := record.Uint32(3)
+		if uint8(r) == race && uint8(c) == class && uint8(g) == gender {
+			var items []uint32
+			for j := 5; j <= 28; j++ {
+				itemID, err := record.Int32(j)
+				if err == nil && itemID > 0 {
+					items = append(items, uint32(itemID))
+				}
+			}
+			return items, nil
+		}
+	}
+	return nil, nil
+}
+
 func (s *Store) Spell(id uint32) (Spell, bool, error) {
 	file, err := s.File("Spell")
 	if err != nil {

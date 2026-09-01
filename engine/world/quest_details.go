@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -132,8 +133,51 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 			}
 		}
 	}
+
+	// Grant starter item if specified in quest_template (e.g. quest items, letters, containers)
+	var startItem int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT StartItem FROM quest_template WHERE ID = ?", questID).Scan(&startItem); err == nil && startItem > 0 {
+		s.grantQuestStartItem(ctx, uint32(startItem))
+	}
+
 	s.debug("quest accepted", "account", s.accountName, "quest", questID)
 	return s.sendGossipComplete()
+}
+
+func (s *session) grantQuestStartItem(ctx context.Context, itemEntry uint32) {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return
+	}
+	usedSlots := make(map[uint8]bool)
+	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
+	if err == nil {
+		for rows.Next() {
+			var sl int64
+			if rows.Scan(&sl) == nil {
+				usedSlots[uint8(sl)] = true
+			}
+		}
+		rows.Close()
+	}
+	freeSlot := uint8(0xFF)
+	for sl := uint8(23); sl <= 38; sl++ {
+		if !usedSlots[sl] {
+			freeSlot = sl
+			break
+		}
+	}
+	if freeSlot == 0xFF {
+		return
+	}
+	var nextGUID uint64
+	if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID); err != nil || nextGUID == 0 {
+		nextGUID = uint64(time.Now().UnixNano())
+	}
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, 0, 0, 0, '', 0, 100, 0, '')", nextGUID, itemEntry, s.playerGUID)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
 }
 
 func (s *session) handleQuestgiverCancel() bool {
@@ -175,9 +219,18 @@ func (s *session) questgiverStartsQuest(ctx context.Context, guid uint64, questI
 		entry := uint32((guid >> 24) & 0x00FFFFFF)
 		return questRelationExists(ctx, s.server.WorldStore.DB, "gameobject_queststarter", entry, questID)
 	}
+	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	if entry != 0 && s.creatureStartsQuest(ctx, entry, questID) {
+		return true
+	}
 	creature := s.luaCreature(ctx, guid)
 	if creature != nil {
 		return s.creatureStartsQuest(ctx, objectUint32OrZero(creature, "Entry"), questID)
+	}
+	var spawnEntry uint32
+	spawnGUID := uint32(guid & 0x00FFFFFF)
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&spawnEntry); err == nil && spawnEntry != 0 {
+		return s.creatureStartsQuest(ctx, spawnEntry, questID)
 	}
 	return false
 }

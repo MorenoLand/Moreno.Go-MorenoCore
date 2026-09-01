@@ -215,10 +215,44 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM characters").Scan(&guid); err != nil {
 		return false
 	}
-	args := []any{uint32(guid), s.accountID, name, race, class, gender, uint8(1), uint32(0), uint32(0), values[3], values[4], values[5], values[6], values[7], uint8(0), uint8(0), uint32(0), uint16(spawn.Map), uint32(0), uint8(0), spawn.X, spawn.Y, spawn.Z, spawn.Orientation, float32(0), float32(0), float32(0), float32(0), uint32(0), "", uint8(0), uint32(0), uint32(0), float32(0), uint32(0), uint8(0), uint32(0), uint32(0), uint16(0), uint8(0), uint16(atLoginFirst), uint16(spawn.Zone), uint32(0), "", uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint64(0), uint32(0), uint8(0), uint32(1), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint8(1), uint8(0), "", "", uint32(0), "", uint8(0), uint32(0)}
+
+	startLevel := uint8(1)
+	if s.server.Config.StartPlayerLevel > 0 {
+		startLevel = uint8(s.server.Config.StartPlayerLevel)
+	}
+	if class == 6 { // Death Knight
+		if s.server.Config.StartDeathKnightPlayerLevel > 0 {
+			startLevel = uint8(s.server.Config.StartDeathKnightPlayerLevel)
+		} else {
+			startLevel = 55
+		}
+	}
+	startMoney := s.server.Config.StartPlayerMoney
+	startHonor := s.server.Config.StartHonorPoints
+	startArena := s.server.Config.StartArenaPoints
+
+	args := []any{
+		uint32(guid), s.accountID, name, race, class, gender,
+		startLevel, uint32(0), startMoney,
+		values[3], values[4], values[5], values[6], values[7],
+		uint8(0), uint8(0), uint32(0), uint16(spawn.Map), uint32(0), uint8(0),
+		spawn.X, spawn.Y, spawn.Z, spawn.Orientation,
+		float32(0), float32(0), float32(0), float32(0), uint32(0), "",
+		uint8(0), // cinematic = 0
+		uint32(0), uint32(0), float32(0), uint32(0), uint8(0), uint32(0), uint32(0),
+		uint16(0), uint8(0), uint16(atLoginFirst), uint16(spawn.Zone), uint32(0), "",
+		startArena, startHonor, uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
+		uint64(0), uint32(0), uint8(0), uint32(1),
+		uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0), uint32(0),
+		uint8(1), uint8(0), "", "", uint32(0), "", uint8(0), uint32(0),
+	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CHARACTER", args...); err != nil {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 48)
 	}
+
+	// Populate starting equipment and items (from CharStartOutfit DBC / playercreateinfo_item)
+	s.createStarterOutfit(ctx, guid, race, class, gender)
+
 	var realmCharacters sql.NullInt64
 	if err := s.server.AuthStore.QueryRowContext(ctx, "SELECT SUM(numchars) FROM realmcharacters WHERE acctid = ?", s.accountID).Scan(&realmCharacters); err != nil {
 		return false
@@ -313,6 +347,16 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS), buildTutorialFlags(s.tutorials), true); err != nil {
 		return false
+	}
+	if state.Cinematic == 0 {
+		cinematicID := getStartingCinematicID(state.Race, state.Class)
+		if cinematicID > 0 {
+			cinematicBuf := protocol.NewBuffer(4)
+			cinematicBuf.WriteU32(cinematicID)
+			_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), cinematicBuf.Bytes(), true)
+		}
+		state.Cinematic = 1
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1 WHERE guid = ?", guid)
 	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
 		return false
@@ -657,4 +701,152 @@ func (s *session) LearnMountSpell(ctx context.Context, guid uint64, spellID uint
 		}
 	}
 	return nil
+}
+
+func getStartingCinematicID(race, class uint8) uint32 {
+	if class == 6 { // Death Knight
+		return 165
+	}
+	switch race {
+	case 1: // Human
+		return 81
+	case 2: // Orc
+		return 21
+	case 3: // Dwarf
+		return 41
+	case 4: // Night Elf
+		return 61
+	case 5: // Undead
+		return 2
+	case 6: // Tauren
+		return 141
+	case 7: // Gnome
+		return 101
+	case 8: // Troll
+		return 121
+	case 10: // Blood Elf
+		return 162
+	case 11: // Draenei
+		return 163
+	default:
+		return 0
+	}
+}
+
+func (s *session) createStarterOutfit(ctx context.Context, guid uint64, race, class, gender uint8) {
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	if cdb == nil || wdb == nil {
+		return
+	}
+
+	var itemIDs []uint32
+	seen := make(map[uint32]bool)
+
+	// 1. Get starter items from CharStartOutfit DBC
+	if s.server.Data != nil {
+		if outfit, err := s.server.Data.CharStartOutfit(race, class, gender); err == nil && len(outfit) > 0 {
+			for _, id := range outfit {
+				if id > 0 && !seen[id] {
+					seen[id] = true
+					itemIDs = append(itemIDs, id)
+				}
+			}
+		}
+	}
+
+	// 2. Also check custom items from playercreateinfo_item
+	rows, err := wdb.QueryContext(ctx, "SELECT itemid, amount FROM playercreateinfo_item WHERE (race = ? OR race = 0) AND (class = ? OR class = 0)", race, class)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var customID, amount int64
+			if err := rows.Scan(&customID, &amount); err == nil && customID > 0 {
+				id := uint32(customID)
+				if !seen[id] {
+					seen[id] = true
+					itemIDs = append(itemIDs, id)
+				}
+			}
+		}
+	}
+
+	if len(itemIDs) == 0 {
+		return
+	}
+
+	occupiedSlots := make(map[uint8]bool)
+	equippedSlots := make([]uint32, equipSlotEnd)
+	firstBackpackSlot := uint8(23)
+
+	for _, itemEntry := range itemIDs {
+		var invType, buyCount, itemClass, itemSubclass int64
+		err := wdb.QueryRowContext(ctx, "SELECT InventoryType, BuyCount, class, subclass FROM item_template WHERE entry = ?", itemEntry).Scan(&invType, &buyCount, &itemClass, &itemSubclass)
+		if err != nil {
+			continue
+		}
+
+		slot := inventoryTypeToSlot(uint8(invType))
+		targetBag := uint8(0)
+		targetSlot := uint8(0)
+
+		if slot < equipSlotEnd && !occupiedSlots[slot] {
+			targetSlot = slot
+			occupiedSlots[slot] = true
+			equippedSlots[slot] = itemEntry
+		} else if slot == equipSlotFinger1 && !occupiedSlots[equipSlotFinger2] {
+			targetSlot = equipSlotFinger2
+			occupiedSlots[equipSlotFinger2] = true
+			equippedSlots[equipSlotFinger2] = itemEntry
+		} else if slot == equipSlotTrinket1 && !occupiedSlots[equipSlotTrinket2] {
+			targetSlot = equipSlotTrinket2
+			occupiedSlots[equipSlotTrinket2] = true
+			equippedSlots[equipSlotTrinket2] = itemEntry
+		} else if slot == equipSlotMainhand && !occupiedSlots[equipSlotOffhand] && (invType == 13 || invType == 22 || invType == 23) {
+			targetSlot = equipSlotOffhand
+			occupiedSlots[equipSlotOffhand] = true
+			equippedSlots[equipSlotOffhand] = itemEntry
+		} else {
+			// Find first empty backpack slot in 23..38
+			found := false
+			for bpSlot := firstBackpackSlot; bpSlot <= 38; bpSlot++ {
+				if !occupiedSlots[bpSlot] {
+					targetSlot = bpSlot
+					occupiedSlots[bpSlot] = true
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+
+		count := int64(1)
+		if buyCount > 1 {
+			count = buyCount
+		}
+
+		var nextItemGUID uint64
+		if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextItemGUID); err != nil || nextItemGUID == 0 {
+			nextItemGUID = uint64(time.Now().UnixNano())
+		}
+
+		insItemQuery := "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, 0, 0, '', 0, 100, 0, '')"
+		if _, err := cdb.ExecContext(ctx, insItemQuery, nextItemGUID, itemEntry, guid, count); err != nil {
+			continue
+		}
+
+		insInvQuery := "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)"
+		_, _ = cdb.ExecContext(ctx, insInvQuery, guid, targetBag, targetSlot, nextItemGUID)
+	}
+
+	// Update equipmentCache in characters table
+	parts := make([]string, equipSlotEnd*2)
+	for i := 0; i < int(equipSlotEnd); i++ {
+		parts[i*2] = strconv.FormatUint(uint64(equippedSlots[i]), 10)
+		parts[i*2+1] = "0"
+	}
+	cacheStr := strings.Join(parts, " ")
+	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET equipmentCache = ? WHERE guid = ?", cacheStr, guid)
 }

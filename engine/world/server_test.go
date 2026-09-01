@@ -91,7 +91,7 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if responseOpcode != opcodeAuthResponse || !bytes.Equal(responsePayload, []byte{authOK}) {
+	if responseOpcode != opcodeAuthResponse || len(responsePayload) < 11 || responsePayload[0] != authOK || responsePayload[10] != 2 {
 		t.Fatalf("auth response opcode=%x payload=%x", responseOpcode, responsePayload)
 	}
 	ping := protocol.NewBuffer(8)
@@ -203,6 +203,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	}
 	if tutOpcode != uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS) || len(tutPayload) != 32 {
 		t.Fatalf("tutorial opcode=%x payload=%d", tutOpcode, len(tutPayload))
+	}
+	cinOpcode, cinPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cinOpcode != uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC) || len(cinPayload) != 4 {
+		t.Fatalf("cinematic opcode=%x payload=%d", cinOpcode, len(cinPayload))
 	}
 	timeOpcode, timePayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
