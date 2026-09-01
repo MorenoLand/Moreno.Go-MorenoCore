@@ -132,15 +132,41 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
-		if item.Action == 2 { // GOSSIP_OPTION_VENDOR
+		// TrinityCore Gossip_Option: 1 gossip submenu, 2 questgiver (quest
+		// menu), 3 vendor, 4 taxivendor, 5 trainer, 8 innkeeper, 9 banker,
+		// 13 auctioneer. The old code treated 2/3/4 as vendor/taxi/trainer,
+		// so selecting a vendor (3) opened the flight map instead.
+		if item.Action == 3 { // GOSSIP_OPTION_VENDOR / ARMORER
 			s.sendVendorList(ctx, guid)
 			s.gossipClosed = true
-		} else if item.Action == 3 { // GOSSIP_OPTION_TAXIVENDOR
+		} else if item.Action == 4 { // GOSSIP_OPTION_TAXIVENDOR
 			s.sendTaxiMenu(ctx, guid)
 			s.gossipClosed = true
-		} else if item.Action == 4 { // GOSSIP_OPTION_TRAINER
+		} else if item.Action == 5 { // GOSSIP_OPTION_TRAINER
 			s.sendTrainerList(ctx, guid)
 			s.gossipClosed = true
+		} else if item.Action == 8 { // GOSSIP_OPTION_INNKEEPER
+			s.gossipClosed = true
+			bind := protocol.NewBuffer(8)
+			bind.WriteU64(guid)
+			if err := s.write(uint16(protocol.OpcodeSMSG_BINDER_CONFIRM), bind.Bytes(), true); err != nil {
+				return false
+			}
+		} else if item.Action == 9 { // GOSSIP_OPTION_BANKER
+			s.gossipClosed = true
+			bank := protocol.NewBuffer(8)
+			bank.WriteU64(guid)
+			if err := s.write(uint16(protocol.OpcodeSMSG_SHOW_BANK), bank.Bytes(), true); err != nil {
+				return false
+			}
+		} else if item.Action == 13 { // GOSSIP_OPTION_AUCTIONEER
+			s.gossipClosed = true
+			auction := protocol.NewBuffer(9)
+			auction.WriteU64(guid)
+			auction.WriteU8(1)
+			if err := s.write(uint16(protocol.OpcodeMSG_AUCTION_HELLO), auction.Bytes(), true); err != nil {
+				return false
+			}
 		} else if item.Action == 1 && item.ActionMenuID != 0 {
 			defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID)
 			if loadErr != nil {
@@ -165,6 +191,11 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 }
 
 func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry, npcFlags, menuID uint32) (*gossipMenuState, error) {
+	// TrinityCore PrepareGossipMenu learns an unknown flight node and aborts
+	// the menu build; the map itself opens through the taxi option afterwards.
+	if npcFlags&unitNPCFlagFlightmaster != 0 && s.learnNewTaxiNode(ctx, guid) {
+		return nil, nil
+	}
 	menu := &gossipMenuState{SenderGUID: guid, MenuID: menuID, TitleID: 0x00FFFFFF, Items: make(map[uint32]gossipMenuItem)}
 	var titleID int64
 	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT TextID FROM gossip_menu WHERE MenuID = ? ORDER BY TextID LIMIT 1", menuID).Scan(&titleID)
@@ -218,6 +249,9 @@ func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlag
 			return nil, err
 		}
 		if requiredFlags != 0 && uint32(requiredFlags)&npcFlags == 0 {
+			continue
+		}
+		if optionType == 2 { // GOSSIP_OPTION_QUESTGIVER is handled via QuestMenu, not as a gossip text item
 			continue
 		}
 		if len(options) >= 32 {

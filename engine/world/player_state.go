@@ -98,6 +98,7 @@ type playerState struct {
 	Cooldowns      []spellCooldown
 	Equipment      string
 	SheathState    uint8
+	TaxiMask       [taxiMaskSize]uint32
 }
 
 func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState, error) {
@@ -109,6 +110,15 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	}
 	if equipment.Valid {
 		state.Equipment = equipment.String
+	}
+	s.player = &state
+	var taximask sql.NullString
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT taximask FROM characters WHERE guid = ?", guid).Scan(&taximask); err == nil {
+		s.loadTaxiMask(taximask)
+	} else {
+		// TrinityCore PlayerTaxi::InitTaxiNodesForLevel seeds the race and
+		// continent starting nodes for characters without saved masks.
+		s.initTaxiNodesForLevel()
 	}
 	state.Race, state.Class, state.Gender, state.Level = uint8(race), uint8(class), uint8(gender), uint8(level)
 	state.PlayerFlags, state.Map, state.ExtraFlags, state.AtLogin, state.Zone = uint32(playerFlags), uint32(mapID), uint32(extraFlags), uint32(atLogin), uint32(zone)

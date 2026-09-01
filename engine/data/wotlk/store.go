@@ -12,6 +12,10 @@ type Store struct {
 	Dir   string
 	mu    sync.RWMutex
 	files map[string]*dbc.File
+
+	taxiOnce sync.Once
+	taxi     *taxiNetwork
+	taxiErr  error
 }
 
 const MountedFlightSpeedAura uint32 = 207
