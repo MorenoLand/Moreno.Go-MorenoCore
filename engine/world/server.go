@@ -201,6 +201,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleGossipHello(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_NPC_TEXT_QUERY):
+			if !state.authed || !state.handleNpcTextQuery(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_GOSSIP_SELECT_OPTION):
 			if !state.authed || !state.handleGossipSelectOption(ctx, payload) {
 				return
