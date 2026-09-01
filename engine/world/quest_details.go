@@ -105,6 +105,11 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	if creature == nil || !s.creatureStartsQuest(ctx, objectUint32OrZero(creature, "Entry"), questID) {
 		return true
 	}
+	// TrinityCore re-validates CanTakeQuest on accept before AddQuest.
+	canTake, err := s.canTakeQuest(ctx, questID)
+	if err != nil || !canTake {
+		return s.sendGossipComplete()
+	}
 	query := "INSERT OR IGNORE INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)"
 	if s.server.CharactersStore.Backend != database.BackendSQLite {
 		query = "INSERT IGNORE INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)"
@@ -115,6 +120,17 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 		}
 		s.debug("quest accept failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
+	}
+	// Player::AddQuest claims a free log slot and updates PLAYER_QUEST_LOG
+	// so the client shows the quest immediately.
+	if s.player != nil {
+		for slot := 0; slot < playerQuestLogSlots; slot++ {
+			if s.player.QuestLog[slot].QuestID == 0 {
+				s.player.QuestLog[slot] = questLogEntry{QuestID: questID}
+				break
+			}
+		}
+		s.sendPlayerUpdate()
 	}
 	s.debug("quest accepted", "account", s.accountName, "quest", questID)
 	return s.sendGossipComplete()
