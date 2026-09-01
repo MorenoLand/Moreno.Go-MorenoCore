@@ -122,7 +122,7 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if err != nil || count != 1 {
 		t.Fatalf("character count=%d err=%v", count, err)
 	}
-	guid, err := characters.ReadPackedGUID()
+	guid, err := characters.ReadU64()
 	if err != nil || guid != 99 {
 		t.Fatalf("character guid=%d err=%v", guid, err)
 	}
@@ -130,7 +130,7 @@ func TestAuthSessionAndPing(t *testing.T) {
 		t.Fatalf("character name=%q err=%v", name, err)
 	}
 	loginPayload := protocol.NewBuffer(8)
-	loginPayload.WritePackedGUID(99)
+	loginPayload.WriteU64(99)
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_PLAYER_LOGIN), loginPayload.Bytes(), clientCrypt); err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestAuthSessionAndPing(t *testing.T) {
 		t.Fatalf("logout cancel opcode=%x payload=%x", cancelOpcode, cancelPayload)
 	}
 	deletePayload := protocol.NewBuffer(8)
-	deletePayload.WritePackedGUID(99)
+	deletePayload.WriteU64(99)
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_CHAR_DELETE), deletePayload.Bytes(), clientCrypt); err != nil {
 		t.Fatal(err)
 	}

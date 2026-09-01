@@ -235,7 +235,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 
 func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
 	b := protocol.NewReader(payload)
-	guid, err := b.ReadPackedGUID()
+	guid, err := b.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -259,7 +259,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	b := protocol.NewReader(payload)
-	guid, err := b.ReadPackedGUID()
+	guid, err := b.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -377,7 +377,7 @@ func scanEnumCharacter(rows *sql.Rows) (enumCharacter, error) {
 }
 
 func (s *session) buildEnumCharacter(ctx context.Context, packet *protocol.Buffer, c enumCharacter) {
-	packet.WritePackedGUID(c.GUID)
+	packet.WriteU64(c.GUID)
 	packet.WriteCString(c.Name)
 	packet.WriteU8(c.Race)
 	packet.WriteU8(c.Class)
