@@ -197,6 +197,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if actionOpcode != uint16(protocol.OpcodeSMSG_ACTION_BUTTONS) || len(actionPayload) != 577 {
 		t.Fatalf("action opcode=%x payload=%d", actionOpcode, len(actionPayload))
 	}
+	tutOpcode, tutPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tutOpcode != uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS) || len(tutPayload) != 32 {
+		t.Fatalf("tutorial opcode=%x payload=%d", tutOpcode, len(tutPayload))
+	}
 	timeOpcode, timePayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)

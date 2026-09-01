@@ -73,7 +73,7 @@ func TestBroadcastSayUsesSenderReceiverGUID(t *testing.T) {
 	<-done
 }
 
-func TestBroadcastGMChatUsesGMMessageOpcode(t *testing.T) {
+func TestBroadcastGMChatIncludesChatTag(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
@@ -89,7 +89,7 @@ func TestBroadcastGMChatUsesGMMessageOpcode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opcode != uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT) {
+	if opcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) {
 		t.Fatalf("opcode=%x", opcode)
 	}
 	reader := protocol.NewReader(payload)
@@ -99,26 +99,20 @@ func TestBroadcastGMChatUsesGMMessageOpcode(t *testing.T) {
 	if _, err := reader.ReadU32(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reader.ReadU64(); err != nil {
-		t.Fatal(err)
+	if value, err := reader.ReadU64(); err != nil || value != 99 {
+		t.Fatalf("sender=%d err=%v", value, err)
 	}
 	if _, err := reader.ReadU32(); err != nil {
 		t.Fatal(err)
 	}
-	if value, err := reader.ReadU32(); err != nil || value != 7 {
-		t.Fatalf("sender name length=%d err=%v", value, err)
-	}
-	if value, err := reader.ReadCString(); err != nil || value != "Tester" {
-		t.Fatalf("sender name=%q err=%v", value, err)
-	}
-	if _, err := reader.ReadU64(); err != nil {
-		t.Fatal(err)
+	if value, err := reader.ReadU64(); err != nil || value != 99 {
+		t.Fatalf("receiver=%d err=%v", value, err)
 	}
 	if _, err := reader.ReadU32(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reader.ReadCString(); err != nil {
-		t.Fatal(err)
+	if value, err := reader.ReadCString(); err != nil || value != "hello" {
+		t.Fatalf("message=%q err=%v", value, err)
 	}
 	if value, err := reader.ReadU8(); err != nil || value != 4 {
 		t.Fatalf("chat tag=%d err=%v", value, err)

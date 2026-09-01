@@ -84,6 +84,8 @@ type session struct {
 	gossip       *gossipMenuState
 	gossipClosed bool
 	channels     map[string]struct{}
+	tutorials    [8]uint32
+	tutorialsInDB bool
 }
 
 type account struct {
@@ -376,6 +378,18 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleLogoutCancel() {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
+			if !state.authed || !state.handleTutorialFlag(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_TUTORIAL_CLEAR):
+			if !state.authed || !state.handleTutorialClear(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_TUTORIAL_RESET):
+			if !state.authed || !state.handleTutorialReset(ctx) {
+				return
+			}
 		case uint32(protocol.OpcodeMSG_MOVE_START_FORWARD), uint32(protocol.OpcodeMSG_MOVE_START_BACKWARD), uint32(protocol.OpcodeMSG_MOVE_STOP), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_STRAFE), uint32(protocol.OpcodeMSG_MOVE_JUMP), uint32(protocol.OpcodeMSG_MOVE_START_TURN_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_TURN_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_TURN), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_UP), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_DOWN), uint32(protocol.OpcodeMSG_MOVE_STOP_PITCH), uint32(protocol.OpcodeMSG_MOVE_SET_RUN_MODE), uint32(protocol.OpcodeMSG_MOVE_SET_WALK_MODE), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), uint32(protocol.OpcodeMSG_MOVE_START_SWIM), uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM), uint32(protocol.OpcodeMSG_MOVE_ROOT), uint32(protocol.OpcodeMSG_MOVE_UNROOT), uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT), uint32(protocol.OpcodeMSG_MOVE_HOVER), uint32(protocol.OpcodeMSG_MOVE_SET_FACING), uint32(protocol.OpcodeMSG_MOVE_SET_PITCH):
 			if !state.authed || !state.handleMovement(ctx, header.Opcode, payload) {
 				return
@@ -515,7 +529,64 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionTwoSideInteractionChat, "error", err)
 	}
 	s.debug("world authentication accepted", "account", accountName, "build", build, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))
+	s.loadTutorials(ctx)
 	return s.write(opcodeAuthResponse, []byte{authOK}, true) == nil
+}
+
+func (s *session) loadTutorials(ctx context.Context) {
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	row := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT tut0, tut1, tut2, tut3, tut4, tut5, tut6, tut7 FROM account_tutorial WHERE accountId = ?", s.accountID)
+	var tut0, tut1, tut2, tut3, tut4, tut5, tut6, tut7 uint32
+	if err := row.Scan(&tut0, &tut1, &tut2, &tut3, &tut4, &tut5, &tut6, &tut7); err == nil {
+		s.tutorials = [8]uint32{tut0, tut1, tut2, tut3, tut4, tut5, tut6, tut7}
+		s.tutorialsInDB = true
+	}
+}
+
+func (s *session) saveTutorials(ctx context.Context) {
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	if s.tutorialsInDB {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE account_tutorial SET tut0 = ?, tut1 = ?, tut2 = ?, tut3 = ?, tut4 = ?, tut5 = ?, tut6 = ?, tut7 = ? WHERE accountId = ?",
+			s.tutorials[0], s.tutorials[1], s.tutorials[2], s.tutorials[3], s.tutorials[4], s.tutorials[5], s.tutorials[6], s.tutorials[7], s.accountID)
+	} else {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT INTO account_tutorial(tut0, tut1, tut2, tut3, tut4, tut5, tut6, tut7, accountId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+			s.tutorials[0], s.tutorials[1], s.tutorials[2], s.tutorials[3], s.tutorials[4], s.tutorials[5], s.tutorials[6], s.tutorials[7], s.accountID)
+		s.tutorialsInDB = true
+	}
+}
+
+func (s *session) handleTutorialFlag(ctx context.Context, payload []byte) bool {
+	b := protocol.NewReader(payload)
+	data, err := b.ReadU32()
+	if err != nil {
+		return false
+	}
+	index := data / 32
+	if index < 8 {
+		s.tutorials[index] |= 1 << (data % 32)
+		s.saveTutorials(ctx)
+	}
+	return true
+}
+
+func (s *session) handleTutorialClear(ctx context.Context) bool {
+	for i := range s.tutorials {
+		s.tutorials[i] = 0xFFFFFFFF
+	}
+	s.saveTutorials(ctx)
+	return true
+}
+
+func (s *session) handleTutorialReset(ctx context.Context) bool {
+	for i := range s.tutorials {
+		s.tutorials[i] = 0
+	}
+	s.saveTutorials(ctx)
+	return true
 }
 
 func (s *session) handlePing(payload []byte) bool {

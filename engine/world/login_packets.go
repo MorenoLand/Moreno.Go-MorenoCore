@@ -93,3 +93,12 @@ func buildTimeSyncRequest(counter uint32) []byte {
 	packet.WriteU32(counter)
 	return packet.Bytes()
 }
+
+func buildTutorialFlags(tutorials [8]uint32) []byte {
+	packet := protocol.NewBuffer(32)
+	for _, tut := range tutorials {
+		packet.WriteU32(tut)
+	}
+	return packet.Bytes()
+}
+

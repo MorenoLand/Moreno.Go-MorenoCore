@@ -173,13 +173,13 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	s.sessionsMu.RUnlock()
 	for _, target := range targets {
 		receiverGUID := source.playerGUID
-		opcode := uint16(protocol.OpcodeSMSG_MESSAGECHAT)
-		payload := protocol.BuildChatMessage(chatType, language, source.playerGUID, receiverGUID, message, channel)
-		if source.gmChat {
-			opcode = uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT)
-			payload = protocol.BuildChatMessageWithOptions(chatType, language, source.playerGUID, receiverGUID, message, channel, true, source.player.Name, source.chatTag())
+		if receiver != nil {
+			receiverGUID = receiver.playerGUID
+		} else if chatType == chatChannel {
+			receiverGUID = 0
 		}
-		if err := target.write(opcode, payload, true); err != nil {
+		payload := protocol.BuildChatMessageWithOptions(chatType, language, source.playerGUID, receiverGUID, message, channel, false, "", source.chatTag())
+		if err := target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true); err != nil {
 			target.debug("chat delivery failed", "account", target.accountName, "error", err)
 		}
 	}

@@ -58,6 +58,54 @@ func TestCharacterCreatePersistsReferenceDefaults(t *testing.T) {
 	}
 }
 
+func TestTutorialFlags(t *testing.T) {
+	root, err := packageRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stores := makeMemoryStores(t, root)
+	server := NewServer(stores, slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
+	state := &session{server: server, accountID: 7, authed: true}
+
+	state.loadTutorials(context.Background())
+	if state.tutorials != [8]uint32{} {
+		t.Fatalf("initial tutorials=%v", state.tutorials)
+	}
+
+	flagBuf := protocol.NewBuffer(4)
+	flagBuf.WriteU32(22) // bit 22 of tutorial 0 (chat tutorial)
+	if !state.handleTutorialFlag(context.Background(), flagBuf.Bytes()) {
+		t.Fatal("handleTutorialFlag failed")
+	}
+	if state.tutorials[0] != (1 << 22) {
+		t.Fatalf("tutorials[0]=%x", state.tutorials[0])
+	}
+
+	state.loadTutorials(context.Background())
+	if state.tutorials[0] != (1 << 22) {
+		t.Fatalf("persisted tutorials[0]=%x", state.tutorials[0])
+	}
+
+	if !state.handleTutorialClear(context.Background()) {
+		t.Fatal("handleTutorialClear failed")
+	}
+	for i, v := range state.tutorials {
+		if v != 0xFFFFFFFF {
+			t.Fatalf("tutorials[%d]=%x", i, v)
+		}
+	}
+
+	if !state.handleTutorialReset(context.Background()) {
+		t.Fatal("handleTutorialReset failed")
+	}
+	for i, v := range state.tutorials {
+		if v != 0 {
+			t.Fatalf("tutorials[%d]=%x", i, v)
+		}
+	}
+}
+
+
 func makeMemoryStores(t *testing.T, root string) *database.Set {
 	t.Helper()
 	open := func(name string) *database.Store {
