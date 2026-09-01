@@ -43,7 +43,9 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return true
 	}
-	defer rows.Close()
+	// Drain the mail rows before touching mail_items: a nested query while the
+	// outer cursor is open requires a second pooled connection and deadlocks
+	// pools capped at one connection (see TestMailSendingAndReceiving).
 	var mails []mailEntryRecord
 	for rows.Next() {
 		var id, msgType, stat, tmpl, sender, receiver, exp, del, money, cod, checked int64
@@ -69,16 +71,20 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 		if m.Stationery == 0 {
 			m.Stationery = 41 // Standard default letter stationery
 		}
-		// Load attached items
+		mails = append(mails, m)
+	}
+	rows.Close()
+	// Load attached items per drained mail.
+	for i := range mails {
 		iRows, iErr := db.QueryContext(ctx, `SELECT mi.item_guid, mi.item_template, COALESCE(ii.count, 1), COALESCE(ii.durability, 0)
 			FROM mail_items AS mi
 			LEFT JOIN item_instance AS ii ON ii.guid = mi.item_guid
-			WHERE mi.mail_id = ?`, id)
+			WHERE mi.mail_id = ?`, mails[i].ID)
 		if iErr == nil {
 			for iRows.Next() {
 				var iGuid, iTmpl, iCount, iDur int64
 				if iRows.Scan(&iGuid, &iTmpl, &iCount, &iDur) == nil {
-					m.Items = append(m.Items, mailItemRecord{
+					mails[i].Items = append(mails[i].Items, mailItemRecord{
 						AttachID:   uint32(iGuid),
 						ItemEntry:  uint32(iTmpl),
 						Count:      uint32(iCount),
@@ -88,7 +94,6 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 			}
 			iRows.Close()
 		}
-		mails = append(mails, m)
 	}
 	// Build SMSG_MAIL_LIST_RESULT (0x23B)
 	packet := protocol.NewBuffer(512)
