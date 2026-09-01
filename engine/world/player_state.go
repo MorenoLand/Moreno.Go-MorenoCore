@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,8 @@ const (
 	unitFieldKnownCurrencies          = 632
 	unitFieldWatchedFaction           = 1230
 	unitFieldAmmoID                   = 1198
+	playerVisibleItemStart            = 283
+	playerVisibleItemCount            = 19
 	unitFieldMaxHealth                = 32
 	unitFieldMaxPower1                = 33
 	unitFlagPlayerControlled   uint32 = 0x00000008
@@ -81,13 +84,18 @@ type playerState struct {
 	Spells         []learnedSpell
 	Actions        [144]uint32
 	Cooldowns      []spellCooldown
+	Equipment      string
 }
 
 func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState, error) {
 	state := playerState{GUID: guid, Health: 1, MaxHealth: 1}
 	var race, class, gender, level, playerFlags, mapID, extraFlags, atLogin, zone int64
-	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, name, race, class, gender, level, playerFlags, map, position_x, position_y, position_z, orientation, extra_flags, at_login, zone FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&state.GUID, &state.Name, &race, &class, &gender, &level, &playerFlags, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &extraFlags, &atLogin, &zone); err != nil {
+	var equipment sql.NullString
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, name, race, class, gender, level, playerFlags, map, position_x, position_y, position_z, orientation, extra_flags, at_login, zone, equipmentCache FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&state.GUID, &state.Name, &race, &class, &gender, &level, &playerFlags, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &extraFlags, &atLogin, &zone, &equipment); err != nil {
 		return playerState{}, err
+	}
+	if equipment.Valid {
+		state.Equipment = equipment.String
 	}
 	state.Race, state.Class, state.Gender, state.Level = uint8(race), uint8(class), uint8(gender), uint8(level)
 	state.PlayerFlags, state.Map, state.ExtraFlags, state.AtLogin, state.Zone = uint32(playerFlags), uint32(mapID), uint32(extraFlags), uint32(atLogin), uint32(zone)
@@ -185,6 +193,23 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldKnownCurrencies] = state.KnownCurrency
 	values[unitFieldWatchedFaction] = state.WatchedFaction
 	values[unitFieldAmmoID] = state.AmmoID
+	equipment := strings.Fields(state.Equipment)
+	for slot := 0; slot < playerVisibleItemCount; slot++ {
+		base := slot * 2
+		if base >= len(equipment) {
+			break
+		}
+		itemID, err := strconv.ParseUint(equipment[base], 10, 32)
+		if err != nil || itemID == 0 {
+			continue
+		}
+		values[playerVisibleItemStart+slot*2] = uint32(itemID)
+		if base+1 < len(equipment) {
+			if enchant, parseErr := strconv.ParseUint(equipment[base+1], 10, 32); parseErr == nil {
+				values[playerVisibleItemStart+slot*2+1] = uint32(enchant)
+			}
+		}
+	}
 	for i, power := range state.Powers {
 		values[unitFieldHealth+1+i] = power
 		values[unitFieldMaxPower1+i] = state.MaxPowers[i]
@@ -210,7 +235,6 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	block.WriteF32(state.Y)
 	block.WriteF32(state.Z)
 	block.WriteF32(state.Orientation)
-	block.WriteU32(0)
 	for _, speed := range []float32{2.5, 7, 4.5, 4.722222, 2.5, 7, 4.5, 3.141594, 3.14} {
 		block.WriteF32(speed)
 	}

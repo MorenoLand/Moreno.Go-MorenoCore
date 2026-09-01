@@ -191,6 +191,20 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if updateGUID, err := updates.ReadPackedGUID(); err != nil || updateGUID != 99 {
 		t.Fatalf("update guid=%d err=%v", updateGUID, err)
 	}
+	worldStateOpcode, worldStatePayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worldStateOpcode != uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES) || len(worldStatePayload) < 14 {
+		t.Fatalf("world states opcode=%x payload=%d", worldStateOpcode, len(worldStatePayload))
+	}
+	instanceOpcode, instancePayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instanceOpcode != uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY) || len(instancePayload) != 8 {
+		t.Fatalf("instance difficulty opcode=%x payload=%d", instanceOpcode, len(instancePayload))
+	}
 	initialSpellsOpcode, initialSpellsPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)

@@ -66,3 +66,24 @@ func buildLearnedDanceMoves() []byte {
 	packet.WriteU32(0)
 	return packet.Bytes()
 }
+
+func buildInitWorldStates(state playerState) []byte {
+	worldStates := [][2]int32{{2264, 0}, {2263, 0}, {2262, 0}, {2261, 0}, {2260, 0}, {2259, 0}, {3191, 0}, {3901, 0}}
+	packet := protocol.NewBuffer(16 + len(worldStates)*8)
+	packet.WriteI32(int32(state.Map))
+	packet.WriteI32(int32(state.Zone))
+	packet.WriteI32(0)
+	packet.WriteU16(uint16(len(worldStates)))
+	for _, worldState := range worldStates {
+		packet.WriteI32(worldState[0])
+		packet.WriteI32(worldState[1])
+	}
+	return packet.Bytes()
+}
+
+func buildInstanceDifficulty() []byte {
+	packet := protocol.NewBuffer(8)
+	packet.WriteU32(0)
+	packet.WriteU32(0)
+	return packet.Bytes()
+}
