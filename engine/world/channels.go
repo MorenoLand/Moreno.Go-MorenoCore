@@ -1,6 +1,7 @@
 package world
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -153,6 +154,47 @@ func (s *session) handleLeaveChannel(payload []byte) bool {
 	}
 	s.debug("channel left", "account", s.accountName, "channel", channelName, "id", channelIDValue)
 	return true
+}
+
+func (s *session) handleChannelList(payload []byte) bool {
+	if !s.playerLoaded {
+		return true
+	}
+	reader := protocol.NewReader(payload)
+	name, err := reader.ReadCString()
+	if err != nil {
+		return false
+	}
+	key := channelKey(name)
+	s.server.channelsMu.RLock()
+	channel := s.server.channels[key]
+	if channel == nil {
+		s.server.channelsMu.RUnlock()
+		return true
+	}
+	type member struct {
+		guid  uint64
+		flags uint8
+	}
+	members := make([]member, 0, len(channel.Members))
+	for session := range channel.Members {
+		if session.playerLoaded && session.player != nil {
+			members = append(members, member{guid: session.playerGUID})
+		}
+	}
+	channelName, channelFlagsValue := channel.Name, channel.Flags
+	s.server.channelsMu.RUnlock()
+	sort.Slice(members, func(i, j int) bool { return members[i].guid < members[j].guid })
+	packet := protocol.NewBuffer(64 + len(members)*9)
+	packet.WriteU8(1)
+	packet.WriteCString(channelName)
+	packet.WriteU8(channelFlagsValue)
+	packet.WriteU32(uint32(len(members)))
+	for _, member := range members {
+		packet.WriteU64(member.guid)
+		packet.WriteU8(member.flags)
+	}
+	return s.write(uint16(protocol.OpcodeSMSG_CHANNEL_LIST), packet.Bytes(), true) == nil
 }
 
 func (s *session) sendChannelNotify(notice uint8, name string, extra any) error {

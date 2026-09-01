@@ -104,3 +104,42 @@ func TestHandleJoinAndLeaveChannel(t *testing.T) {
 		t.Fatal("channel was not removed")
 	}
 }
+
+func TestHandleChannelList(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{channels: map[string]*worldChannel{"general": {ID: 1, Name: "General", Flags: 0x18, Members: map[*session]struct{}{}}}}
+	state := &session{server: server, conn: serverConn, playerLoaded: true, player: &playerState{GUID: 26}, playerGUID: 26}
+	server.channels["general"].Members[state] = struct{}{}
+	payload := protocol.NewBuffer(16)
+	payload.WriteCString("General")
+	done := make(chan bool, 1)
+	go func() { done <- state.handleChannelList(payload.Bytes()) }()
+	opcode, response, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !<-done || opcode != uint16(protocol.OpcodeSMSG_CHANNEL_LIST) {
+		t.Fatalf("result=%v opcode=%x", state.playerLoaded, opcode)
+	}
+	reader := protocol.NewReader(response)
+	if value, err := reader.ReadU8(); err != nil || value != 1 {
+		t.Fatalf("type=%d err=%v", value, err)
+	}
+	if value, err := reader.ReadCString(); err != nil || value != "General" {
+		t.Fatalf("name=%q err=%v", value, err)
+	}
+	if value, err := reader.ReadU8(); err != nil || value != 0x18 {
+		t.Fatalf("flags=%x err=%v", value, err)
+	}
+	if value, err := reader.ReadU32(); err != nil || value != 1 {
+		t.Fatalf("count=%d err=%v", value, err)
+	}
+	if value, err := reader.ReadU64(); err != nil || value != 26 {
+		t.Fatalf("guid=%d err=%v", value, err)
+	}
+	if value, err := reader.ReadU8(); err != nil || value != 0 {
+		t.Fatalf("member flags=%d err=%v", value, err)
+	}
+}

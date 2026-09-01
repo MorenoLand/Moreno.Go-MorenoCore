@@ -216,6 +216,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleLeaveChannel(payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_LIST), uint32(protocol.OpcodeCMSG_CHANNEL_DISPLAY_LIST):
+			if !state.authed || !state.handleChannelList(payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_GOSSIP_SELECT_OPTION):
 			if !state.authed || !state.handleGossipSelectOption(ctx, payload) {
 				return
