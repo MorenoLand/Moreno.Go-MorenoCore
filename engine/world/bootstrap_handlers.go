@@ -54,59 +54,6 @@ func (s *session) handleNameQuery(ctx context.Context, payload []byte) bool {
 	return s.write(uint16(protocol.OpcodeSMSG_NAME_QUERY_RESPONSE), packet.Bytes(), true) == nil
 }
 
-func (s *session) handleGuildQuery(ctx context.Context, payload []byte) bool {
-	reader := protocol.NewReader(payload)
-	guildID, err := reader.ReadU32()
-	if err != nil {
-		return false
-	}
-	if guildID == 0 {
-		return true
-	}
-	var name string
-	var emblemStyle, emblemColor, borderStyle, borderColor, backgroundColor int64
-	err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT name, EmblemStyle, EmblemColor, BorderStyle, BorderColor, BackgroundColor FROM guild WHERE guildid = ?", guildID).Scan(&name, &emblemStyle, &emblemColor, &borderStyle, &borderColor, &backgroundColor)
-	if errors.Is(err, sql.ErrNoRows) {
-		return true
-	}
-	if err != nil {
-		s.debug("guild query failed", "account", s.accountName, "guild", guildID, "error", err)
-		return false
-	}
-	ranks := make([]string, 0, 10)
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT rname FROM guild_rank WHERE guildid = ? ORDER BY rid", guildID)
-	if err != nil && !missingTable(err) {
-		s.debug("guild ranks query failed", "account", s.accountName, "guild", guildID, "error", err)
-		return false
-	}
-	if rows != nil {
-		defer rows.Close()
-		for rows.Next() {
-			var rank string
-			if err := rows.Scan(&rank); err != nil {
-				return false
-			}
-			ranks = append(ranks, rank)
-		}
-		if err := rows.Err(); err != nil {
-			return false
-		}
-	}
-	packet := protocol.NewBuffer(64)
-	packet.WriteU32(guildID)
-	packet.WriteCString(name)
-	for _, rank := range ranks {
-		packet.WriteCString(rank)
-	}
-	packet.WriteU32(uint32(emblemStyle))
-	packet.WriteU32(uint32(emblemColor))
-	packet.WriteU32(uint32(borderStyle))
-	packet.WriteU32(uint32(borderColor))
-	packet.WriteU32(uint32(backgroundColor))
-	packet.WriteU32(uint32(len(ranks)))
-	return s.write(uint16(protocol.OpcodeSMSG_GUILD_QUERY_RESPONSE), packet.Bytes(), true) == nil
-}
-
 func (s *session) handleQueryTime() bool {
 	now := time.Now()
 	next := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, now.Location())
