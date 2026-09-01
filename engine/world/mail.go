@@ -409,8 +409,13 @@ func (s *session) handleQueryNextMailTime(ctx context.Context) bool {
 					continue
 				}
 				seenSenders[senderGUID] = struct{}{}
+				altSender := uint32(0)
+				if msgType != 0 {
+					altSender = uint32(sender)
+				}
 				entries = append(entries, nextMailEntry{
 					Sender:      senderGUID,
+					AltSender:   altSender,
 					MessageType: uint8(msgType),
 					Stationery:  uint32(stationery),
 					TimeLeft:    float32(deliverTime - time.Now().Unix()),

@@ -43,13 +43,14 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	var state luaCreatureState
 	var displayID, health, maxLevel, gossipMenuID, npcFlags int64
-	npcFlagArgs := []any{low, entry}
+	var selectArgs []any
 	npcFlagExpr := "t.npcflag"
-	if flagClause, ok := s.server.gameEventNPCFlagClause(ctx, &npcFlagArgs); ok {
+	if flagClause, ok := s.server.gameEventNPCFlagClause(ctx, &selectArgs); ok {
 		npcFlagExpr = "(t.npcflag | " + flagClause + ")"
 	}
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), c.curhealth, t.maxlevel, t.gossip_menu_id, "+npcFlagExpr+", c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", npcFlagArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &health, &maxLevel, &gossipMenuID, &npcFlags, &state.Map, &state.X, &state.Y, &state.Z)
-	if err != nil && isMissingColumn(err) {
+	queryArgs := append(selectArgs, low, entry)
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), c.curhealth, t.maxlevel, t.gossip_menu_id, "+npcFlagExpr+", c.map, c.position_x, c.position_y, c.position_z FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", queryArgs...).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &health, &maxLevel, &gossipMenuID, &npcFlags, &state.Map, &state.X, &state.Y, &state.Z)
+	if err != nil && (isMissingColumn(err) || missingTable(err)) {
 		err = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, t.name, COALESCE(NULLIF(c.modelid, 0), t.modelid1), c.curhealth, t.maxlevel, t.gossip_menu_id, t.npcflag FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.guid = ? AND c.id = ?", low, entry).Scan(&state.GUID, &state.Entry, &state.Name, &displayID, &health, &maxLevel, &gossipMenuID, &npcFlags)
 	}
 	if err != nil {

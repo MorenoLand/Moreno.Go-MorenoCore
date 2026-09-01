@@ -40,7 +40,7 @@ func TestHandleAttackSwingStartsAndStopsCombat(t *testing.T) {
 	if _, err := db.Exec("CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, curhealth INTEGER NOT NULL)"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("INSERT INTO creature VALUES (7, 68, 0, 3, 4, 0, 100)"); err != nil {
+	if _, err := db.Exec("INSERT INTO creature VALUES (7, 68, 0, 3, 4, 0, 10)"); err != nil {
 		t.Fatal(err)
 	}
 	serverConn, clientConn := net.Pipe()
@@ -85,14 +85,13 @@ func TestHandleAttackSwingStartsAndStopsCombat(t *testing.T) {
 			attackStartPayload = f.data
 		case uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE):
 			sawStateUpdate = true
-			// Now stop combat; this emits SMSG_ATTACK_STOP.
-			go func() { state.handleAttackStop() }()
 		case uint16(protocol.OpcodeSMSG_ATTACK_STOP):
 			sawStop = true
 			attackStopPayload = f.data
 		}
 	}
 
+	<-done
 	// Close server conn so reader goroutine exits
 	serverConn.Close()
 	<-readerDone

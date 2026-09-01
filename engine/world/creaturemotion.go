@@ -69,7 +69,7 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 			motion.Speed = 2.5
 		}
 		if moveType == 2 {
-			motion.PathID = s.loadCreaturePathID(ctx, guid)
+			motion.PathID = s.loadCreaturePathID(ctx, guid, entry)
 			motion.Points = s.loadWaypoints(ctx, motion.PathID)
 		}
 		s.creatureMotion[key] = motion
@@ -78,9 +78,9 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 	return motion
 }
 
-func (s *Server) loadCreaturePathID(ctx context.Context, guid uint32) uint32 {
+func (s *Server) loadCreaturePathID(ctx context.Context, guid, entry uint32) uint32 {
 	var pathID int64
-	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(path_id, 0), ?) FROM creature_addon WHERE guid = ?", guid, guid).Scan(&pathID); err != nil {
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(ca.path_id, 0), NULLIF(cta.path_id, 0), ?) FROM creature AS c LEFT JOIN creature_addon AS ca ON ca.guid = c.guid LEFT JOIN creature_template_addon AS cta ON cta.entry = c.id WHERE c.guid = ?", guid, guid).Scan(&pathID); err != nil {
 		return guid
 	}
 	if pathID == 0 {
@@ -144,12 +144,8 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
 		WHERE c.map = ? AND c.MovementType IN (1, 2) AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ? AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)`
-	seen := make(map[uint32]struct{})
+	seenCreatures := make(map[uint32]struct{})
 	for _, p := range players {
-		if _, dup := seen[p.Map]; dup {
-			continue
-		}
-		seen[p.Map] = struct{}{}
 		rows, err := s.WorldStore.DB.QueryContext(ctx, query, p.Map, float64(p.X)-distance, float64(p.X)+distance, float64(p.Y)-distance, float64(p.Y)+distance)
 		if err != nil {
 			continue
@@ -160,6 +156,10 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			if err := rows.Scan(&guid, &entry, &x, &y, &z, &moveType, &wander, &walkSpeed); err != nil {
 				continue
 			}
+			if _, dup := seenCreatures[uint32(guid)]; dup {
+				continue
+			}
+			seenCreatures[uint32(guid)] = struct{}{}
 			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, float32(x), float32(y), float32(z), uint32(moveType), wander, float32(walkSpeed))
 			s.stepCreatureMotion(ctx, motion, now)
 		}

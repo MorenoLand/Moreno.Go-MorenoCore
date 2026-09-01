@@ -60,12 +60,13 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 	// Event creatures spawn only while their event runs; game_event_npcflag
 	// flags OR into the template npcflag during events (guards gaining
 	// seasonal gossip/questgiver flags).
-	eventArgs := make([]any, 0, 4)
-	eventClause := gameEventSpawnClause("gec.eventEntry", s.activeEventList(ctx), &eventArgs)
+	var selectArgs []any
 	npcFlagExpr := "0"
-	if flagClause, ok := s.gameEventNPCFlagClause(ctx, &eventArgs); ok {
+	if flagClause, ok := s.gameEventNPCFlagClause(ctx, &selectArgs); ok {
 		npcFlagExpr = flagClause
 	}
+	var eventArgs []any
+	eventClause := gameEventSpawnClause("gec.eventEntry", s.activeEventList(ctx), &eventArgs)
 	fullQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,
 		COALESCE(NULLIF(c.modelid, 0), t.modelid1), t.faction, (t.npcflag | ` + npcFlagExpr + `), t.unit_flags, t.dynamicflags,
 		t.maxlevel, c.curhealth, c.curmana, t.scale, t.speed_walk, t.speed_run, t.BaseAttackTime, t.RangeAttackTime,
@@ -87,7 +88,10 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		AND (? OR (COALESCE(t.flags_extra, 0) & 1) = 0)
 		AND ` + eventClause + `
 		ORDER BY c.guid`
-	queryArgs := append([]any{state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM}, eventArgs...)
+	queryArgs := make([]any, 0, len(selectArgs)+7+len(eventArgs))
+	queryArgs = append(queryArgs, selectArgs...)
+	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM)
+	queryArgs = append(queryArgs, eventArgs...)
 	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, queryArgs...)
 	if err != nil {
 		fallbackQuery := `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.orientation,

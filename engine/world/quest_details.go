@@ -101,8 +101,7 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 			return false
 		}
 	}
-	creature := s.luaCreature(ctx, guid)
-	if creature == nil || !s.creatureStartsQuest(ctx, objectUint32OrZero(creature, "Entry"), questID) {
+	if !s.questgiverStartsQuest(ctx, guid, questID) {
 		return true
 	}
 	// TrinityCore re-validates CanTakeQuest on accept before AddQuest.
@@ -138,7 +137,22 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 }
 
 func (s *session) handleQuestgiverCancel() bool {
-	return s.sendGossipComplete()
+	s.gossip = nil
+	s.gossipClosed = true
+	return s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true) == nil
+}
+
+func (s *session) questgiverStartsQuest(ctx context.Context, guid uint64, questID uint32) bool {
+	high := uint16(guid >> 48)
+	if high == 0xF110 {
+		entry := uint32((guid >> 24) & 0x00FFFFFF)
+		return questRelationExists(ctx, s.server.WorldStore.DB, "gameobject_queststarter", entry, questID)
+	}
+	creature := s.luaCreature(ctx, guid)
+	if creature != nil {
+		return s.creatureStartsQuest(ctx, objectUint32OrZero(creature, "Entry"), questID)
+	}
+	return false
 }
 
 func (s *session) sendGossipComplete() bool {
