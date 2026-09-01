@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -37,38 +38,90 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 		return true
 	}
 	creatureEntry := uint32((trainerGUID >> 24) & 0xFFFFFF)
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT SpellID, COALESCE(MoneyCost, 0), COALESCE(ReqSkill, 0), COALESCE(ReqSkillValue, 0), COALESCE(ReqLevel, 0)
-		FROM npc_trainer WHERE ID = ? OR ID = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)
-		ORDER BY ReqLevel, SpellID LIMIT 128`, creatureEntry, creatureEntry)
-	if err != nil {
-		return true
+	if creatureEntry == 0 {
+		creatureEntry = uint32(trainerGUID & 0xFFFFFF)
 	}
-	defer rows.Close()
+
 	var spells []trainerSpellRecord
-	for rows.Next() {
-		var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel int64
-		if err := rows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel); err != nil {
-			continue
-		}
-		serviceState := uint8(0) // Available
-		if s.hasLearnedSpell(uint32(spellID)) {
-			serviceState = 2 // Already Known
-		} else if s.player.Level < uint8(reqLevel) || s.player.Money < uint32(moneyCost) {
-			serviceState = 1 // Not Available
-		}
-		spells = append(spells, trainerSpellRecord{
-			SpellID:       uint32(spellID),
-			ServiceState:  serviceState,
-			Cost:          uint32(moneyCost),
-			ReqLevel:      uint8(reqLevel),
-			ReqSkill:      uint32(reqSkill),
-			ReqSkillValue: uint32(reqSkillValue),
-		})
-	}
 	greeting := "Hello! Ready for some training?"
+	var trainerType uint32 = 0
+
+	// 1. TrinityCore 3.3.5: trainer_spell + trainer + creature_default_trainer
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT ts.SpellId, COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqLevel, 0),
+		COALESCE(ts.ReqAbility1, 0), COALESCE(ts.ReqAbility2, 0), COALESCE(ts.ReqAbility3, 0),
+		COALESCE(t.Type, 0), COALESCE(t.Greeting, 'Hello! Ready for some training?')
+		FROM trainer_spell AS ts
+		LEFT JOIN trainer AS t ON t.Id = ts.TrainerId
+		WHERE ts.TrainerId = (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ? LIMIT 1)
+		   OR ts.TrainerId = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)
+		   OR ts.TrainerId = (SELECT trainer_spell FROM creature_template WHERE entry = ? LIMIT 1)
+		   OR ts.TrainerId = ?
+		ORDER BY ts.ReqLevel, ts.SpellId LIMIT 128`, creatureEntry, creatureEntry, creatureEntry, creatureEntry)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel, reqAb1, reqAb2, reqAb3, tType int64
+			var greet sql.NullString
+			if err := rows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel, &reqAb1, &reqAb2, &reqAb3, &tType, &greet); err != nil {
+				continue
+			}
+			if greet.Valid && greet.String != "" {
+				greeting = greet.String
+			}
+			trainerType = uint32(tType)
+			serviceState := uint8(0) // Available
+			if s.hasLearnedSpell(uint32(spellID)) {
+				serviceState = 2 // Already Known
+			} else if s.player.Level < uint8(reqLevel) || s.player.Money < uint32(moneyCost) {
+				serviceState = 1 // Not Available
+			}
+			spells = append(spells, trainerSpellRecord{
+				SpellID:       uint32(spellID),
+				ServiceState:  serviceState,
+				Cost:          uint32(moneyCost),
+				ReqLevel:      uint8(reqLevel),
+				ReqSkill:      uint32(reqSkill),
+				ReqSkillValue: uint32(reqSkillValue),
+				ReqSpell:      uint32(reqAb1),
+				ReqSpellChain: uint32(reqAb2),
+				ReqSpell3:     uint32(reqAb3),
+			})
+		}
+	}
+
+	// 2. Fallback to legacy npc_trainer if trainer_spell returned no rows
+	if len(spells) == 0 {
+		fbRows, fbErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT SpellID, COALESCE(MoneyCost, 0), COALESCE(ReqSkill, 0), COALESCE(ReqSkillValue, 0), COALESCE(ReqLevel, 0)
+			FROM npc_trainer WHERE ID = ? OR ID = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)
+			ORDER BY ReqLevel, SpellID LIMIT 128`, creatureEntry, creatureEntry)
+		if fbErr == nil {
+			defer fbRows.Close()
+			for fbRows.Next() {
+				var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel int64
+				if err := fbRows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel); err != nil {
+					continue
+				}
+				serviceState := uint8(0)
+				if s.hasLearnedSpell(uint32(spellID)) {
+					serviceState = 2
+				} else if s.player.Level < uint8(reqLevel) || s.player.Money < uint32(moneyCost) {
+					serviceState = 1
+				}
+				spells = append(spells, trainerSpellRecord{
+					SpellID:       uint32(spellID),
+					ServiceState:  serviceState,
+					Cost:          uint32(moneyCost),
+					ReqLevel:      uint8(reqLevel),
+					ReqSkill:      uint32(reqSkill),
+					ReqSkillValue: uint32(reqSkillValue),
+				})
+			}
+		}
+	}
+
 	packet := protocol.NewBuffer(8 + 4 + 4 + len(spells)*38 + len(greeting) + 1)
 	packet.WriteU64(trainerGUID)
-	packet.WriteU32(0) // TrainerType = 0 (Class/General)
+	packet.WriteU32(trainerType)
 	packet.WriteU32(uint32(len(spells)))
 	for _, sp := range spells {
 		packet.WriteU32(sp.SpellID)
@@ -111,12 +164,26 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		return true
 	}
 	creatureEntry := uint32((trainerGUID >> 24) & 0xFFFFFF)
+	if creatureEntry == 0 {
+		creatureEntry = uint32(trainerGUID & 0xFFFFFF)
+	}
+
 	var moneyCost, reqLevel int64
-	err = wdb.QueryRowContext(ctx, `SELECT COALESCE(MoneyCost, 0), COALESCE(ReqLevel, 0)
-		FROM npc_trainer WHERE (ID = ? OR ID = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)) AND SpellID = ? LIMIT 1`,
-		creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel)
+	err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0)
+		FROM trainer_spell AS ts
+		WHERE (ts.TrainerId = (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ? LIMIT 1)
+		   OR ts.TrainerId = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)
+		   OR ts.TrainerId = (SELECT trainer_spell FROM creature_template WHERE entry = ? LIMIT 1)
+		   OR ts.TrainerId = ?) AND ts.SpellId = ? LIMIT 1`,
+		creatureEntry, creatureEntry, creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel)
 	if err != nil {
-		return true
+		// Fallback to legacy npc_trainer
+		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(MoneyCost, 0), COALESCE(ReqLevel, 0)
+			FROM npc_trainer WHERE (ID = ? OR ID = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)) AND SpellID = ? LIMIT 1`,
+			creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel)
+		if err != nil {
+			return true
+		}
 	}
 	if s.player.Money < uint32(moneyCost) || s.player.Level < uint8(reqLevel) {
 		return true

@@ -19,11 +19,16 @@ func TestTrainerListingAndLearning(t *testing.T) {
 	for _, stmt := range []string{
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE character_spell (guid INTEGER, spell INTEGER, active INTEGER, disabled INTEGER, PRIMARY KEY (guid, spell))",
-		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, trainer_id INTEGER)",
+		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, trainer_id INTEGER, trainer_spell INTEGER)",
+		"CREATE TABLE creature_default_trainer (CreatureId INTEGER PRIMARY KEY, TrainerId INTEGER)",
+		"CREATE TABLE trainer (Id INTEGER PRIMARY KEY, Type INTEGER, Requirement INTEGER, Greeting TEXT)",
+		"CREATE TABLE trainer_spell (TrainerId INTEGER, SpellId INTEGER, MoneyCost INTEGER, ReqSkillLine INTEGER, ReqSkillRank INTEGER, ReqAbility1 INTEGER, ReqAbility2 INTEGER, ReqAbility3 INTEGER, ReqLevel INTEGER, PRIMARY KEY (TrainerId, SpellId))",
 		"CREATE TABLE npc_trainer (ID INTEGER, SpellID INTEGER, MoneyCost INTEGER, ReqSkill INTEGER, ReqSkillValue INTEGER, ReqLevel INTEGER)",
 		"INSERT INTO characters VALUES (1, 500, '')",
-		"INSERT INTO creature_template VALUES (202, 202)",
-		"INSERT INTO npc_trainer VALUES (202, 133, 100, 0, 0, 1)", // Fireball
+		"INSERT INTO creature_template VALUES (202, 0, 0)",
+		"INSERT INTO creature_default_trainer VALUES (202, 50)",
+		"INSERT INTO trainer VALUES (50, 0, 0, 'Ready to learn?')",
+		"INSERT INTO trainer_spell VALUES (50, 133, 100, 0, 0, 0, 0, 0, 1)", // Fireball
 	} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
