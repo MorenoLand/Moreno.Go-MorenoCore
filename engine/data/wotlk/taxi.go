@@ -2,6 +2,7 @@ package wotlk
 
 import (
 	"fmt"
+	"sort"
 )
 
 // TaxiNode mirrors TrinityCore TaxiNodesEntry (3.3.5): ID, ContinentID,
@@ -172,3 +173,110 @@ func (s *Store) NearestTaxiNode(x, y, z float32, mapID uint32, teamAlliance bool
 }
 
 
+
+// TaxiPathLinks returns the TaxiPath.dbc row id and price for a direct
+// hop between two nodes (0 when no such path exists).
+func (s *Store) TaxiPathLinks(from, to uint32) (uint32, uint32, bool, error) {
+	pathsFile, err := s.File("TaxiPath")
+	if err != nil {
+		return 0, 0, false, err
+	}
+	for i := 0; i < pathsFile.Records(); i++ {
+		record, err := pathsFile.Record(i)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		pathFrom, err := record.Uint32(1)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		pathTo, err := record.Uint32(2)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		if pathFrom != from || pathTo != to {
+			continue
+		}
+		price, err := record.Uint32(3)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		return record.Uint32Unchecked(0), price, true, nil
+	}
+	return 0, 0, false, nil
+}
+
+// TaxiSplinePoint is one TaxiPathNode.dbc vertex of a flight path.
+type TaxiSplinePoint struct {
+	X     float32
+	Y     float32
+	Z     float32
+	Delay uint32
+}
+
+// TaxiPathPoints loads the ordered spline vertices for a TaxiPath id.
+func (s *Store) TaxiPathPoints(pathID uint32) ([]TaxiSplinePoint, error) {
+	nodesFile, err := s.File("TaxiPathNode")
+	if err != nil {
+		return nil, err
+	}
+	type indexed struct {
+		index int32
+		point TaxiSplinePoint
+	}
+	var points []indexed
+	for i := 0; i < nodesFile.Records(); i++ {
+		record, err := nodesFile.Record(i)
+		if err != nil {
+			return nil, err
+		}
+		nodePath, err := record.Uint32(1)
+		if err != nil || nodePath != pathID {
+			continue
+		}
+		nodeIndex, err := record.Int32(2)
+		if err != nil {
+			continue
+		}
+		point := TaxiSplinePoint{}
+		if point.X, err = record.Float32(4); err != nil {
+			continue
+		}
+		if point.Y, err = record.Float32(5); err != nil {
+			continue
+		}
+		if point.Z, err = record.Float32(6); err != nil {
+			continue
+		}
+		delay, err := record.Uint32(8)
+		if err == nil {
+			point.Delay = delay
+		}
+		points = append(points, indexed{index: nodeIndex, point: point})
+	}
+	sort.Slice(points, func(i, j int) bool { return points[i].index < points[j].index })
+	result := make([]TaxiSplinePoint, len(points))
+	for i, p := range points {
+		result[i] = p.point
+	}
+	return result, nil
+}
+
+// TaxiNodeMount returns the mount display id serving the team at a node.
+func (s *Store) TaxiNodeMount(node uint32, teamAlliance bool) (uint32, error) {
+	network, err := s.taxiNetwork()
+	if err != nil {
+		return 0, err
+	}
+	teamIndex := 0
+	if teamAlliance {
+		teamIndex = 1
+	}
+	if index, ok := network.byID[node]; ok {
+		if mount := network.nodes[index].MountCreatureID[teamIndex]; mount != 0 {
+			return mount, nil
+		}
+		return network.nodes[index].MountCreatureID[0], nil
+	}
+	return 0, nil
+}

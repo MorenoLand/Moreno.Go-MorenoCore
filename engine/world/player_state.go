@@ -120,6 +120,7 @@ type playerState struct {
 	SheathState    uint8
 	TaxiMask       [taxiMaskSize]uint32
 	QuestLog       [playerQuestLogSlots]questLogEntry
+	MountDisplayID uint32
 }
 
 func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState, error) {
@@ -341,6 +342,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 			values[unitFieldNativeDisplayID] = values[unitFieldDisplayID]
 		}
 	}
+	if state.MountDisplayID != 0 {
+		values[unitFieldMountDisplayID] = state.MountDisplayID
+	}
 	values[unitFieldPlayerFlags] = state.PlayerFlags
 	values[unitFieldPlayerBytes] = uint32(state.Skin) | uint32(state.Face)<<8 | uint32(state.HairStyle)<<16 | uint32(state.HairColor)<<24
 	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.SheathState)<<8
@@ -492,6 +496,23 @@ func (s *session) sendPlayerQuestLogUpdate(slot int) {
 		return
 	}
 	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+}
+
+// sendPlayerMountUpdate pushes UNIT_FIELD_MOUNTDISPLAYID as a values update.
+func (s *session) sendPlayerMountUpdate() {
+	if s.player == nil {
+		return
+	}
+	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, map[int]uint32{unitFieldMountDisplayID: s.player.MountDisplayID})
+	if err != nil {
+		return
+	}
+	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+}
+
+// currentPlayer returns the live player state for timer callbacks.
+func (s *session) currentPlayer() *playerState {
+	return s.player
 }
 
 // sendPlayerMoneyUpdate pushes PLAYER_FIELD_COINAGE as a values update.
