@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -29,19 +30,35 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 	if s.player == nil {
 		return
 	}
+	sameMap := s.player.Map == mapID
 	s.player.Map = mapID
 	s.player.X = x
 	s.player.Y = y
 	s.player.Z = z
 	s.player.Orientation = orientation
 
-	packet := protocol.NewBuffer(20)
-	packet.WriteU32(mapID)
-	packet.WriteF32(x)
-	packet.WriteF32(y)
-	packet.WriteF32(z)
-	packet.WriteF32(orientation)
-	_ = s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true)
+	if sameMap {
+		packet := protocol.NewBuffer(48)
+		packet.WritePackedGUID(s.playerGUID)
+		packet.WriteU32(0) // counter
+		packet.WriteU32(0) // movement flags
+		packet.WriteU16(0) // extra flags
+		packet.WriteU32(uint32(time.Now().UnixMilli()))
+		packet.WriteF32(x)
+		packet.WriteF32(y)
+		packet.WriteF32(z)
+		packet.WriteF32(orientation)
+		packet.WriteU32(0) // fall time
+		_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), packet.Bytes(), true)
+	} else {
+		packet := protocol.NewBuffer(20)
+		packet.WriteU32(mapID)
+		packet.WriteF32(x)
+		packet.WriteF32(y)
+		packet.WriteF32(z)
+		packet.WriteF32(orientation)
+		_ = s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true)
+	}
 
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",

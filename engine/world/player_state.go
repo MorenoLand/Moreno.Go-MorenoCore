@@ -175,13 +175,9 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT skill, value, max FROM character_skills WHERE guid = ?", state.GUID)
 	if err != nil {
-		if isMissingColumn(err) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
-			state.Skills = defaultRacialSkills(state.Race, state.Class)
-			return nil
-		}
-		return err
+		state.Skills = defaultRacialSkills(state.Race, state.Class)
+		return nil
 	}
-	defer rows.Close()
 	skills := make([]playerSkill, 0, 16)
 	hasLanguage := false
 	for rows.Next() {
@@ -193,6 +189,7 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 			skills = append(skills, playerSkill{Skill: skill, Step: 1, Value: value, Max: max})
 		}
 	}
+	_ = rows.Close()
 	if !hasLanguage || len(skills) == 0 {
 		defaults := defaultRacialSkills(state.Race, state.Class)
 		for _, def := range defaults {
