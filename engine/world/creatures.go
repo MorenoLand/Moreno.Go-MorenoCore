@@ -119,6 +119,7 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	block.WriteF32(spawn.Y)
 	block.WriteF32(spawn.Z)
 	block.WriteF32(spawn.Orientation)
+	block.WriteU32(0)
 	for _, speed := range []float32{2.5 * spawn.WalkSpeed, 7 * spawn.RunSpeed, 4.5 * spawn.RunSpeed, 4.722222 * spawn.WalkSpeed, 2.5 * spawn.WalkSpeed, 7 * spawn.RunSpeed, 4.5 * spawn.RunSpeed, 3.141594, 3.14} {
 		block.WriteF32(speed)
 	}
