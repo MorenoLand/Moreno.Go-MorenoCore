@@ -586,6 +586,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleQuestgiverCancel() {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_QUESTLOG_REMOVE_QUEST):
+			if !state.authed || !state.handleQuestLogRemoveQuest(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_NAME_QUERY):
 			if !state.authed || !state.handleNameQuery(ctx, payload) {
 				return

@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"net"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func TestCreatureWaypointPatrol(t *testing.T) {
 
 	// First step: walks toward point 1.
 	now := time.Now()
-	server.stepCreatureMotion(ctx, motion, now)
+	server.stepCreatureMotion(ctx, motion, nil, now)
 	if !motion.Moving {
 		t.Fatal("expected motion to start toward waypoint 1")
 	}
@@ -53,7 +54,7 @@ func TestCreatureWaypointPatrol(t *testing.T) {
 	}
 	// Simulate move completion + no delay.
 	after := now.Add(time.Duration(motion.MoveEnds.Sub(now)) + time.Second)
-	server.stepCreatureMotion(ctx, motion, after)
+	server.stepCreatureMotion(ctx, motion, nil, after)
 	if motion.NextIdx != 2 {
 		t.Fatalf("expected waypoint 3 queued, got idx %d", motion.NextIdx)
 	}
@@ -61,7 +62,7 @@ func TestCreatureWaypointPatrol(t *testing.T) {
 	// Random wander sanity: MotionType 1 stays within wander_distance of home.
 	wander := server.motionFor(ctx, 11, 68, 0, 5, 5, 0, 1, 3.0, 2.5)
 	for i := 0; i < 20; i++ {
-		server.stepCreatureMotion(ctx, wander, time.Now().Add(time.Duration(i)*2*time.Second))
+		server.stepCreatureMotion(ctx, wander, nil, time.Now().Add(time.Duration(i)*2*time.Second))
 	}
 	if d := dist2D(wander.X, wander.Y, wander.HomeX, wander.HomeY); d > 3.1 {
 		t.Fatalf("wanderer drifted %f beyond wander_distance", d)
@@ -84,4 +85,73 @@ func sqrt64(v float64) float64 {
 		x = (x + v/x) / 2
 	}
 	return x
+}
+
+func TestCreatureHostileAggroAndCombat(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	sess := &session{conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Map: 0, X: 5.0, Y: 0.0, Z: 0.0, Race: 1, Health: 100}}
+	server := &Server{sessions: make(map[*session]struct{}), creatureMotion: make(map[uint64]*creatureMotion)}
+	server.sessions[sess] = struct{}{}
+
+	motion := &creatureMotion{
+		GUID:     creatureWorldGUID(100, 68),
+		Entry:    68,
+		Map:      0,
+		X:        0.0,
+		Y:        0.0,
+		Z:        0.0,
+		Faction:  14, // Monster (Hostile)
+		Level:    5,
+		Speed:    2.5,
+		RunSpeed: 7.0,
+	}
+
+	players := []playerPos{{
+		Map:    0,
+		X:      5.0,
+		Y:      0.0,
+		Z:      0.0,
+		GUID:   1,
+		Race:   1,
+		Level:  1,
+		IsGM:   false,
+		IsDead: false,
+		Sess:   sess,
+	}}
+
+	now := time.Now()
+	// Goroutine to drain server frames
+	stopReader := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopReader:
+				return
+			default:
+				_, _, err := readServerFrame(clientConn, nil)
+				if err != nil {
+					return
+				}
+			}
+		}
+	}()
+	defer close(stopReader)
+
+	// 1. Hostile creature within 15 yards should aggro on player
+	server.stepCreatureMotion(context.Background(), motion, players, now)
+	if !motion.InCombat {
+		t.Fatal("expected creature to enter combat")
+	}
+	if motion.TargetGUID != 1 {
+		t.Fatalf("expected creature target to be 1, got %d", motion.TargetGUID)
+	}
+
+	// 2. Creature pursues target at run speed
+	server.stepCreatureMotion(context.Background(), motion, players, now)
+	if motion.X != 5.0 || motion.Y != 0.0 {
+		t.Fatalf("expected creature to move toward target, got pos %f,%f", motion.X, motion.Y)
+	}
 }

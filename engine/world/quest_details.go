@@ -142,6 +142,33 @@ func (s *session) handleQuestgiverCancel() bool {
 	return s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true) == nil
 }
 
+func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
+		return true
+	}
+	slot := int(payload[0])
+	if slot < 0 || slot >= playerQuestLogSlots {
+		return true
+	}
+	questID := s.player.QuestLog[slot].QuestID
+	if questID == 0 {
+		return true
+	}
+	s.player.QuestLog[slot] = questLogEntry{}
+	s.sendPlayerQuestLogUpdate(slot)
+
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_daily WHERE guid = ? AND quest = ?", s.playerGUID, questID)
+	}
+	if s.server.Features != nil && s.server.Features.Scripts != nil {
+		_, _ = s.server.Features.Scripts.TriggerPlayerEvent(ctx, 43, 43, s.luaPlayer(), questID)
+	}
+	s.debug("quest abandoned", "account", s.accountName, "quest", questID, "slot", slot)
+	return true
+}
+
 func (s *session) questgiverStartsQuest(ctx context.Context, guid uint64, questID uint32) bool {
 	high := uint16(guid >> 48)
 	if high == 0xF110 {

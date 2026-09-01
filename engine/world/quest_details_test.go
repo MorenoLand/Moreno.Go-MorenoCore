@@ -1,8 +1,11 @@
 package world
 
 import (
+	"context"
+	"database/sql"
 	"testing"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -73,5 +76,39 @@ func TestBuildQuestGiverDetails(t *testing.T) {
 	}
 	if value, err := reader.ReadU32(); err != nil || value != 31 {
 		t.Fatalf("emote delay=%d err=%v", value, err)
+	}
+}
+
+func TestQuestLogRemoveQuest(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("CREATE TABLE character_queststatus (guid INTEGER, quest INTEGER, status INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE character_queststatus_daily (guid INTEGER, quest INTEGER, time INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO character_queststatus VALUES (1, 123, 3)"); err != nil {
+		t.Fatal(err)
+	}
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: store}
+	sess := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1}}
+	sess.player.QuestLog[2] = questLogEntry{QuestID: 123}
+
+	if !sess.handleQuestLogRemoveQuest(context.Background(), []byte{2}) {
+		t.Fatal("handleQuestLogRemoveQuest returned false")
+	}
+	if sess.player.QuestLog[2].QuestID != 0 {
+		t.Fatalf("expected quest log slot 2 to be empty, got quest %d", sess.player.QuestLog[2].QuestID)
+	}
+	var count int
+	_ = db.QueryRow("SELECT COUNT(1) FROM character_queststatus WHERE guid = 1 AND quest = 123").Scan(&count)
+	if count != 0 {
+		t.Fatalf("expected 0 rows in character_queststatus, got %d", count)
 	}
 }

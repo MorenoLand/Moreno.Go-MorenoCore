@@ -363,6 +363,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}
 		s.debug("nearby gameobjects sent", "account", s.accountName, "count", count)
 	}
+	_ = s.sendInventoryItems(ctx)
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
 	}

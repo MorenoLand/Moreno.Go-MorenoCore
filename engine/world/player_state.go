@@ -529,3 +529,124 @@ func (s *session) sendPlayerMoneyUpdate() {
 	}
 	_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 }
+
+func buildItemCreateBlock(fullGUID uint64, itemEntry, count uint32, ownerGUID uint64) []byte {
+	values := make([]uint32, 68)
+	values[0] = uint32(fullGUID)
+	values[1] = uint32(fullGUID >> 32)
+	values[2] = 0x03 // TYPEID_ITEM
+	values[3] = itemEntry
+	values[4] = math.Float32bits(1.0)
+	values[6] = uint32(ownerGUID)
+	values[7] = uint32(ownerGUID >> 32)
+	values[8] = uint32(ownerGUID)
+	values[9] = uint32(ownerGUID >> 32)
+	values[14] = count
+	values[16] = 100 // Durability
+	values[17] = 100 // MaxDurability
+
+	mask := protocol.NewUpdateMask(len(values))
+	for idx, val := range values {
+		if val != 0 {
+			_ = mask.Set(idx)
+		}
+	}
+	_ = mask.Set(1)
+
+	block := protocol.NewBuffer(128)
+	block.WriteU8(protocol.UpdateCreateObject2)
+	block.WritePackedGUID(fullGUID)
+	block.WriteU8(1) // TYPEID_ITEM
+	block.WriteU8(0) // update flags
+	block.WriteU8(uint8(mask.BlockCount()))
+	mask.AppendTo(block)
+	for i := 0; i < len(values); i++ {
+		if mask.Has(i) {
+			block.WriteU32(values[i])
+		}
+	}
+	return block.Bytes()
+}
+
+func (s *session) sendItemCreate(itemGUID uint64, itemEntry, count uint32, bag, slot uint8) error {
+	fullGUID := uint64(itemGUID) | (uint64(0x4000) << 48)
+	block := buildItemCreateBlock(fullGUID, itemEntry, count, s.playerGUID)
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(block)
+	packet, err := updates.BuildPacket(0)
+	if err != nil {
+		return err
+	}
+	if err := s.write(packet.Opcode, packet.Payload.Bytes(), true); err != nil {
+		return err
+	}
+	packSlotField := 364 + int(slot-23)*2
+	if slot < 23 {
+		packSlotField = 318 + int(slot)*2
+	}
+	fields := map[int]uint32{
+		packSlotField:     uint32(fullGUID),
+		packSlotField + 1: uint32(fullGUID >> 32),
+		unitFieldCoinage:  s.player.Money,
+	}
+	playerPacket, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
+	if err == nil && playerPacket != nil {
+		_ = s.write(playerPacket.Opcode, playerPacket.Payload.Bytes(), true)
+	}
+	return nil
+}
+
+func (s *session) sendInventoryItems(ctx context.Context) error {
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return nil
+	}
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count
+		FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ?`, s.playerGUID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	updates := protocol.NewUpdateData()
+	fields := make(map[int]uint32)
+	for rows.Next() {
+		var bag, slot, itemGUID, itemEntry, count int64
+		if err := rows.Scan(&bag, &slot, &itemGUID, &itemEntry, &count); err != nil {
+			continue
+		}
+		if count <= 0 {
+			count = 1
+		}
+		fullGUID := uint64(itemGUID) | (uint64(0x4000) << 48)
+		block := buildItemCreateBlock(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID)
+		updates.AddUpdateBlock(block)
+
+		if bag == 0 {
+			if slot >= 23 && slot <= 38 {
+				packField := 364 + int(slot-23)*2
+				fields[packField] = uint32(fullGUID)
+				fields[packField+1] = uint32(fullGUID >> 32)
+			} else if slot < 23 {
+				invField := 318 + int(slot)*2
+				fields[invField] = uint32(fullGUID)
+				fields[invField+1] = uint32(fullGUID >> 32)
+			}
+		}
+	}
+	if updates.HasData() {
+		packet, err := updates.BuildPacket(0)
+		if err == nil && packet != nil {
+			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		}
+	}
+	if len(fields) > 0 {
+		packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
+		if err == nil && packet != nil {
+			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		}
+	}
+	return nil
+}
