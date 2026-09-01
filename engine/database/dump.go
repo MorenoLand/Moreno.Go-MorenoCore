@@ -13,6 +13,7 @@ import (
 
 var (
 	columnTypePattern   = regexp.MustCompile(`(?is)^([a-z]+)(\s*\([^)]*\))?`)
+	routinePattern      = regexp.MustCompile(`(?is)^CREATE\s+(?:OR\s+REPLACE\s+)?(?:DEFINER\s*=\s*\S+\s+)?(?:PROCEDURE|FUNCTION|TRIGGER|EVENT)\b`)
 	noisePattern        = regexp.MustCompile(`(?i)\b(UNSIGNED|ZEROFILL|AUTO_INCREMENT)\b`)
 	charsetPattern      = regexp.MustCompile(`(?i)\b(?:CHARACTER\s+SET|CHARSET)\s+[a-zA-Z0-9_]+`)
 	collationPattern    = regexp.MustCompile(`(?i)\bCOLLATE\s+[a-zA-Z0-9_]+`)
@@ -193,6 +194,8 @@ func ImportSQLiteDump(ctx context.Context, inputPath, outputPath string, force b
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
+	} else if err := replaceSQLiteOutput(outputPath); err != nil {
+		return err
 	}
 	data, err := os.ReadFile(inputPath)
 	if err != nil {
@@ -262,8 +265,24 @@ func ImportSQLiteDump(ctx context.Context, inputPath, outputPath string, force b
 	return tx.Commit()
 }
 
+func replaceSQLiteOutput(outputPath string) error {
+	if info, err := os.Stat(outputPath); err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("SQLite output is a directory: %s", outputPath)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
+		if err := os.Remove(outputPath + suffix); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove existing SQLite output %s: %w", outputPath+suffix, err)
+		}
+	}
+	return nil
+}
+
 func routineCreate(statement string) bool {
-	return strings.HasPrefix(statement, "CREATE ") && (strings.Contains(statement, " PROCEDURE") || strings.Contains(statement, " FUNCTION") || strings.Contains(statement, " TRIGGER") || strings.Contains(statement, " EVENT"))
+	return routinePattern.MatchString(strings.TrimSpace(statement))
 }
 
 func routineEnd(statement string) bool {

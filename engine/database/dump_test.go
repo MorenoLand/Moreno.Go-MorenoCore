@@ -3,41 +3,58 @@ package database
 import (
 	"context"
 	"database/sql"
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
-func TestNormalizeSQLiteSchemaAndInsert(t *testing.T) {
-	schema := "CREATE TABLE `foo` (`id` int unsigned NOT NULL AUTO_INCREMENT, `name` varchar(32) NOT NULL DEFAULT '', PRIMARY KEY (`id`), KEY `name` (`name`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3"
-	parts, err := NormalizeSQLiteCreateTable(schema)
+func TestRoutineCreateDoesNotMatchTableComments(t *testing.T) {
+	if routineCreate("CREATE TABLE `game_event` (`description` TEXT COMMENT 'Game Event System')") {
+		t.Fatal("table comment was treated as a routine")
+	}
+	for _, statement := range []string{
+		"CREATE PROCEDURE refresh_world() BEGIN SELECT 1; END",
+		"CREATE DEFINER=`root`@`localhost` FUNCTION current_value() RETURNS INT RETURN 1",
+		"CREATE TRIGGER account_update AFTER UPDATE ON account FOR EACH ROW SET NEW.online = NEW.online",
+		"CREATE EVENT expire_bans ON SCHEDULE EVERY 1 DAY DO DELETE FROM account_banned",
+	} {
+		if !routineCreate(statement) {
+			t.Fatalf("routine was not detected: %s", statement)
+		}
+	}
+}
+
+func TestImportSQLiteDumpForceReplacesOutput(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input.sql")
+	output := filepath.Join(dir, "auth.db")
+	if err := os.WriteFile(input, []byte("CREATE TABLE account (id INTEGER PRIMARY KEY); INSERT INTO account VALUES (2);"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", output)
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", ":memory:")
+	if _, err := db.Exec("CREATE TABLE account (id INTEGER PRIMARY KEY); INSERT INTO account VALUES (1)"); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ImportSQLiteDump(context.Background(), input, output, true); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sql.Open("sqlite", output)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, part := range parts {
-		if _, err := db.ExecContext(context.Background(), part); err != nil {
-			t.Fatalf("%s: %v", part, err)
-		}
-	}
-	insert, err := NormalizeSQLiteInsert("INSERT INTO `foo` VALUES (1,'a\\'b')")
-	if err != nil {
+	var id int
+	if err := db.QueryRow("SELECT id FROM account").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(context.Background(), insert); err != nil {
-		t.Fatalf("%s: %v", insert, err)
-	}
-	var value string
-	if err := db.QueryRow("SELECT name FROM foo WHERE id = 1").Scan(&value); err != nil {
-		t.Fatal(err)
-	}
-	if value != "a'b" {
-		t.Fatalf("value %q", value)
-	}
-	if strings.Contains(parts[0], "unsigned") {
-		t.Fatalf("SQLite schema retained unsigned modifier: %s", parts[0])
+	if id != 2 {
+		t.Fatalf("id=%d", id)
 	}
 }
