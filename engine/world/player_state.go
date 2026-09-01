@@ -203,7 +203,7 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 			}
 			if !found {
 				skills = append(skills, def)
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, def.Skill, def.Value, def.Max)
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, def.Skill, def.Value, def.Max)
 			}
 		}
 	}
