@@ -7,6 +7,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -151,47 +152,61 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		state.ExtraFlags &= ^playerExtraGMOn
 		state.PlayerFlags &= ^playerFlagGM
 	}
-	// Rebuild the quest log slots from character_queststatus rows like
-	// Player::LoadFromDB does for QUEST_STATUS_INCOMPLETE/COMPLETE quests.
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		qRows, qErr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest, status, explored, timer, mobcount1, mobcount2, mobcount3, mobcount4 FROM character_queststatus WHERE guid = ? AND status IN (1, 3) ORDER BY quest", guid)
-		if qErr == nil {
-			slot := 0
-			for qRows.Next() && slot < playerQuestLogSlots {
-				var questID, status, explored, timer, mob1, mob2, mob3, mob4 int64
-				if err := qRows.Scan(&questID, &status, &explored, &timer, &mob1, &mob2, &mob3, &mob4); err != nil {
-					continue
-				}
-				state.QuestLog[slot] = questLogEntry{
-					QuestID:  uint32(questID),
-					State:    questCompleteStateFlag(status),
-					Timer:    uint32(timer),
-					Counters: [4]uint16{uint16(mob1), uint16(mob2), uint16(mob3), uint16(mob4)},
-				}
-				slot++
-			}
-			qRows.Close()
-		}
-	}
 	s.player = &state
-	var taximask sql.NullString
-	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT taximask FROM characters WHERE guid = ?", guid).Scan(&taximask); err == nil {
-		s.loadTaxiMask(taximask)
-	} else {
-		// TrinityCore PlayerTaxi::InitTaxiNodesForLevel seeds the race and
-		// continent starting nodes for characters without saved masks.
-		s.initTaxiNodesForLevel()
-	}
-	if err := s.loadOptionalPlayerState(ctx, &state); err != nil {
-		return playerState{}, err
-	}
-	if err := s.CharGuild(ctx, &state); err != nil {
-		return playerState{}, err
-	}
-	_ = s.loadPlayerSkills(ctx, &state)
-	if err := s.loadPlayerPacketsState(ctx, &state); err != nil {
-		return playerState{}, err
-	}
+
+	// Rebuild the quest log slots, taxi masks, guild info, skills, and packet states concurrently
+	var wg sync.WaitGroup
+	wg.Add(5)
+	go func() {
+		defer wg.Done()
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			qRows, qErr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest, status, explored, timer, mobcount1, mobcount2, mobcount3, mobcount4 FROM character_queststatus WHERE guid = ? AND status IN (1, 3) ORDER BY quest", guid)
+			if qErr == nil {
+				slot := 0
+				for qRows.Next() && slot < playerQuestLogSlots {
+					var questID, status, explored, timer, mob1, mob2, mob3, mob4 int64
+					if err := qRows.Scan(&questID, &status, &explored, &timer, &mob1, &mob2, &mob3, &mob4); err != nil {
+						continue
+					}
+					state.QuestLog[slot] = questLogEntry{
+						QuestID:  uint32(questID),
+						State:    questCompleteStateFlag(status),
+						Timer:    uint32(timer),
+						Counters: [4]uint16{uint16(mob1), uint16(mob2), uint16(mob3), uint16(mob4)},
+					}
+					slot++
+				}
+				qRows.Close()
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		var taximask sql.NullString
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT taximask FROM characters WHERE guid = ?", guid).Scan(&taximask); err == nil {
+			s.loadTaxiMask(taximask)
+		} else {
+			// TrinityCore PlayerTaxi::InitTaxiNodesForLevel seeds the race and
+			// continent starting nodes for characters without saved masks.
+			s.initTaxiNodesForLevel()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		_ = s.CharGuild(ctx, &state)
+	}()
+	go func() {
+		defer wg.Done()
+		_ = s.loadPlayerSkills(ctx, &state)
+	}()
+	go func() {
+		defer wg.Done()
+		_ = s.loadPlayerPacketsState(ctx, &state)
+	}()
+	wg.Wait()
+
+	_ = s.loadOptionalPlayerState(ctx, &state)
+	s.player = &state
 	return state, nil
 }
 
