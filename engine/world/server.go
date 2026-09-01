@@ -180,6 +180,18 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleSetSelection(payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_LFG_JOIN):
+			if !state.authed || !state.handleLFGJoin(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LFG_LEAVE):
+			if !state.authed || !state.handleLFGLeave() {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LFG_GET_STATUS):
+			if !state.authed || !state.handleLFGGetStatus() {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST):
 			if !state.authed || !state.handleLogoutRequest(ctx) {
 				return

@@ -1,9 +1,12 @@
 package world
 
 import (
+	"encoding/binary"
+	"net"
 	"testing"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 func TestSoloLFGEnablesOnLoginAndAllowsPartialGroups(t *testing.T) {
@@ -18,6 +21,57 @@ func TestSoloLFGEnablesOnLoginAndAllowsPartialGroups(t *testing.T) {
 	if lfg.ToggleSolo() {
 		t.Fatal("toggle should disable solo LFG")
 	}
+}
+
+func TestLFGQueueLifecycle(t *testing.T) {
+	lfg := NewLFGManager(true)
+	result, entry := lfg.Join(7, LFGRoleTank|LFGRoleDamage, []uint32{0x01000001, 2, 1, 2}, "ready")
+	if result != LFGJoinOK || entry.State != LFGStateQueued || len(entry.Dungeons) != 3 || entry.Dungeons[0] != 1 || entry.Dungeons[2] != 0x01000001 {
+		t.Fatalf("join result=%d entry=%+v", result, entry)
+	}
+	if status, ok := lfg.Status(7); !ok || status.Comment != "ready" {
+		t.Fatalf("status=%+v exists=%v", status, ok)
+	}
+	if !lfg.Leave(7) {
+		t.Fatal("queue entry was not removed")
+	}
+}
+
+func TestLFGJoinPacket(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	server := &Server{Features: &Features{LFG: NewLFGManager(true)}}
+	state := &session{server: server, conn: serverConn, playerGUID: 7, accountName: "TEST", playerLoaded: true, player: &playerState{GUID: 7, Name: "Tester"}}
+	payload := protocol.NewBuffer(64)
+	payload.WriteU32(uint32(LFGRoleTank))
+	payload.WriteBool(false)
+	payload.WriteBool(false)
+	payload.WriteU8(2)
+	payload.WriteU32(0x01000001)
+	payload.WriteU32(2)
+	payload.WriteU8(3)
+	payload.Write([]byte{0, 0, 0})
+	payload.WriteCString("ready")
+	done := make(chan bool, 1)
+	go func() { done <- state.handleLFGJoin(payload.Bytes()) }()
+	opcode, response, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_LFG_JOIN_RESULT) || len(response) != 8 || binary.LittleEndian.Uint32(response) != LFGJoinOK {
+		t.Fatalf("join result opcode=%x payload=%x", opcode, response)
+	}
+	opcode, response, err = readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_LFG_UPDATE_PLAYER) || len(response) == 0 {
+		t.Fatalf("update opcode=%x payload=%x", opcode, response)
+	}
+	if !<-done {
+		t.Fatal("join handler failed")
+	}
+	_ = serverConn.Close()
 }
 
 func Test310FlyerStateRecalculatesFromLearnedSpells(t *testing.T) {

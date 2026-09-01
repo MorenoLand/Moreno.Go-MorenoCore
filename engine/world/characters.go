@@ -74,9 +74,12 @@ type enumCharacter struct {
 }
 
 func (s *session) handleCharEnum(ctx context.Context) bool {
-	_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_EXPIRED_BANS")
+	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_EXPIRED_BANS"); err != nil {
+		s.debug("character enumeration cleanup failed", "account", s.accountName, "error", err)
+	}
 	rows, err := s.server.CharactersStore.QueryStatement(ctx, "CHAR_SEL_ENUM", 0, s.accountID)
 	if err != nil {
+		s.debug("character enumeration query failed", "account", s.accountName, "error", err)
 		return false
 	}
 	defer rows.Close()
@@ -87,6 +90,7 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 	for rows.Next() {
 		character, err := scanEnumCharacter(rows)
 		if err != nil {
+			s.debug("character enumeration scan failed", "account", s.accountName, "error", err)
 			return false
 		}
 		if character.Race == 0 || character.Class == 0 || character.Gender > 2 {
@@ -101,12 +105,18 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 		}
 	}
 	if err := rows.Err(); err != nil {
+		s.debug("character enumeration rows failed", "account", s.accountName, "error", err)
 		return false
 	}
 	if err := packet.Put(0, []byte{count}); err != nil {
 		return false
 	}
-	return s.write(uint16(protocol.OpcodeSMSG_CHAR_ENUM), packet.Bytes(), true) == nil
+	if err := s.write(uint16(protocol.OpcodeSMSG_CHAR_ENUM), packet.Bytes(), true); err != nil {
+		s.debug("character enumeration response failed", "account", s.accountName, "error", err)
+		return false
+	}
+	s.debug("character enumeration sent", "account", s.accountName, "count", count)
+	return true
 }
 
 func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {

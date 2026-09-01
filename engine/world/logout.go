@@ -79,6 +79,9 @@ func (s *session) triggerLogout(ctx context.Context) {
 		return
 	}
 	s.logoutHook = true
+	if s.server.Features != nil && s.server.Features.LFG != nil {
+		s.server.Features.LFG.Leave(s.playerGUID)
+	}
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogout, s.luaPlayer())
 }
 
