@@ -67,10 +67,11 @@ type session struct {
 	crypt        *crypto.AuthCrypt
 	authed       bool
 	accountID    uint32
-	accountName  string
-	security     uint8
-	gmChat       bool
-	twoSideChat  bool
+	accountName      string
+	security         uint8
+	accountExpansion uint8
+	gmChat           bool
+	twoSideChat      bool
 	legitimate   map[uint64]struct{}
 	mounts       *MountState
 	playerGUID   uint64
@@ -110,6 +111,7 @@ type account struct {
 	LockCountry string
 	OS          string
 	Security    uint8
+	Expansion   uint8
 }
 
 func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settings ...config.Config) *Server {
@@ -883,9 +885,22 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		s.twoSideChat = false
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionTwoSideInteractionChat, "error", err)
 	}
-	s.debug("world authentication accepted", "account", accountName, "build", build, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))
+	s.accountExpansion = account.Expansion
+	if s.accountExpansion == 0 && s.server.Config.Expansion > 0 {
+		s.accountExpansion = uint8(s.server.Config.Expansion)
+	}
+	s.debug("world authentication accepted", "account", accountName, "build", build, "expansion", s.accountExpansion, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))
 	s.loadTutorials(ctx)
-	return s.write(opcodeAuthResponse, []byte{authOK}, true) == nil
+
+	authBuf := protocol.NewBuffer(12)
+	authBuf.WriteU8(authOK)
+	authBuf.WriteU32(0)                  // BillingTimeRemaining
+	authBuf.WriteU8(0)                   // BillingPlanFlags
+	authBuf.WriteU32(0)                  // BillingTimeRested
+	authBuf.WriteU8(s.accountExpansion)  // 0 Vanilla, 1 TBC, 2 WotLK
+	authBuf.WriteU32(0)                  // Queue position
+	authBuf.WriteU8(0)                   // Free character migration bool
+	return s.write(opcodeAuthResponse, authBuf.Bytes(), true) == nil
 }
 
 func (s *session) loadTutorials(ctx context.Context) {
@@ -994,18 +1009,31 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 func loadAccount(ctx context.Context, store *database.Store, username string, realmID uint32) (*account, error) {
 	var result account
 	var locked int64
-	query := "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE username = ? LIMIT 1"
+	var expansion sql.NullInt64
+	query := "SELECT id, session_key_auth, last_ip, locked, lock_country, os, expansion FROM account WHERE username = ? LIMIT 1"
 	if store.Backend == database.BackendSQLite {
-		query = "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE UPPER(username) = UPPER(?) LIMIT 1"
+		query = "SELECT id, session_key_auth, last_ip, locked, lock_country, os, expansion FROM account WHERE UPPER(username) = UPPER(?) LIMIT 1"
 	}
-	err := store.DB.QueryRowContext(ctx, query, username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
+	err := store.DB.QueryRowContext(ctx, query, username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS, &expansion)
 	if err != nil {
-		return nil, err
+		fallbackQuery := "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE username = ? LIMIT 1"
+		if store.Backend == database.BackendSQLite {
+			fallbackQuery = "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE UPPER(username) = UPPER(?) LIMIT 1"
+		}
+		err = store.DB.QueryRowContext(ctx, fallbackQuery, username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
 	}
 	result.Locked = locked != 0
+	if expansion.Valid && expansion.Int64 > 0 {
+		result.Expansion = uint8(expansion.Int64)
+	} else {
+		result.Expansion = 2 // WotLK default
+	}
 	var security int64
 	err = store.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(SecurityLevel), 0) FROM account_access WHERE AccountID = ? AND RealmID IN (-1, ?)", result.ID, realmID).Scan(&security)
 	if err == nil {
