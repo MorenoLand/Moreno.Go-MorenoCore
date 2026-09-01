@@ -3,7 +3,6 @@ package world
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"math"
 	"time"
 
@@ -21,6 +20,31 @@ type combatTarget struct {
 	Health uint32
 }
 
+func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarget, bool) {
+	s.server.motionMu.Lock()
+	if s.server.creatureMotion != nil {
+		if motion := s.server.creatureMotion[guid]; motion != nil {
+			target := combatTarget{
+				GUID:   guid,
+				Map:    motion.Map,
+				X:      motion.X,
+				Y:      motion.Y,
+				Z:      motion.Z,
+				Health: motion.Health,
+			}
+			s.server.motionMu.Unlock()
+			return target, true
+		}
+	}
+	s.server.motionMu.Unlock()
+
+	target, err := s.loadCombatTarget(ctx, guid)
+	if err != nil {
+		return combatTarget{}, false
+	}
+	return target, true
+}
+
 func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
@@ -31,14 +55,10 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		s.debug("attack rejected", "account", s.accountName, "error", err)
 		return false
 	}
-	target, err := s.loadCombatTarget(ctx, victim)
-	if errors.Is(err, sql.ErrNoRows) {
+	target, ok := s.getCombatTarget(ctx, victim)
+	if !ok {
 		s.attackTarget = 0
 		return s.sendAttackStop(0, false) == nil
-	}
-	if err != nil {
-		s.debug("attack target lookup failed", "account", s.accountName, "guid", victim, "error", err)
-		return false
 	}
 	if target.Health == 0 {
 		s.attackTarget = 0
@@ -73,12 +93,17 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		overkill = damage - target.Health
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), buildAttackerStateUpdate(s.playerGUID, target.GUID, damage, overkill), true)
-	cdb := s.server.WorldStore.DB
 	if damage >= target.Health {
 		// Target dies
-		if cdb != nil {
-			_, _ = cdb.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", uint32(target.GUID&0xFFFFFF))
+		s.server.motionMu.Lock()
+		if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+			motion.Health = 0
+			motion.InCombat = false
+			motion.TargetGUID = 0
+			motion.Moving = false
 		}
+		s.server.motionMu.Unlock()
+
 		s.server.stopCreatureMotion(target.Map, target.GUID, target.X, target.Y, target.Z)
 		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
 			unitFieldHealth:       0,
@@ -90,9 +115,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		s.debug("target slain", "account", s.accountName, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage
-		if cdb != nil {
-			_, _ = cdb.ExecContext(ctx, "UPDATE creature SET curhealth = ? WHERE guid = ?", newHealth, uint32(target.GUID&0xFFFFFF))
+		s.server.motionMu.Lock()
+		if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+			motion.Health = newHealth
 		}
+		s.server.motionMu.Unlock()
+
 		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
 		})
@@ -173,6 +201,37 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 			target.Health = 100
 		}
 	}
+
+	s.server.motionMu.Lock()
+	if s.server.creatureMotion == nil {
+		s.server.creatureMotion = make(map[uint64]*creatureMotion)
+	}
+	if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+		target.X, target.Y, target.Z = motion.X, motion.Y, motion.Z
+		if motion.Health > 0 {
+			target.Health = motion.Health
+		} else {
+			motion.Health = target.Health
+		}
+	} else {
+		s.server.creatureMotion[target.GUID] = &creatureMotion{
+			GUID:      target.GUID,
+			Entry:     uint32(entry),
+			Map:       target.Map,
+			HomeX:     target.X,
+			HomeY:     target.Y,
+			HomeZ:     target.Z,
+			X:         target.X,
+			Y:         target.Y,
+			Z:         target.Z,
+			Speed:     2.5,
+			RunSpeed:  7.0,
+			Health:    target.Health,
+			MaxHealth: target.Health,
+			Refreshed: time.Now(),
+		}
+	}
+	s.server.motionMu.Unlock()
 	return target, nil
 }
 

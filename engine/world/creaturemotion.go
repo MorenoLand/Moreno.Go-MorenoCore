@@ -43,6 +43,9 @@ type creatureMotion struct {
 	Faction uint32
 	Level   uint32
 
+	Health    uint32
+	MaxHealth uint32
+
 	TargetGUID uint64
 	InCombat   bool
 	LastAttack time.Time
