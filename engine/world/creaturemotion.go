@@ -106,9 +106,34 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
 	if s.creatureMotion == nil {
-		return
+		s.creatureMotion = make(map[uint64]*creatureMotion)
 	}
-	if motion, ok := s.creatureMotion[creatureGUID]; ok && motion != nil {
+	motion := s.creatureMotion[creatureGUID]
+	if motion == nil && s.WorldStore != nil && s.WorldStore.DB != nil {
+		guid := uint32(creatureGUID & 0x00FFFFFF)
+		entry := uint32((creatureGUID >> 24) & 0x00FFFFFF)
+		var x, y, z float64
+		var mapID, faction, level int64
+		if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT c.map, c.position_x, c.position_y, c.position_z,
+			COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1)
+			FROM creature AS c
+			JOIN creature_template AS t ON t.entry = c.id
+			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &faction, &level); err == nil {
+			motion = &creatureMotion{
+				GUID:     creatureGUID,
+				Entry:    entry,
+				Map:      uint32(mapID),
+				HomeX:    float32(x), HomeY: float32(y), HomeZ: float32(z),
+				X: float32(x), Y: float32(y), Z: float32(z),
+				Speed:    2.5,
+				RunSpeed: 7.0,
+				Faction:  uint32(faction),
+				Level:    uint32(level),
+			}
+			s.creatureMotion[creatureGUID] = motion
+		}
+	}
+	if motion != nil {
 		motion.TargetGUID = playerGUID
 		motion.InCombat = true
 		motion.Moving = false
@@ -346,7 +371,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 }
 
 func isHostileFaction(creatureFaction uint32, playerRace uint8) bool {
-	if creatureFaction == 0 || creatureFaction == 35 {
+	if creatureFaction == 0 || creatureFaction == 35 || creatureFaction == 7 || creatureFaction == 8 || creatureFaction == 114 || creatureFaction == 120 || creatureFaction == 534 {
 		return false
 	}
 	switch creatureFaction {
@@ -360,7 +385,7 @@ func isHostileFaction(creatureFaction uint32, playerRace uint8) bool {
 	case 2, 5, 6, 8, 10, 29, 67, 68, 76, 116:
 		return isAlliance
 	}
-	return creatureFaction >= 14
+	return false
 }
 
 func isAllianceRace(race uint8) bool {

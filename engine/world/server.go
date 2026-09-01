@@ -85,6 +85,7 @@ type session struct {
 	playerLocked bool
 	rooted       bool
 	attackTarget uint64
+	lastSwing    time.Time
 	logoutHook   bool
 	gossip       *gossipMenuState
 	gossipClosed bool
@@ -131,7 +132,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 }
 
 func (s *Server) runWorldTick(ctx context.Context) {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
@@ -139,7 +140,40 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.updateActiveCreatures(ctx)
+			s.updatePlayerCombat(ctx)
 			s.processCreatureRespawns(ctx, time.Now())
+		}
+	}
+}
+
+func (s *Server) updatePlayerCombat(ctx context.Context) {
+	s.sessionsMu.RLock()
+	var combatSessions []*session
+	for sess := range s.sessions {
+		if sess.playerLoaded && sess.player != nil && sess.attackTarget != 0 && sess.player.Health > 0 {
+			combatSessions = append(combatSessions, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+
+	now := time.Now()
+	for _, sess := range combatSessions {
+		target, err := sess.loadCombatTarget(ctx, sess.attackTarget)
+		if err != nil || target.Health == 0 {
+			_ = sess.sendAttackStop(sess.attackTarget, target.Health == 0)
+			sess.attackTarget = 0
+			continue
+		}
+		if target.Map != sess.player.Map {
+			_ = sess.sendAttackStop(sess.attackTarget, false)
+			sess.attackTarget = 0
+			continue
+		}
+		if distance3D(sess.player.X, sess.player.Y, sess.player.Z, target.X, target.Y, target.Z) <= meleeAttackRange+2.0 {
+			if now.Sub(sess.lastSwing) >= 2*time.Second {
+				sess.lastSwing = now
+				sess.executeMeleeSwing(ctx, target)
+			}
 		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -53,6 +54,7 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		}
 	}
 	s.attackTarget = victim
+	s.lastSwing = time.Now()
 	s.debug("attack started", "account", s.accountName, "guid", victim)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(s.playerGUID, victim), true)
 	if distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) <= meleeAttackRange+2.0 {
@@ -152,14 +154,24 @@ func buildAttackStop(attacker, victim uint64, nowDead bool) []byte {
 func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarget, error) {
 	var target combatTarget
 	var low, entry, mapID int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT guid, id, map, position_x, position_y, position_z, curhealth FROM creature WHERE guid = ?", uint32(guid&0xFFFFFF)).Scan(&low, &entry, &mapID, &target.X, &target.Y, &target.Z, &target.Health); err != nil {
+	var curHealth sql.NullInt64
+	lowGUID := uint32(guid & 0x00FFFFFF)
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.curhealth FROM creature AS c WHERE c.guid = ?", lowGUID).Scan(&low, &entry, &mapID, &target.X, &target.Y, &target.Z, &curHealth); err != nil {
 		return target, err
 	}
 	target.GUID = creatureWorldGUID(uint32(low), uint32(entry))
-	if target.GUID != guid {
-		return combatTarget{}, sql.ErrNoRows
-	}
 	target.Map = uint32(mapID)
+	if curHealth.Valid && curHealth.Int64 > 0 {
+		target.Health = uint32(curHealth.Int64)
+	} else {
+		var tplHealth sql.NullInt64
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(maxlevel*30, 0), 100) FROM creature_template WHERE entry = ?", entry).Scan(&tplHealth)
+		if tplHealth.Valid && tplHealth.Int64 > 0 {
+			target.Health = uint32(tplHealth.Int64)
+		} else {
+			target.Health = 100
+		}
+	}
 	return target, nil
 }
 

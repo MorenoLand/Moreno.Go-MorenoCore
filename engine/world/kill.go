@@ -185,7 +185,10 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	}
 
 	// Mark the corpse lootable for everyone in range (dynamic flags update).
-	s.server.broadcastCreatureValueUpdate(target.GUID, s.player.Map, target.X, target.Y, map[int]uint32{unitFieldDynamicFlags: unitDynFlagLootable})
+	s.server.broadcastCreatureValuesUpdate(s.player.Map, target.GUID, map[int]uint32{
+		unitFieldHealth:       0,
+		unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+	})
 
 	// Schedule the respawn with the spawn's original health.
 	s.server.scheduleCreatureRespawn(ctx, guid, uint32(math.Max(float64(target.Health), 1)), now)
@@ -231,39 +234,7 @@ func (s *session) grantXP(ctx context.Context, amount uint32) {
 // broadcastCreatureValueUpdate pushes an UPDATETYPE_VALUES block for a
 // creature to sessions within visibility range.
 func (s *Server) broadcastCreatureValueUpdate(guid uint64, mapID uint32, x, y float32, fields map[int]uint32) {
-	values := make([]uint32, 256)
-	mask := protocol.NewUpdateMask(256)
-	for index, value := range fields {
-		if index < 0 || index >= 256 {
-			continue
-		}
-		values[index] = value
-		_ = mask.Set(index)
-	}
-	block := protocol.NewBuffer(64)
-	block.WriteU8(protocol.UpdateValues)
-	block.WritePackedGUID(guid)
-	block.WriteU8(uint8(mask.BlockCount()))
-	mask.AppendTo(block)
-	for index := 0; index < 256; index++ {
-		if mask.Has(index) {
-			block.WriteU32(values[index])
-		}
-	}
-	distance := s.Config.VisibilityDistanceContinents
-	if distance <= 0 {
-		distance = 150.0
-	}
-	s.sessionsMu.RLock()
-	defer s.sessionsMu.RUnlock()
-	for sess := range s.sessions {
-		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
-			continue
-		}
-		if math.Hypot(float64(x-sess.player.X), float64(y-sess.player.Y)) <= distance {
-			_ = sess.write(uint16(protocol.OpcodeSMSG_UPDATE_OBJECT), block.Bytes(), true)
-		}
-	}
+	s.broadcastCreatureValuesUpdate(mapID, guid, fields)
 }
 
 // scheduleCreatureRespawn stores spawn health to restore after
