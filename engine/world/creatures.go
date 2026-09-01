@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"math"
+	"math/rand"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -246,3 +247,89 @@ func maxUint32(value, fallback uint32) uint32 {
 	}
 	return value
 }
+
+func (s *Server) broadcastMonsterMove(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32) {
+	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration)
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 150.0
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
+			continue
+		}
+		if math.Hypot(float64(startX-sess.player.X), float64(startY-sess.player.Y)) <= distance {
+			_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet, true)
+		}
+	}
+}
+
+func (s *Server) updateActiveCreatures(ctx context.Context) {
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	type playerPos struct {
+		Map uint32
+		X   float32
+		Y   float32
+	}
+	var players []playerPos
+	s.sessionsMu.RLock()
+	for sess := range s.sessions {
+		if sess.playerLoaded && sess.player != nil {
+			players = append(players, playerPos{Map: sess.player.Map, X: sess.player.X, Y: sess.player.Y})
+		}
+	}
+	s.sessionsMu.RUnlock()
+	if len(players) == 0 {
+		return
+	}
+	distance := float64(s.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 100.0
+	}
+	for _, p := range players {
+		query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.orientation, c.wander_distance, t.speed_walk
+			FROM creature AS c
+			JOIN creature_template AS t ON t.entry = c.id
+			WHERE c.map = ? AND c.wander_distance > 0 AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ? AND (c.phaseMask & 1) <> 0
+			LIMIT 10`
+		rows, err := s.WorldStore.DB.QueryContext(ctx, query, p.Map, float64(p.X)-distance, float64(p.X)+distance, float64(p.Y)-distance, float64(p.Y)+distance)
+		if err != nil {
+			continue
+		}
+		for rows.Next() {
+			var guid, entry int64
+			var posX, posY, posZ, ori, wanderDist, walkSpeed float64
+			if err := rows.Scan(&guid, &entry, &posX, &posY, &posZ, &ori, &wanderDist, &walkSpeed); err != nil {
+				continue
+			}
+			if wanderDist <= 0 {
+				continue
+			}
+			if rand.Float64() > 0.15 {
+				continue
+			}
+			angle := rand.Float64() * 2 * math.Pi
+			dist := rand.Float64() * wanderDist
+			destX := float32(posX + dist*math.Cos(angle))
+			destY := float32(posY + dist*math.Sin(angle))
+			destZ := float32(posZ)
+			speed := float32(2.5 * walkSpeed)
+			if speed <= 0 {
+				speed = 2.5
+			}
+			moveDist := float32(math.Hypot(float64(destX)-posX, float64(destY)-posY))
+			duration := uint32((moveDist / speed) * 1000)
+			if duration < 500 {
+				duration = 500
+			}
+			rawGUID := creatureWorldGUID(uint32(guid), uint32(entry))
+			s.broadcastMonsterMove(p.Map, rawGUID, float32(posX), float32(posY), float32(posZ), destX, destY, destZ, duration)
+		}
+		rows.Close()
+	}
+}
+
