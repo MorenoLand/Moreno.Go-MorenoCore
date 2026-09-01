@@ -50,6 +50,8 @@ type Server struct {
 	objectsMu         sync.RWMutex
 	hiddenGameObjects map[uint64]struct{}
 	creatureAuras     map[uint64]map[uint32]struct{}
+	channelsMu        sync.RWMutex
+	channels          map[string]*worldChannel
 }
 
 type session struct {
@@ -78,6 +80,7 @@ type session struct {
 	logoutHook   bool
 	gossip       *gossipMenuState
 	gossipClosed bool
+	channels     map[string]struct{}
 }
 
 type account struct {
@@ -95,7 +98,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), creatureAuras: make(map[uint64]map[uint32]struct{})}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), creatureAuras: make(map[uint64]map[uint32]struct{}), channels: make(map[string]*worldChannel)}
 	server.Features.LFG.SetDungeonValidator(func(id uint32) bool {
 		dungeon, found, err := server.Data.LFGDungeon(id)
 		return err == nil && found && wotlk.IsSupportedLFGType(dungeon.TypeID)
@@ -119,7 +122,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 	}()
 	defer close(closed)
-	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), auras: make(map[uint32]struct{}), scale: 1}
+	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), auras: make(map[uint32]struct{}), channels: make(map[string]struct{}), scale: 1}
 	s.addSession(state)
 	defer s.removeSession(state)
 	defer state.logout()
@@ -203,6 +206,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_NPC_TEXT_QUERY):
 			if !state.authed || !state.handleNpcTextQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_JOIN_CHANNEL):
+			if !state.authed || !state.handleJoinChannel(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LEAVE_CHANNEL):
+			if !state.authed || !state.handleLeaveChannel(payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_GOSSIP_SELECT_OPTION):
@@ -560,6 +571,9 @@ func (s *session) debug(message string, args ...any) {
 
 func (s *session) logout() {
 	ctx := context.Background()
+	if s.server != nil {
+		s.server.removeSessionChannels(s)
+	}
 	if s.playerLoaded {
 		s.triggerLogout(ctx)
 		if err := s.savePlayerPosition(ctx); err != nil {

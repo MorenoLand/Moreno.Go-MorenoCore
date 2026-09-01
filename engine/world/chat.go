@@ -115,6 +115,9 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
+	if typeID == chatChannel && !s.server.isChannelMember(s, channel) {
+		return s.sendChannelNotify(channelNotMemberNotice, channel, nil) == nil
+	}
 	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channel)
 	s.debug("chat accepted", "account", s.accountName, "type", typeID)
 	return true
@@ -146,12 +149,17 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	}
 	s.sessionsMu.RLock()
 	targets := make([]*session, 0, len(s.sessions))
+	channelTargets := s.channelMembers(channel)
 	for value := range s.sessions {
 		if !value.authed || !value.playerLoaded || value.player == nil {
 			continue
 		}
 		if receiver != nil {
 			if value != source && value != receiver {
+				continue
+			}
+		} else if chatType == chatChannel {
+			if _, ok := channelTargets[value]; !ok {
 				continue
 			}
 		} else if value.player.Map != source.player.Map {
