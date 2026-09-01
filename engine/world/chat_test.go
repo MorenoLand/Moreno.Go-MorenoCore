@@ -35,7 +35,7 @@ func TestLuaChatHookCanCancelMessage(t *testing.T) {
 	}
 }
 
-func TestBroadcastSayUsesEmptyReceiverGUID(t *testing.T) {
+func TestBroadcastSayUsesSenderReceiverGUID(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
@@ -67,7 +67,7 @@ func TestBroadcastSayUsesEmptyReceiverGUID(t *testing.T) {
 	if _, err := reader.ReadU32(); err != nil {
 		t.Fatal(err)
 	}
-	if value, err := reader.ReadU64(); err != nil || value != 0 {
+	if value, err := reader.ReadU64(); err != nil || value != 99 {
 		t.Fatalf("receiver=%d err=%v", value, err)
 	}
 	<-done
