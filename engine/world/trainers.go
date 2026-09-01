@@ -41,6 +41,11 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 	if creatureEntry == 0 {
 		creatureEntry = uint32(trainerGUID & 0xFFFFFF)
 	}
+	var spawnEntry uint32
+	spawnGUID := uint32(trainerGUID & 0xFFFFFF)
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&spawnEntry); err == nil && spawnEntry != 0 {
+		creatureEntry = spawnEntry
+	}
 
 	var spells []trainerSpellRecord
 	greeting := "Hello! Ready for some training?"
@@ -166,6 +171,11 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	creatureEntry := uint32((trainerGUID >> 24) & 0xFFFFFF)
 	if creatureEntry == 0 {
 		creatureEntry = uint32(trainerGUID & 0xFFFFFF)
+	}
+	var spawnEntry uint32
+	spawnGUID := uint32(trainerGUID & 0xFFFFFF)
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&spawnEntry); err == nil && spawnEntry != 0 {
+		creatureEntry = spawnEntry
 	}
 
 	var moneyCost, reqLevel int64

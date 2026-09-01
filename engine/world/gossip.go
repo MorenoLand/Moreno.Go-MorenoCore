@@ -242,12 +242,22 @@ type loadedGossipOption struct {
 }
 
 func (s *session) loadCreatureGossipOptions(ctx context.Context, menuID, npcFlags, creatureEntry uint32) ([]loadedGossipOption, error) {
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT OptionID, OptionIcon, COALESCE(OptionText, ''), OptionType, OptionNpcFlag, ActionMenuID, ActionPoiID, BoxCoded, BoxMoney, COALESCE(BoxText, '') FROM gossip_menu_option WHERE MenuID = ? ORDER BY OptionID", menuID)
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT gmo.OptionID, gmo.OptionIcon,
+		COALESCE(NULLIF(gmo.OptionText, ''), bt.Text, ''),
+		gmo.OptionType, gmo.OptionNpcFlag, gmo.ActionMenuID, gmo.ActionPoiID, gmo.BoxCoded, gmo.BoxMoney,
+		COALESCE(NULLIF(gmo.BoxText, ''), btb.Text, '')
+		FROM gossip_menu_option AS gmo
+		LEFT JOIN broadcast_text AS bt ON bt.ID = gmo.OptionBroadcastTextID
+		LEFT JOIN broadcast_text AS btb ON btb.ID = gmo.BoxBroadcastTextID
+		WHERE gmo.MenuID = ? ORDER BY gmo.OptionID`, menuID)
 	if err != nil {
-		if missingTable(err) {
-			return nil, nil
+		rows, err = s.server.WorldStore.DB.QueryContext(ctx, "SELECT OptionID, OptionIcon, COALESCE(OptionText, ''), OptionType, OptionNpcFlag, ActionMenuID, ActionPoiID, BoxCoded, BoxMoney, COALESCE(BoxText, '') FROM gossip_menu_option WHERE MenuID = ? ORDER BY OptionID", menuID)
+		if err != nil {
+			if missingTable(err) {
+				return nil, nil
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 	defer rows.Close()
 	options := make([]loadedGossipOption, 0, 32)

@@ -71,7 +71,18 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 		}
 	}
 	creature := s.luaCreature(ctx, guid)
-	if creature == nil || !s.creatureHasQuest(ctx, objectUint32OrZero(creature, "Entry"), questID) {
+	var creatureEntry uint32
+	if creature != nil {
+		creatureEntry = objectUint32OrZero(creature, "Entry")
+	} else {
+		// Fallback: extract entry from packed GUID or look up spawn GUID
+		creatureEntry = uint32((guid >> 24) & 0x00FFFFFF)
+		if creatureEntry == 0 {
+			spawnGUID := uint32(guid & 0x00FFFFFF)
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry)
+		}
+	}
+	if creatureEntry == 0 || !s.creatureHasQuest(ctx, creatureEntry, questID) {
 		return s.sendGossipComplete()
 	}
 	data, err := s.loadQuestDetailData(ctx, questID)
@@ -103,11 +114,13 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 		}
 	}
 	if !s.questgiverStartsQuest(ctx, guid, questID) {
+		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "guid", guid, "reason", "questgiver does not start quest")
 		return true
 	}
 	// TrinityCore re-validates CanTakeQuest on accept before AddQuest.
 	canTake, err := s.canTakeQuest(ctx, questID)
 	if err != nil || !canTake {
+		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "reason", "canTakeQuest failed", "error", err)
 		return s.sendGossipComplete()
 	}
 	query := "INSERT OR IGNORE INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)"
