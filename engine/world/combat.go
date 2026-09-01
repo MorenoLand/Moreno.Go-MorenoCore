@@ -71,6 +71,21 @@ func (s *session) handleAttackStop() bool {
 	return true
 }
 
+func (s *session) handleSetSheathed(payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	reader := protocol.NewReader(payload)
+	state, err := reader.ReadU32()
+	if err != nil {
+		return false
+	}
+	s.player.SheathState = uint8(state)
+	s.sendPlayerUpdate()
+	s.debug("sheath state changed", "account", s.accountName, "state", state)
+	return true
+}
+
 func (s *session) sendAttackStop(victim uint64, nowDead bool) error {
 	return s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(s.playerGUID, victim, nowDead), true)
 }

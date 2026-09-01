@@ -97,6 +97,7 @@ type playerState struct {
 	Actions        [144]uint32
 	Cooldowns      []spellCooldown
 	Equipment      string
+	SheathState    uint8
 }
 
 func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState, error) {
@@ -276,7 +277,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	}
 	values[unitFieldPlayerFlags] = state.PlayerFlags
 	values[unitFieldPlayerBytes] = uint32(state.Skin) | uint32(state.Face)<<8 | uint32(state.HairStyle)<<16 | uint32(state.HairColor)<<24
-	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle)
+	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.SheathState)<<8
 	values[unitFieldGuildID] = state.GuildID
 	values[unitFieldGuildRank] = uint32(state.GuildRank)
 	values[unitFieldXP] = state.XP

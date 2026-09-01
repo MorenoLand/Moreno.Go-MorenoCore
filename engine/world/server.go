@@ -242,6 +242,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleAttackStop() {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_SET_SHEATHED):
+			if !state.authed || !state.handleSetSheathed(payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_CAST_SPELL):
 			if !state.authed || !state.handleCastSpell(ctx, payload) {
 				return
@@ -734,7 +738,9 @@ func (s *Server) debug(message string, args ...any) {
 }
 
 func (s *session) debug(message string, args ...any) {
-	s.server.debug(message, args...)
+	if s != nil && s.server != nil {
+		s.server.debug(message, args...)
+	}
 }
 
 func (s *session) logout() {
