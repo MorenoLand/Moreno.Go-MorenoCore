@@ -422,7 +422,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				}
 				_ = state.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true)
 			}
-		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK):
+		case uint32(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), uint32(protocol.OpcodeCMSG_MOVE_SET_CAN_FLY_ACK):
 			// Movement acknowledged by client
 		case uint32(protocol.OpcodeCMSG_MESSAGECHAT):
 			if !state.authed || !state.handleMessageChat(ctx, payload) {
