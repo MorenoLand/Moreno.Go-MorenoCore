@@ -167,6 +167,50 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleCharEnum(ctx) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_NAME_QUERY):
+			if !state.authed || !state.handleNameQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_QUERY):
+			if !state.authed || !state.handleGuildQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_QUERY_TIME):
+			if !state.authed || !state.handleQueryTime() {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PLAYED_TIME):
+			if !state.authed || !state.handlePlayedTime(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ZONEUPDATE):
+			if !state.authed || !state.handleZoneUpdate(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REQUEST_ACCOUNT_DATA):
+			if !state.authed || !state.handleRequestAccountData(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_UPDATE_ACCOUNT_DATA):
+			if !state.authed || !state.handleUpdateAccountData(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_ACTIONBAR_TOGGLES):
+			if !state.authed || !state.handleSetActionBarToggles(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_ACTION_BUTTON):
+			if !state.authed || !state.handleSetActionButton(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_WORLD_STATE_UI_TIMER_UPDATE):
+			if !state.authed || !state.handleWorldStateUITimer() {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REQUEST_RAID_INFO):
+			if !state.authed || !state.handleRequestRaidInfo() {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_READY_FOR_ACCOUNT_DATA_TIMES):
 			if !state.authed || !state.handleReadyForAccountDataTimes() {
 				return
