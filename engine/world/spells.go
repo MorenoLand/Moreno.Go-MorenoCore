@@ -55,6 +55,13 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", spellCastIgnoreReason(spell, found, learned))
 		return true
 	}
+	cost := spell.ManaCost
+	pType := spell.PowerType
+	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
+		return true
+	}
 	castTime := uint32(0)
 	if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
 		castTime = uint32(value)
@@ -70,14 +77,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, target), true); err != nil {
 		return false
 	}
-	cost := spell.ManaCost
-	pType := spell.PowerType
 	if pType < 7 && cost > 0 {
-		if s.player.Powers[pType] >= cost {
-			s.player.Powers[pType] -= cost
-		} else {
-			s.player.Powers[pType] = 0
-		}
+		s.player.Powers[pType] -= cost
 		s.sendPlayerUpdate()
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			col := fmt.Sprintf("power%d", pType+1)
@@ -129,4 +130,12 @@ func (s *session) handleCancelAura(payload []byte) bool {
 	}
 	delete(s.auras, spellID)
 	return true
+}
+
+func buildCastFailed(castID uint8, spellID uint32, result uint8) []byte {
+	buf := protocol.NewBuffer(6)
+	buf.WriteU8(castID)
+	buf.WriteU32(spellID)
+	buf.WriteU8(result)
+	return buf.Bytes()
 }
