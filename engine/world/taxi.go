@@ -16,6 +16,17 @@ const (
 	taxiMaskSize                   = 8
 )
 
+// TrinityCore Player.h extra flags and transient PLAYER_FLAGS bits.
+const (
+	playerExtraGMOn          uint32 = 0x00000001
+	playerExtraGMInvisible   uint32 = 0x00000010
+	playerExtraGMChat        uint32 = 0x00000020
+	playerFlagAFK              uint32 = 0x00000002
+	playerFlagDND              uint32 = 0x00000004
+	playerFlagGM               uint32 = 0x00000008
+	playerFlagAllowOnlyAbility uint32 = 0x00000001
+)
+
 // setTaxiMaskNode mirrors PlayerTaxi::SetTaximaskNode; returns true when the
 // bit transitioned from unknown to known.
 func (s *session) setTaxiMaskNode(node uint32) bool {

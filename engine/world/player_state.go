@@ -111,6 +111,19 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if equipment.Valid {
 		state.Equipment = equipment.String
 	}
+	// TrinityCore LoadFromDB/InitStatsForLevel cleans transient player flags
+	// (AFK/DND/GM/GHOST) before GM state is re-applied from extra_flags per
+	// GM.LoginState (0 off, 1 on, 2 saved state).
+	transient := uint32(playerFlagAFK | playerFlagDND | playerFlagGM | playerFlagGhost | playerFlagAllowOnlyAbility)
+	state.PlayerFlags &= ^transient
+	loginState := 2
+	if s.server.Config.GMLoginState >= 0 && s.server.Config.GMLoginState <= 2 {
+		loginState = s.server.Config.GMLoginState
+	}
+	if loginState == 1 || (loginState == 2 && state.ExtraFlags&playerExtraGMOn != 0) {
+		state.ExtraFlags |= playerExtraGMOn
+		state.PlayerFlags |= playerFlagGM
+	}
 	s.player = &state
 	var taximask sql.NullString
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT taximask FROM characters WHERE guid = ?", guid).Scan(&taximask); err == nil {

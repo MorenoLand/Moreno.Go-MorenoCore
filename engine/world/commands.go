@@ -162,16 +162,18 @@ func (s *session) handleCmdGM(args []string) {
 	switch sub {
 	case "on":
 		if s.player != nil {
-			s.player.PlayerFlags |= 0x00000008 // PLAYER_FLAGS_GM
-			s.player.ExtraFlags |= 0x01
+			s.player.PlayerFlags |= playerFlagGM
+			s.player.ExtraFlags |= playerExtraGMOn
+			s.persistExtraFlags()
 			s.sendPlayerUpdate()
 		}
 		s.sendNotification("Game Master mode is ON")
 		s.sendSysMessage("GM mode is ON")
 	case "off":
 		if s.player != nil {
-			s.player.PlayerFlags &= ^uint32(0x00000008)
-			s.player.ExtraFlags &= ^uint32(0x01)
+			s.player.PlayerFlags &= ^playerFlagGM
+			s.player.ExtraFlags &= ^playerExtraGMOn
+			s.persistExtraFlags()
 			s.sendPlayerUpdate()
 		}
 		s.sendNotification("Game Master mode is OFF")
@@ -761,13 +763,22 @@ func (s *session) handleCmdDismount(ctx context.Context) {
 	s.sendSysMessage("You have dismounted.")
 }
 
+// persistExtraFlags writes extra_flags immediately so GM mode survives
+// restarts the way TrinityCore's SaveToDB round-trip does.
+func (s *session) persistExtraFlags() {
+	if s.player == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET extra_flags = ? WHERE guid = ?", s.player.ExtraFlags, s.playerGUID)
+}
+
 func (s *session) handleCmdSave(ctx context.Context) {
 	if s.player == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
 	_, err := s.server.CharactersStore.DB.ExecContext(ctx,
-		"UPDATE characters SET position_x = ?, position_y = ?, position_z = ?, orientation = ?, map = ?, zone = ?, health = ?, money = ?, playerFlags = ?, equipmentCache = ? WHERE guid = ?",
-		s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map, s.player.Zone, s.player.Health, s.player.Money, s.player.PlayerFlags, s.player.Equipment, s.playerGUID)
+		"UPDATE characters SET position_x = ?, position_y = ?, position_z = ?, orientation = ?, map = ?, zone = ?, health = ?, money = ?, playerFlags = ?, equipmentCache = ?, extra_flags = ? WHERE guid = ?",
+		s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map, s.player.Zone, s.player.Health, s.player.Money, s.player.PlayerFlags, s.player.Equipment, s.player.ExtraFlags, s.playerGUID)
 	if err != nil {
 		s.sendSysMessage("Failed to save character: " + err.Error())
 		return

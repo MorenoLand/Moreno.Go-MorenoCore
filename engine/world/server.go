@@ -53,6 +53,8 @@ type Server struct {
 	creatureAuras     map[uint64]map[uint32]struct{}
 	channelsMu        sync.RWMutex
 	channels          map[string]*worldChannel
+	groupsMu          sync.RWMutex
+	groups            map[uint64]*groupState // groupID -> groupState
 }
 
 type session struct {
@@ -88,7 +90,9 @@ type session struct {
 	tutorialsInDB bool
 	activeLoot     *activeLootState
 	trade          *playerTradeState
-	guildInvitedID uint32
+	guildInvitedID     uint32
+	groupID            uint64 // GUID of the group this player is in (0 = no group)
+	pendingGroupLeader uint64 // GUID of the player who invited us (0 = no invite pending)
 }
 
 type account struct {
@@ -106,7 +110,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), creatureAuras: make(map[uint64]map[uint32]struct{}), channels: make(map[string]*worldChannel)}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), creatureAuras: make(map[uint64]map[uint32]struct{}), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState)}
 	server.Features.LFG.SetDungeonValidator(func(id uint32) bool {
 		dungeon, found, err := server.Data.LFGDungeon(id)
 		return err == nil && found && wotlk.IsSupportedLFGType(dungeon.TypeID)
@@ -407,6 +411,86 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_GUILD_BANK_QUERY_TAB):
 			if !state.authed || !state.handleGuildBankQueryTab(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CONTACT_LIST):
+			if !state.authed || !state.handleContactList(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ADD_FRIEND):
+			if !state.authed || !state.handleAddFriend(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_DEL_FRIEND):
+			if !state.authed || !state.handleDelFriend(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ADD_IGNORE):
+			if !state.authed || !state.handleAddIgnore(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_DEL_IGNORE):
+			if !state.authed || !state.handleDelIgnore(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_CONTACT_NOTES):
+			if !state.authed || !state.handleSetContactNotes(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GROUP_INVITE):
+			if !state.authed || !state.handleGroupInvite(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GROUP_ACCEPT):
+			if !state.authed || !state.handleGroupAccept(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GROUP_DECLINE):
+			if !state.authed || !state.handleGroupDecline(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GROUP_UNINVITE):
+			if !state.authed || !state.handleGroupUninvite(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GROUP_UNINVITE_GUID):
+			if !state.authed || !state.handleGroupUninviteGUID(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GROUP_SET_LEADER):
+			if !state.authed || !state.handleGroupSetLeader(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GROUP_DISBAND):
+			if !state.authed || !state.handleGroupDisband(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LOOT_METHOD):
+			if !state.authed || !state.handleLootMethod(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_MINIMAP_PING):
+			if !state.authed || !state.handleMinimapPing(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_RAID_TARGET_UPDATE):
+			if !state.authed || !state.handleRaidTargetUpdate(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GROUP_RAID_CONVERT):
+			if !state.authed || !state.handleGroupRaidConvert(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_PARTY_ASSIGNMENT):
+			if !state.authed || !state.handlePartyAssignment(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_RAID_READY_CHECK):
+			if !state.authed || !state.handleReadyCheck(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_RANDOM_ROLL):
+			if !state.authed || !state.handleRandomRoll(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_ATTACK_SWING):

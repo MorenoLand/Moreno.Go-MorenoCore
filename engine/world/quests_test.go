@@ -86,3 +86,52 @@ func TestCreatureQuestMenuAndDialogStatus(t *testing.T) {
 		t.Fatalf("title=%q err=%v", title, err)
 	}
 }
+
+func TestQuestChainPrerequisites(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"CREATE TABLE quest_template (ID INTEGER PRIMARY KEY, QuestLevel INTEGER NOT NULL, MinLevel INTEGER NOT NULL, Flags INTEGER NOT NULL, LogTitle TEXT)",
+		"CREATE TABLE quest_template_addon (ID INTEGER PRIMARY KEY, MaxLevel INTEGER, AllowableClasses INTEGER, AllowableRaces INTEGER, PrevQuestID INTEGER, NextQuestID INTEGER, ExclusiveGroup INTEGER)",
+		"CREATE TABLE character_queststatus (guid INTEGER NOT NULL, quest INTEGER NOT NULL, status INTEGER NOT NULL)",
+		"CREATE TABLE character_queststatus_rewarded (guid INTEGER NOT NULL, quest INTEGER NOT NULL)",
+		"INSERT INTO quest_template VALUES (201, 5, 1, 0, 'Chain Part 1')",
+		"INSERT INTO quest_template VALUES (202, 6, 1, 0, 'Chain Part 2')",
+		"INSERT INTO quest_template_addon VALUES (202, 80, 0, 0, 201, 0, 0)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	server := &Server{WorldStore: store, CharactersStore: store, Config: config.Default()}
+	state := &session{server: server, playerGUID: 99, player: &playerState{GUID: 99, Level: 10}}
+	ctx := context.Background()
+
+	// 1. Part 2 should NOT be available because Part 1 is not rewarded yet
+	canTake, err := state.canTakeQuest(ctx, 202)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canTake {
+		t.Fatal("expected canTake=false for Part 2 when Part 1 not rewarded")
+	}
+
+	// 2. Mark Part 1 as rewarded
+	if _, err := db.Exec("INSERT INTO character_queststatus_rewarded VALUES (99, 201)"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Part 2 should now be available!
+	canTake, err = state.canTakeQuest(ctx, 202)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !canTake {
+		t.Fatal("expected canTake=true for Part 2 after Part 1 rewarded")
+	}
+}
