@@ -128,4 +128,12 @@ func TestExecuteCommands(t *testing.T) {
 	if player.Map != 1 || player.X != 10 || player.Y != 20 || player.Z != 30 {
 		t.Fatalf("position=%v map=%d", []float32{player.X, player.Y, player.Z}, player.Map)
 	}
+
+	// 8. .gm fly on / off
+	if !state.executeCommand(ctx, "gm fly on") {
+		t.Fatal("gm fly on failed")
+	}
+	if !state.executeCommand(ctx, "gm fly off") {
+		t.Fatal("gm fly off failed")
+	}
 }

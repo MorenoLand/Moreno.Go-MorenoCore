@@ -121,6 +121,15 @@ func (s *session) executeCommand(ctx context.Context, line string) bool {
 	case "gob", "gobject":
 		s.handleCmdGObject(ctx, args)
 		return true
+	case "revive", "resurrect", "res":
+		s.handleCmdRevive(ctx, args)
+		return true
+	case "dismount":
+		s.handleCmdDismount(ctx)
+		return true
+	case "save", "saveall":
+		s.handleCmdSave(ctx)
+		return true
 	}
 	return false
 }
@@ -142,7 +151,7 @@ func (s *session) handleCmdHelp(args []string) {
 
 func (s *session) handleCmdGM(args []string) {
 	if len(args) == 0 {
-		if s.player != nil && s.player.ExtraFlags&0x01 != 0 {
+		if s.player != nil && s.player.PlayerFlags&0x00000008 != 0 {
 			s.sendSysMessage("GM mode is ON")
 		} else {
 			s.sendSysMessage("GM mode is OFF")
@@ -153,13 +162,19 @@ func (s *session) handleCmdGM(args []string) {
 	switch sub {
 	case "on":
 		if s.player != nil {
+			s.player.PlayerFlags |= 0x00000008 // PLAYER_FLAGS_GM
 			s.player.ExtraFlags |= 0x01
+			s.sendPlayerUpdate()
 		}
+		s.sendNotification("Game Master mode is ON")
 		s.sendSysMessage("GM mode is ON")
 	case "off":
 		if s.player != nil {
+			s.player.PlayerFlags &= ^uint32(0x00000008)
 			s.player.ExtraFlags &= ^uint32(0x01)
+			s.sendPlayerUpdate()
 		}
+		s.sendNotification("Game Master mode is OFF")
 		s.sendSysMessage("GM mode is OFF")
 	case "chat":
 		if len(args) > 1 && strings.ToLower(args[1]) == "off" {
@@ -167,28 +182,69 @@ func (s *session) handleCmdGM(args []string) {
 			if s.player != nil {
 				s.player.ExtraFlags &= ^uint32(0x20)
 			}
+			s.sendNotification("GM chat badge is OFF")
 			s.sendSysMessage("GM chat badge is OFF")
 		} else {
 			s.gmChat = true
 			if s.player != nil {
 				s.player.ExtraFlags |= 0x20
 			}
+			s.sendNotification("GM chat badge is ON")
 			s.sendSysMessage("GM chat badge is ON")
 		}
 	case "fly":
+		enable := true
 		if len(args) > 1 && strings.ToLower(args[1]) == "off" {
-			s.sendSysMessage("GM fly mode is OFF")
+			enable = false
+		}
+		s.setFlyMode(enable)
+		name := ""
+		if s.player != nil {
+			name = s.player.Name
+		}
+		if enable {
+			s.sendSysMessage("Set fly mode on for " + name)
 		} else {
-			s.sendSysMessage("GM fly mode is ON")
+			s.sendSysMessage("Set fly mode off for " + name)
 		}
 	case "visible", "vis":
 		if len(args) > 1 && strings.ToLower(args[1]) == "off" {
+			if s.player != nil {
+				s.player.PlayerFlags |= 0x00000010
+				s.sendPlayerUpdate()
+			}
+			s.sendNotification("You are now invisible.")
 			s.sendSysMessage("GM visibility is OFF (Invisible)")
 		} else {
+			if s.player != nil {
+				s.player.PlayerFlags &= ^uint32(0x00000010)
+				s.sendPlayerUpdate()
+			}
+			s.sendNotification("You are now visible.")
 			s.sendSysMessage("GM visibility is ON")
 		}
 	default:
-		s.sendSysMessage("Syntax: .gm on|off|chat [on/off]|fly [on/off]|visible [on/off]")
+		s.sendSysMessage("Syntax: .gm on|off|chat|fly|visible")
+	}
+}
+
+func (s *session) sendNotification(msg string) {
+	buf := protocol.NewBuffer(len(msg) + 1)
+	buf.WriteString(msg)
+	_ = s.write(uint16(protocol.OpcodeSMSG_NOTIFICATION), buf.Bytes(), true)
+}
+
+func (s *session) setFlyMode(enable bool) {
+	if s.player == nil {
+		return
+	}
+	buf := protocol.NewBuffer(16)
+	buf.WritePackedGUID(s.playerGUID)
+	buf.WriteU32(0) // movement counter
+	if enable {
+		_ = s.write(uint16(protocol.OpcodeSMSG_MOVE_SET_CAN_FLY), buf.Bytes(), true)
+	} else {
+		_ = s.write(uint16(protocol.OpcodeSMSG_MOVE_UNSET_CAN_FLY), buf.Bytes(), true)
 	}
 }
 
@@ -682,4 +738,40 @@ func (s *session) handleCmdGObject(ctx context.Context, args []string) {
 		return
 	}
 	s.sendSysMessage(fmt.Sprintf("GameObject command %s accepted.", args[0]))
+}
+
+func (s *session) handleCmdRevive(ctx context.Context, args []string) {
+	if s.player == nil {
+		return
+	}
+	s.player.Health = maxUint32(s.player.MaxHealth, 100)
+	s.player.PlayerFlags &^= 0x00002000 // GHOST flag
+	s.sendPlayerUpdate()
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, playerFlags = ? WHERE guid = ?", s.player.Health, s.player.PlayerFlags, s.playerGUID)
+	}
+	s.sendSysMessage("You have been revived.")
+}
+
+func (s *session) handleCmdDismount(ctx context.Context) {
+	if s.player == nil {
+		return
+	}
+	s.mounts = &MountState{}
+	s.sendPlayerUpdate()
+	s.sendSysMessage("You have dismounted.")
+}
+
+func (s *session) handleCmdSave(ctx context.Context) {
+	if s.player == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	_, err := s.server.CharactersStore.DB.ExecContext(ctx,
+		"UPDATE characters SET position_x = ?, position_y = ?, position_z = ?, orientation = ?, map = ?, zone = ?, health = ?, money = ?, playerFlags = ?, equipmentCache = ? WHERE guid = ?",
+		s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map, s.player.Zone, s.player.Health, s.player.Money, s.player.PlayerFlags, s.player.Equipment, s.playerGUID)
+	if err != nil {
+		s.sendSysMessage("Failed to save character: " + err.Error())
+		return
+	}
+	s.sendSysMessage("Player character saved.")
 }
