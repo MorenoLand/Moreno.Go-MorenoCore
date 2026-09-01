@@ -76,18 +76,29 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 	if wdb == nil {
 		return false, nil
 	}
-	var qLevel, minLvl, flags, prevQuest, maxLvl, reqClasses, reqRaces, exclGroup int64
+
+	// 1. Seasonal / World Event checks
+	var eventEntry sql.NullInt64
+	if err := wdb.QueryRowContext(ctx, "SELECT eventEntry FROM game_event_seasonal_questrelation WHERE questId = ?", questID).Scan(&eventEntry); err == nil && eventEntry.Valid && eventEntry.Int64 > 0 {
+		activeEvents := s.server.cachedActiveGameEvents(ctx)
+		if _, active := activeEvents[eventEntry.Int64]; !active {
+			return false, nil
+		}
+	}
+	if err := wdb.QueryRowContext(ctx, "SELECT eventEntry FROM game_event_creature_quest WHERE quest = ?", questID).Scan(&eventEntry); err == nil && eventEntry.Valid && eventEntry.Int64 > 0 {
+		activeEvents := s.server.cachedActiveGameEvents(ctx)
+		if _, active := activeEvents[eventEntry.Int64]; !active {
+			return false, nil
+		}
+	}
+
+	var qLevel, minLvl, flags, allowableRaces int64
 	var title string
-	err = wdb.QueryRowContext(ctx, `SELECT qt.QuestLevel, qt.MinLevel, qt.Flags, COALESCE(qt.LogTitle, ''),
-		COALESCE(qta.PrevQuestID, 0),
-		COALESCE(qta.MaxLevel, 0),
-		COALESCE(qta.AllowableClasses, 0),
-		COALESCE(qta.AllowableRaces, 0),
-		COALESCE(qta.ExclusiveGroup, 0)
-		FROM quest_template AS qt
-		LEFT JOIN quest_template_addon AS qta ON qta.ID = qt.ID
-		WHERE qt.ID = ? LIMIT 1`, questID).Scan(&qLevel, &minLvl, &flags, &title, &prevQuest, &maxLvl, &reqClasses, &reqRaces, &exclGroup)
+	err = wdb.QueryRowContext(ctx, "SELECT QuestLevel, MinLevel, Flags, COALESCE(LogTitle, ''), AllowableRaces FROM quest_template WHERE ID = ?", questID).Scan(&qLevel, &minLvl, &flags, &title, &allowableRaces)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
 		err = wdb.QueryRowContext(ctx, "SELECT QuestLevel, MinLevel, Flags, COALESCE(LogTitle, '') FROM quest_template WHERE ID = ?", questID).Scan(&qLevel, &minLvl, &flags, &title)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -96,28 +107,83 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 			return false, err
 		}
 	}
+
+	var prevQuest, maxLvl, allowableClasses, exclGroup, nextQuest, breadcrumb, specialFlags, addonRaces sql.NullInt64
+	_ = wdb.QueryRowContext(ctx, `SELECT PrevQuestID, MaxLevel, AllowableClasses, ExclusiveGroup, NextQuestID, BreadcrumbForQuestId, SpecialFlags
+		FROM quest_template_addon WHERE ID = ?`, questID).Scan(&prevQuest, &maxLvl, &allowableClasses, &exclGroup, &nextQuest, &breadcrumb, &specialFlags)
+	if !allowableClasses.Valid && !prevQuest.Valid {
+		_ = wdb.QueryRowContext(ctx, `SELECT PrevQuestID, MaxLevel, AllowableClasses, AllowableRaces, ExclusiveGroup, NextQuestID
+			FROM quest_template_addon WHERE ID = ?`, questID).Scan(&prevQuest, &maxLvl, &allowableClasses, &addonRaces, &exclGroup, &nextQuest)
+		if addonRaces.Valid && allowableRaces == 0 {
+			allowableRaces = addonRaces.Int64
+		}
+	}
+
+	// Min/Max Level check
 	if minLvl > int64(s.player.Level) {
 		return false, nil
 	}
-	if maxLvl > 0 && int64(s.player.Level) > maxLvl {
+	if maxLvl.Valid && maxLvl.Int64 > 0 && int64(s.player.Level) > maxLvl.Int64 {
 		return false, nil
 	}
-	if reqClasses > 0 && s.player.Class > 0 && (reqClasses&(1<<uint(s.player.Class-1))) == 0 {
-		return false, nil
-	}
-	if reqRaces > 0 && s.player.Race > 0 && (reqRaces&(1<<uint(s.player.Race-1))) == 0 {
-		return false, nil
-	}
-	if prevQuest > 0 {
-		if !s.isQuestRewarded(ctx, uint32(prevQuest)) {
-			return false, nil
-		}
-	} else if prevQuest < 0 {
-		prevActiveStatus, _ := s.characterQuestStatus(ctx, uint32(-prevQuest))
-		if prevActiveStatus != questStatusIncomplete && prevActiveStatus != questStatusComplete {
+
+	// Class check (AllowableClasses bitmask: 1<<(class-1))
+	if allowableClasses.Valid && allowableClasses.Int64 > 0 && s.player.Class > 0 {
+		playerClassMask := int64(1 << uint(s.player.Class-1))
+		if (allowableClasses.Int64 & playerClassMask) == 0 {
 			return false, nil
 		}
 	}
+
+	// Race check (AllowableRaces bitmask: 1<<(race-1))
+	if allowableRaces > 0 && s.player.Race > 0 {
+		playerRaceMask := int64(1 << uint(s.player.Race-1))
+		if (allowableRaces & playerRaceMask) == 0 {
+			return false, nil
+		}
+	}
+
+	// PrevQuestID check (chain prerequisite)
+	if prevQuest.Valid && prevQuest.Int64 != 0 {
+		if prevQuest.Int64 > 0 {
+			if !s.isQuestRewarded(ctx, uint32(prevQuest.Int64)) {
+				return false, nil
+			}
+		} else {
+			prevActiveStatus, _ := s.characterQuestStatus(ctx, uint32(-prevQuest.Int64))
+			if prevActiveStatus != questStatusIncomplete && prevActiveStatus != questStatusComplete {
+				return false, nil
+			}
+		}
+	}
+
+	// Breadcrumb check
+	if breadcrumb.Valid && breadcrumb.Int64 > 0 {
+		bStatus, _ := s.characterQuestStatus(ctx, uint32(breadcrumb.Int64))
+		if bStatus != 0 || s.isQuestRewarded(ctx, uint32(breadcrumb.Int64)) {
+			return false, nil
+		}
+	}
+
+	// ExclusiveGroup check
+	if exclGroup.Valid && exclGroup.Int64 != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var exclCount int64
+		if exclGroup.Int64 > 0 {
+			_ = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM character_queststatus_rewarded AS cqr
+				JOIN quest_template_addon AS qta ON qta.ID = cqr.quest
+				WHERE cqr.guid = ? AND qta.ExclusiveGroup = ?`, s.playerGUID, exclGroup.Int64).Scan(&exclCount)
+			if exclCount > 0 {
+				return false, nil
+			}
+		}
+	}
+
+	// ConditionMgr check (SourceType 19 & 20)
+	meetsCond, err := s.meetQuestConditions(ctx, questID)
+	if err != nil || !meetsCond {
+		return false, nil
+	}
+
 	return true, nil
 }
 

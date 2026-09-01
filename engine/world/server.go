@@ -878,10 +878,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	s.accountID = account.ID
 	s.accountName = accountName
 	s.security = account.Security
-	if s.gmChat, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionCommandGMChat); err != nil {
-		s.gmChat = false
-		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionCommandGMChat, "error", err)
-	}
+	s.gmChat = false
 	if s.twoSideChat, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionTwoSideInteractionChat); err != nil {
 		s.twoSideChat = false
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionTwoSideInteractionChat, "error", err)
