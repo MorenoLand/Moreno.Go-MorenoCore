@@ -101,10 +101,15 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if language == languageUniversal && typeID != chatAFK && typeID != chatDND {
-		s.debug("chat rejected", "account", s.accountName, "reason", "universal language")
-		return true
+		if s.player.ExtraFlags&0x00000001 == 0 && !s.gmChat {
+			if s.playerAlliance() {
+				language = 7 // Common
+			} else {
+				language = 1 // Orcish
+			}
+		}
 	}
-	if language != languageAddon && s.player.ExtraFlags&0x00000001 != 0 {
+	if language != languageAddon && (s.player.ExtraFlags&0x00000001 != 0 || s.gmChat) {
 		language = languageUniversal
 	}
 	values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, scripting.PlayerEventChat, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
@@ -177,6 +182,14 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			}
 		} else if chatType == chatChannel {
 			if _, ok := channelTargets[value]; !ok {
+				continue
+			}
+		} else if chatType == chatParty || chatType == chatPartyLeader {
+			if source.groupID == 0 || value.groupID != source.groupID {
+				continue
+			}
+		} else if chatType == chatGuild || chatType == chatOfficer {
+			if source.player.GuildID == 0 || value.player.GuildID != source.player.GuildID {
 				continue
 			}
 		} else if value.player.Map != source.player.Map {

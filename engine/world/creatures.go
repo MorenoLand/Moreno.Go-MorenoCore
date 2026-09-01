@@ -286,3 +286,45 @@ func (s *Server) broadcastMonsterMove(mapID uint32, rawGUID uint64, startX, star
 	}
 }
 
+func (s *Server) buildCreatureValuesUpdate(guid uint64, fields map[int]uint32) (*protocol.Packet, error) {
+	values := make([]uint32, creatureValuesCount)
+	mask := protocol.NewUpdateMask(creatureValuesCount)
+	for index, value := range fields {
+		if index < 0 || index >= creatureValuesCount {
+			continue
+		}
+		values[index] = value
+		if err := mask.Set(index); err != nil {
+			return nil, err
+		}
+	}
+	block := protocol.NewBuffer(64 + len(fields)*4)
+	block.WriteU8(protocol.UpdateValues)
+	block.WritePackedGUID(guid)
+	block.WriteU8(uint8(mask.BlockCount()))
+	mask.AppendTo(block)
+	for index := 0; index < creatureValuesCount; index++ {
+		if mask.Has(index) {
+			block.WriteU32(values[index])
+		}
+	}
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(block.Bytes())
+	return updates.BuildPacket(0)
+}
+
+func (s *Server) broadcastCreatureValuesUpdate(mapID uint32, guid uint64, fields map[int]uint32) {
+	packet, err := s.buildCreatureValuesUpdate(guid, fields)
+	if err != nil || packet == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
+			continue
+		}
+		_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
+	}
+}
+

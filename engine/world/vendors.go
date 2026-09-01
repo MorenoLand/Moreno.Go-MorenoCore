@@ -174,7 +174,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, played_time, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 0, 0, '')", nextGUID, itemEntry, s.playerGUID, count)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, itemEntry, count, count), true)
-	s.sendPlayerUpdate()
+	_ = s.sendItemCreate(uint64(nextGUID), itemEntry, count, 0, freeSlot)
 	s.debug("item bought from vendor", "account", s.accountName, "item", itemEntry, "count", count, "cost", totalCost, "slot", freeSlot)
 	return true
 }

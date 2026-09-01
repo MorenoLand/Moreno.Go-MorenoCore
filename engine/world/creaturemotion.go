@@ -5,7 +5,22 @@ import (
 	"math"
 	"math/rand"
 	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
+
+type playerPos struct {
+	Map    uint32
+	X      float32
+	Y      float32
+	Z      float32
+	GUID   uint64
+	Race   uint8
+	Level  uint8
+	IsGM   bool
+	IsDead bool
+	Sess   *session
+}
 
 // creatureMotion tracks live server-side creature movement state, the role
 // TrinityCore's MotionMaster fills: home position (for random wander around
@@ -21,8 +36,16 @@ type creatureMotion struct {
 	Y        float32
 	Z        float32
 	Speed    float32 // yd/s walk speed used for wander
+	RunSpeed float32 // yd/s run speed used for pursuit
 	MoveType uint32  // 1 random, 2 waypoint
 	Wander   float64
+
+	Faction uint32
+	Level   uint32
+
+	TargetGUID uint64
+	InCombat   bool
+	LastAttack time.Time
 
 	PathID  uint32
 	Points  []waypointPoint
@@ -62,6 +85,7 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 			HomeX:    x, HomeY: y, HomeZ: z,
 			X: x, Y: y, Z: z,
 			Speed:    walkSpeed,
+			RunSpeed: 7.0,
 			MoveType: moveType,
 			Wander:   wander,
 		}
@@ -76,6 +100,19 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 	}
 	motion.Refreshed = time.Now()
 	return motion
+}
+
+func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerGUID uint64) {
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if s.creatureMotion == nil {
+		return
+	}
+	if motion, ok := s.creatureMotion[creatureGUID]; ok && motion != nil {
+		motion.TargetGUID = playerGUID
+		motion.InCombat = true
+		motion.Moving = false
+	}
 }
 
 func (s *Server) loadCreaturePathID(ctx context.Context, guid, entry uint32) uint32 {
@@ -110,23 +147,31 @@ func (s *Server) loadWaypoints(ctx context.Context, pathID uint32) []waypointPoi
 	return points
 }
 
-// updateActiveCreatures drives wander/patrol motion for creatures near
-// online players, mirroring RandomMovementGenerator and
-// WaypointMovementGenerator behaviour at a coarse tick.
+// updateActiveCreatures drives wander/patrol/combat motion for creatures near
+// online players, mirroring RandomMovementGenerator, WaypointMovementGenerator,
+// and TargetedMovementGenerator behaviour.
 func (s *Server) updateActiveCreatures(ctx context.Context) {
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return
-	}
-	type playerPos struct {
-		Map uint32
-		X   float32
-		Y   float32
 	}
 	var players []playerPos
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
 		if sess.playerLoaded && sess.player != nil {
-			players = append(players, playerPos{Map: sess.player.Map, X: sess.player.X, Y: sess.player.Y})
+			isGM := (sess.player.ExtraFlags&0x00000001 != 0) || sess.gmChat
+			isDead := sess.player.Health == 0
+			players = append(players, playerPos{
+				Map:    sess.player.Map,
+				X:      sess.player.X,
+				Y:      sess.player.Y,
+				Z:      sess.player.Z,
+				GUID:   sess.playerGUID,
+				Race:   sess.player.Race,
+				Level:  sess.player.Level,
+				IsGM:   isGM,
+				IsDead: isDead,
+				Sess:   sess,
+			})
 		}
 	}
 	s.sessionsMu.RUnlock()
@@ -140,10 +185,11 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 		distance = 100.0
 	}
 	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.MovementType, c.wander_distance,
-		COALESCE(NULLIF(t.speed_walk, 0), 2.5)
+		COALESCE(NULLIF(t.speed_walk, 0), 2.5), COALESCE(NULLIF(t.speed_run, 0), 7.0),
+		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(c.curhealth, 100)
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
-		WHERE c.map = ? AND c.MovementType IN (1, 2) AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ? AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)`
+		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ? AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)`
 	seenCreatures := make(map[uint32]struct{})
 	for _, p := range players {
 		rows, err := s.WorldStore.DB.QueryContext(ctx, query, p.Map, float64(p.X)-distance, float64(p.X)+distance, float64(p.Y)-distance, float64(p.Y)+distance)
@@ -151,25 +197,106 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			continue
 		}
 		for rows.Next() {
-			var guid, entry, moveType int64
-			var x, y, z, wander, walkSpeed float64
-			if err := rows.Scan(&guid, &entry, &x, &y, &z, &moveType, &wander, &walkSpeed); err != nil {
+			var guid, entry, moveType, faction, level, curHealth int64
+			var x, y, z, wander, walkSpeed, runSpeed float64
+			if err := rows.Scan(&guid, &entry, &x, &y, &z, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &curHealth); err != nil {
 				continue
 			}
 			if _, dup := seenCreatures[uint32(guid)]; dup {
 				continue
 			}
 			seenCreatures[uint32(guid)] = struct{}{}
+			if curHealth <= 0 {
+				continue
+			}
 			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, float32(x), float32(y), float32(z), uint32(moveType), wander, float32(walkSpeed))
-			s.stepCreatureMotion(ctx, motion, now)
+			motion.Faction = uint32(faction)
+			motion.Level = uint32(level)
+			if runSpeed > 0 {
+				motion.RunSpeed = float32(runSpeed)
+			}
+			s.stepCreatureMotion(ctx, motion, players, now)
 		}
 		rows.Close()
 	}
 }
 
-// stepCreatureMotion advances one creature: finishes an in-flight move,
-// honors waypoint delays, then plans the next broadcast move.
-func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, now time.Time) {
+// stepCreatureMotion advances one creature: handles combat pursuit/attacks,
+// finishes in-flight moves, honors waypoint delays, or wanders randomly.
+func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
+	// 1. If currently in combat with a target:
+	if motion.InCombat && motion.TargetGUID != 0 {
+		var target *playerPos
+		for i := range players {
+			if players[i].GUID == motion.TargetGUID && players[i].Map == motion.Map {
+				target = &players[i]
+				break
+			}
+		}
+		// If target left map, logged out, dead, or turned on GM mode: drop combat
+		if target == nil || target.IsDead || target.IsGM {
+			motion.InCombat = false
+			motion.TargetGUID = 0
+			motion.Moving = false
+			return
+		}
+		dist := float32(math.Hypot(float64(target.X-motion.X), float64(target.Y-motion.Y)))
+		if dist > 45.0 {
+			// Evade / drop combat if player ran too far
+			motion.InCombat = false
+			motion.TargetGUID = 0
+			motion.Moving = false
+			return
+		}
+		if dist > 3.0 {
+			// Pursue player: move towards target at run speed
+			if !motion.Moving || now.After(motion.MoveEnds) {
+				duration := uint32((dist / motion.RunSpeed) * 1000)
+				if duration < 300 {
+					duration = 300
+				}
+				s.broadcastMonsterMove(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration)
+				motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
+				motion.Moving = true
+				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+			}
+			return
+		}
+		// In melee range (<= 3.0 yards): attack player
+		motion.Moving = false
+		if now.Sub(motion.LastAttack) >= 2*time.Second {
+			damage := uint32(10 + int(motion.Level)*2)
+			overkill := uint32(0)
+			if damage >= target.Sess.player.Health {
+				overkill = damage - target.Sess.player.Health
+				target.Sess.player.Health = 0
+			} else {
+				target.Sess.player.Health -= damage
+			}
+			_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), buildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill), true)
+			target.Sess.sendPlayerUpdate()
+			motion.LastAttack = now
+		}
+		return
+	}
+
+	// 2. Check for nearby hostile aggro
+	for _, p := range players {
+		if p.Map != motion.Map || p.IsGM || p.IsDead {
+			continue
+		}
+		dist := float32(math.Hypot(float64(p.X-motion.X), float64(p.Y-motion.Y)))
+		aggroDist := float32(15.0)
+		if isHostileFaction(motion.Faction, p.Race) && dist <= aggroDist {
+			motion.InCombat = true
+			motion.TargetGUID = p.GUID
+			motion.Moving = false
+			_ = p.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, p.GUID), true)
+			return
+		}
+	}
+
+	// 3. Normal wandering or waypoint patrolling
 	if motion.Moving {
 		if now.Before(motion.MoveEnds) {
 			return
@@ -195,8 +322,6 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		motion.NextIdx = (motion.NextIdx + 1) % len(motion.Points)
 	} else {
-		// RandomMovementGenerator: pick a point inside wander_distance of the
-		// home position, pause between 1 and 10 seconds like the reference.
 		angle := rand.Float64() * 2 * math.Pi
 		dist := rand.Float64() * motion.Wander
 		destX = float32(float64(motion.HomeX) + dist*math.Cos(angle))
@@ -218,6 +343,33 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.WaitUntil = motion.MoveEnds.Add(wait)
+}
+
+func isHostileFaction(creatureFaction uint32, playerRace uint8) bool {
+	if creatureFaction == 0 || creatureFaction == 35 {
+		return false
+	}
+	switch creatureFaction {
+	case 14, 16, 17, 38, 48, 91, 100, 101, 102, 103, 104, 105, 106, 117, 168, 188, 189, 214, 254:
+		return true
+	}
+	isAlliance := isAllianceRace(playerRace)
+	switch creatureFaction {
+	case 1, 3, 4, 11, 12, 55, 57, 72, 115:
+		return !isAlliance
+	case 2, 5, 6, 8, 10, 29, 67, 68, 76, 116:
+		return isAlliance
+	}
+	return creatureFaction >= 14
+}
+
+func isAllianceRace(race uint8) bool {
+	switch race {
+	case 1, 3, 4, 7, 11:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) pruneCreatureMotion(now time.Time) {

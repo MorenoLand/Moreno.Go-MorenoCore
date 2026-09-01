@@ -77,6 +77,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		if cdb != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", uint32(target.GUID&0xFFFFFF))
 		}
+		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+			unitFieldHealth:       0,
+			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+		})
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target)
@@ -86,6 +90,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		if cdb != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE creature SET curhealth = ? WHERE guid = ?", newHealth, uint32(target.GUID&0xFFFFFF))
 		}
+		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+			unitFieldHealth: newHealth,
+		})
+		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 	}
 }
 
