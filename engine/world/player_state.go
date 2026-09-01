@@ -255,41 +255,44 @@ func (s *session) CharGuild(ctx context.Context, state *playerState) error {
 }
 
 func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) error {
+	defaults := defaultRacialSkills(state.Race, state.Class)
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		state.Skills = defaultRacialSkills(state.Race, state.Class)
+		state.Skills = defaults
 		return nil
 	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT skill, value, max FROM character_skills WHERE guid = ?", state.GUID)
 	if err != nil {
-		state.Skills = defaultRacialSkills(state.Race, state.Class)
+		state.Skills = defaults
 		return nil
 	}
 	skills := make([]playerSkill, 0, 16)
-	hasLanguage := false
 	for rows.Next() {
 		var skill, value, max uint16
 		if err := rows.Scan(&skill, &value, &max); err == nil {
-			if isLanguageSkill(skill) {
-				hasLanguage = true
+			if isLanguageSkill(skill) && (value == 0 || max == 0) {
+				value = 300
+				max = 300
 			}
 			skills = append(skills, playerSkill{Skill: skill, Step: 1, Value: value, Max: max})
 		}
 	}
 	_ = rows.Close()
-	if !hasLanguage || len(skills) == 0 {
-		defaults := defaultRacialSkills(state.Race, state.Class)
-		for _, def := range defaults {
-			found := false
-			for _, sk := range skills {
-				if sk.Skill == def.Skill {
-					found = true
-					break
+	for _, def := range defaults {
+		found := false
+		for i, sk := range skills {
+			if sk.Skill == def.Skill {
+				found = true
+				if isLanguageSkill(sk.Skill) && (sk.Value == 0 || sk.Max == 0) {
+					skills[i].Value = 300
+					skills[i].Max = 300
+					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, 300, 300)", state.GUID, def.Skill)
 				}
+				break
 			}
-			if !found {
-				skills = append(skills, def)
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, def.Skill, def.Value, def.Max)
-			}
+		}
+		if !found {
+			skills = append(skills, def)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", state.GUID, def.Skill, def.Value, def.Max)
 		}
 	}
 	state.Skills = skills
@@ -312,17 +315,17 @@ func defaultRacialSkills(race, class uint8) []playerSkill {
 	case 2: // Orc
 		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1})
 	case 3: // Dwarf
-		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 111, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 115, Value: 300, Max: 300, Step: 1})
 	case 4: // Night Elf
 		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 113, Value: 300, Max: 300, Step: 1})
 	case 5: // Undead
 		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 673, Value: 300, Max: 300, Step: 1})
 	case 6: // Tauren
-		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 115, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 111, Value: 300, Max: 300, Step: 1})
 	case 7: // Gnome
-		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 313, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 98, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 315, Value: 300, Max: 300, Step: 1})
 	case 8: // Troll
-		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 315, Value: 300, Max: 300, Step: 1})
+		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 313, Value: 300, Max: 300, Step: 1})
 	case 10: // Blood Elf
 		skills = append(skills, playerSkill{Skill: 109, Value: 300, Max: 300, Step: 1}, playerSkill{Skill: 137, Value: 300, Max: 300, Step: 1})
 	case 11: // Draenei

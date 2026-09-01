@@ -43,42 +43,35 @@ func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState
 }
 
 func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race uint8) ([]learnedSpell, error) {
+	defaults := defaultRacialSpells(race)
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
-		return defaultRacialSpells(race), nil
+		return defaults, nil
 	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell, active, disabled FROM character_spell WHERE guid = ? ORDER BY spell", guid)
 	if err != nil {
-		return defaultRacialSpells(race), nil
+		return defaults, nil
 	}
 	result := make([]learnedSpell, 0)
-	hasLanguage := false
 	for rows.Next() {
 		var spell, active, disabled int64
 		if err := rows.Scan(&spell, &active, &disabled); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		if isLanguageSpell(uint32(spell)) {
-			hasLanguage = true
-		}
 		result = append(result, learnedSpell{ID: uint32(spell), Active: active != 0, Disabled: disabled != 0})
 	}
 	_ = rows.Close()
-	if !hasLanguage || len(result) == 0 {
-		defaults := defaultRacialSpells(race)
-		for _, def := range defaults {
-			found := false
-			for _, sp := range result {
-				if sp.ID == def.ID {
-					found = true
-					break
-				}
+	for _, def := range defaults {
+		found := false
+		for _, sp := range result {
+			if sp.ID == def.ID {
+				found = true
+				break
 			}
-			if !found {
-				result = append(result, def)
-				if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, def.ID); err != nil {
-				}
-			}
+		}
+		if !found {
+			result = append(result, def)
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, def.ID)
 		}
 	}
 	return result, nil
