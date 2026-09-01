@@ -84,3 +84,16 @@ func TestHandleAttackSwingStartsAndStopsCombat(t *testing.T) {
 		t.Fatalf("stop target=%x err=%v", target, err)
 	}
 }
+
+func TestHandleSetSheathed(t *testing.T) {
+	state := &session{playerLoaded: true, player: &playerState{GUID: 1}}
+	payload := protocol.NewBuffer(4)
+	payload.WriteU32(1) // Melee drawn
+	if !state.handleSetSheathed(payload.Bytes()) {
+		t.Fatal("handleSetSheathed failed")
+	}
+	if state.player.SheathState != 1 {
+		t.Fatalf("expected sheath state 1, got %d", state.player.SheathState)
+	}
+}
+

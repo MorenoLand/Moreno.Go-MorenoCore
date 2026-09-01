@@ -17,7 +17,7 @@ func (s *session) sendSysMessage(msg string) {
 }
 
 func (s *session) sendPlayerUpdate() {
-	if s.player == nil {
+	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
 	updates, err := s.server.buildPlayerUpdate(*s.player)
