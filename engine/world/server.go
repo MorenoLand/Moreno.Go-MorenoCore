@@ -499,6 +499,7 @@ func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
 		}
 		frame = frame[n:]
 	}
+	s.debug("world packet sent", "account", s.accountName, "opcode", opcodeName(uint32(opcode)), "size", len(payload))
 	return nil
 }
 
