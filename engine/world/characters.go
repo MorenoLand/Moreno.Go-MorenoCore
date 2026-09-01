@@ -250,7 +250,10 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 48)
 	}
 
-	// Populate starting equipment and items (from CharStartOutfit DBC / playercreateinfo_item)
+	// Populate starter spells, skills, actions, equipment
+	s.createStarterSpells(ctx, guid, race, class)
+	s.createStarterSkills(ctx, guid, race, class)
+	s.createStarterActions(ctx, guid, race, class)
 	s.createStarterOutfit(ctx, guid, race, class, gender)
 
 	var realmCharacters sql.NullInt64
@@ -849,4 +852,108 @@ func (s *session) createStarterOutfit(ctx context.Context, guid uint64, race, cl
 	}
 	cacheStr := strings.Join(parts, " ")
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET equipmentCache = ? WHERE guid = ?", cacheStr, guid)
+}
+
+func (s *session) createStarterSpells(ctx context.Context, guid uint64, race, class uint8) {
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	if cdb == nil || wdb == nil {
+		return
+	}
+
+	spells := defaultRacialSpells(race)
+	seen := make(map[uint32]bool)
+	for _, sp := range spells {
+		seen[sp.ID] = true
+		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, sp.ID)
+	}
+
+	rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = ? OR racemask = 0) AND (classmask = ? OR classmask = 0)", race, class)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var spellID int64
+			if err := rows.Scan(&spellID); err == nil && spellID > 0 {
+				id := uint32(spellID)
+				if !seen[id] {
+					seen[id] = true
+					_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, id)
+				}
+			}
+		}
+	}
+}
+
+func (s *session) createStarterSkills(ctx context.Context, guid uint64, race, class uint8) {
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	if cdb == nil || wdb == nil {
+		return
+	}
+
+	var racialLangSkill uint32
+	switch race {
+	case 1:
+		racialLangSkill = 98 // Common
+	case 2:
+		racialLangSkill = 109 // Orcish
+	case 3:
+		racialLangSkill = 111 // Dwarven
+	case 4:
+		racialLangSkill = 113 // Darnassian
+	case 5:
+		racialLangSkill = 673 // Gutterspeak
+	case 6:
+		racialLangSkill = 115 // Taurahe
+	case 7:
+		racialLangSkill = 313 // Gnomish
+	case 8:
+		racialLangSkill = 315 // Troll
+	case 10:
+		racialLangSkill = 137 // Thalassian
+	case 11:
+		racialLangSkill = 759 // Draenei
+	}
+	if racialLangSkill != 0 {
+		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, 300, 300)", guid, racialLangSkill)
+	}
+	if race == 3 || race == 4 || race == 7 || race == 11 {
+		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, 98, 300, 300)", guid)
+	} else if race == 5 || race == 6 || race == 8 || race == 10 {
+		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, 109, 300, 300)", guid)
+	}
+
+	rows, err := wdb.QueryContext(ctx, "SELECT skill, rank FROM playercreateinfo_skills WHERE (raceMask = ? OR raceMask = 0) AND (classMask = ? OR classMask = 0)", race, class)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var skillID, rank int64
+			if err := rows.Scan(&skillID, &rank); err == nil && skillID > 0 {
+				val := 1
+				max := 300
+				if rank > 0 {
+					val = int(rank)
+				}
+				_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", guid, skillID, val, max)
+			}
+		}
+	}
+}
+
+func (s *session) createStarterActions(ctx context.Context, guid uint64, race, class uint8) {
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	if cdb == nil || wdb == nil {
+		return
+	}
+	rows, err := wdb.QueryContext(ctx, "SELECT button, action, type FROM playercreateinfo_action WHERE race = ? AND class = ?", race, class)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var button, action, kind int64
+			if err := rows.Scan(&button, &action, &kind); err == nil {
+				_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_action (guid, spec, button, action, type) VALUES (?, 0, ?, ?, ?)", guid, button, action, kind)
+			}
+		}
+	}
 }

@@ -64,10 +64,19 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		}
 	}
 	if s.gossip == nil && !s.gossipClosed {
-		defaultMenu, err := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), objectUint32OrZero(creature, "GossipMenuID"))
+		npcFlags := objectUint32OrZero(creature, "NPCFlags")
+		defaultMenu, err := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, objectUint32OrZero(creature, "GossipMenuID"))
 		if err != nil {
 			s.debug("default gossip load failed", "account", s.accountName, "entry", entry, "error", err)
 			return false
+		}
+		if defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 0 {
+			if npcFlags&0x70 != 0 { // UNIT_NPC_FLAG_TRAINER (0x10, 0x20, 0x40)
+				return s.sendTrainerList(ctx, guid)
+			}
+			if npcFlags&0x380 != 0 { // UNIT_NPC_FLAG_VENDOR (0x80, 0x100, 0x200)
+				return s.sendVendorList(ctx, guid)
+			}
 		}
 		s.gossip = defaultMenu
 		if err := s.sendGossipMenu(); err != nil {

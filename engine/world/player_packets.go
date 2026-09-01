@@ -26,11 +26,11 @@ type spellCooldown struct {
 }
 
 func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState) error {
-	spells, err := s.loadLearnedSpells(ctx, state.GUID, state.Race)
+	spells, err := s.loadLearnedSpells(ctx, state.GUID, state.Race, state.Class)
 	if err != nil {
 		return err
 	}
-	actions, err := s.loadActionButtons(ctx, state.GUID)
+	actions, err := s.loadActionButtons(ctx, state.GUID, state.Race, state.Class)
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState
 	return nil
 }
 
-func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race uint8) ([]learnedSpell, error) {
+func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, class uint8) ([]learnedSpell, error) {
 	defaults := defaultRacialSpells(race)
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return defaults, nil
@@ -61,6 +61,7 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race uint8
 		result = append(result, learnedSpell{ID: uint32(spell), Active: active != 0, Disabled: disabled != 0})
 	}
 	_ = rows.Close()
+
 	for _, def := range defaults {
 		found := false
 		for _, sp := range result {
@@ -72,6 +73,31 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race uint8
 		if !found {
 			result = append(result, def)
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, def.ID)
+		}
+	}
+
+	// If player has few spells, ensure custom starter spells from playercreateinfo_spell_custom are also learned
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		crows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = ? OR racemask = 0) AND (classmask = ? OR classmask = 0)", race, class)
+		if err == nil {
+			defer crows.Close()
+			for crows.Next() {
+				var customSpell int64
+				if err := crows.Scan(&customSpell); err == nil && customSpell > 0 {
+					id := uint32(customSpell)
+					found := false
+					for _, sp := range result {
+						if sp.ID == id {
+							found = true
+							break
+						}
+					}
+					if !found {
+						result = append(result, learnedSpell{ID: id, Active: true})
+						_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, id)
+					}
+				}
+			}
 		}
 	}
 	return result, nil
@@ -115,7 +141,7 @@ func isLanguageSpell(spellID uint32) bool {
 	return false
 }
 
-func (s *session) loadActionButtons(ctx context.Context, guid uint64) ([144]uint32, error) {
+func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, class uint8) ([144]uint32, error) {
 	var result [144]uint32
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT button, action, type FROM character_action WHERE guid = ? AND spec = (SELECT activeTalentGroup FROM characters WHERE guid = ?) ORDER BY button", guid, guid)
 	if err != nil {
@@ -125,6 +151,7 @@ func (s *session) loadActionButtons(ctx context.Context, guid uint64) ([144]uint
 		return result, err
 	}
 	defer rows.Close()
+	hasActions := false
 	for rows.Next() {
 		var button, action, kind int64
 		if err := rows.Scan(&button, &action, &kind); err != nil {
@@ -132,6 +159,22 @@ func (s *session) loadActionButtons(ctx context.Context, guid uint64) ([144]uint
 		}
 		if button >= 0 && button < int64(len(result)) && action >= 0 && action < 0x01000000 && kind >= 0 && kind <= 255 {
 			result[button] = uint32(action) | uint32(kind)<<24
+			hasActions = true
+		}
+	}
+	if !hasActions && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		arows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT button, action, type FROM playercreateinfo_action WHERE race = ? AND class = ?", race, class)
+		if err == nil {
+			defer arows.Close()
+			for arows.Next() {
+				var button, action, kind int64
+				if err := arows.Scan(&button, &action, &kind); err == nil {
+					if button >= 0 && button < int64(len(result)) && action >= 0 && action < 0x01000000 && kind >= 0 && kind <= 255 {
+						result[button] = uint32(action) | uint32(kind)<<24
+						_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_action (guid, spec, button, action, type) VALUES (?, 0, ?, ?, ?)", guid, button, action, kind)
+					}
+				}
+			}
 		}
 	}
 	return result, rows.Err()
