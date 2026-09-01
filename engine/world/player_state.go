@@ -130,6 +130,8 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, name, race, class, gender, level, playerFlags, map, position_x, position_y, position_z, orientation, extra_flags, at_login, zone, equipmentCache FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&state.GUID, &state.Name, &race, &class, &gender, &level, &playerFlags, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &extraFlags, &atLogin, &zone, &equipment); err != nil {
 		return playerState{}, err
 	}
+	state.Race, state.Class, state.Gender, state.Level = uint8(race), uint8(class), uint8(gender), uint8(level)
+	state.PlayerFlags, state.Map, state.ExtraFlags, state.AtLogin, state.Zone = uint32(playerFlags), uint32(mapID), uint32(extraFlags), uint32(atLogin), uint32(zone)
 	if equipment.Valid {
 		state.Equipment = equipment.String
 	}
@@ -145,6 +147,9 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if loginState == 1 || (loginState == 2 && state.ExtraFlags&playerExtraGMOn != 0) {
 		state.ExtraFlags |= playerExtraGMOn
 		state.PlayerFlags |= playerFlagGM
+	} else {
+		state.ExtraFlags &= ^playerExtraGMOn
+		state.PlayerFlags &= ^playerFlagGM
 	}
 	// Rebuild the quest log slots from character_queststatus rows like
 	// Player::LoadFromDB does for QUEST_STATUS_INCOMPLETE/COMPLETE quests.
@@ -177,8 +182,6 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		// continent starting nodes for characters without saved masks.
 		s.initTaxiNodesForLevel()
 	}
-	state.Race, state.Class, state.Gender, state.Level = uint8(race), uint8(class), uint8(gender), uint8(level)
-	state.PlayerFlags, state.Map, state.ExtraFlags, state.AtLogin, state.Zone = uint32(playerFlags), uint32(mapID), uint32(extraFlags), uint32(atLogin), uint32(zone)
 	if err := s.loadOptionalPlayerState(ctx, &state); err != nil {
 		return playerState{}, err
 	}
