@@ -196,6 +196,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleGossipSelectOption(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_QUESTGIVER_STATUS_QUERY):
+			if !state.authed || !state.handleQuestgiverStatusQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_QUESTGIVER_HELLO):
+			if !state.authed || !state.handleQuestgiverHello(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_NAME_QUERY):
 			if !state.authed || !state.handleNameQuery(ctx, payload) {
 				return

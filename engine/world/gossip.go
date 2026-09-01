@@ -28,6 +28,16 @@ type gossipMenuState struct {
 	MenuID     uint32
 	TitleID    uint32
 	Items      map[uint32]gossipMenuItem
+	Quests     []gossipQuestItem
+}
+
+type gossipQuestItem struct {
+	ID           uint32
+	Icon         uint32
+	Level        int32
+	Flags        uint32
+	AutoComplete bool
+	Title        string
 }
 
 func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
@@ -159,7 +169,13 @@ func (s *session) prepareCreatureGossip(ctx context.Context, guid uint64, entry,
 	for _, option := range options {
 		menu.Items[option.ID] = option.Item
 	}
-	_ = entry
+	if npcFlags&0x00000002 != 0 && s.player != nil {
+		quests, err := s.loadCreatureQuestMenu(ctx, entry, s.player.Level)
+		if err != nil {
+			return nil, err
+		}
+		menu.Quests = quests
+	}
 	return menu, nil
 }
 
@@ -204,6 +220,7 @@ func (s *session) luaGossipComplete(_ context.Context, _ []any) ([]any, error) {
 func (s *session) luaGossipClearMenu(_ context.Context, _ []any) ([]any, error) {
 	if s.gossip != nil {
 		s.gossip.Items = make(map[uint32]gossipMenuItem)
+		s.gossip.Quests = nil
 	}
 	return nil, nil
 }
@@ -330,7 +347,19 @@ func buildGossipMessage(menu gossipMenuState) []byte {
 		packet.WriteCString(item.Message)
 		packet.WriteCString(item.BoxMessage)
 	}
-	packet.WriteU32(0)
+	packet.WriteU32(uint32(len(menu.Quests)))
+	for _, quest := range menu.Quests {
+		packet.WriteU32(quest.ID)
+		packet.WriteU32(quest.Icon)
+		packet.WriteI32(quest.Level)
+		packet.WriteU32(quest.Flags)
+		if quest.AutoComplete {
+			packet.WriteU8(1)
+		} else {
+			packet.WriteU8(0)
+		}
+		packet.WriteCString(quest.Title)
+	}
 	return packet.Bytes()
 }
 
