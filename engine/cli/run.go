@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/service"
@@ -27,7 +29,8 @@ func Run(kind *service.Kind) int {
 		fmt.Printf("%s %s (%s)\n", version.Product, version.String(), version.Revision())
 		return 0
 	}
-	c, err := config.Load(*configPath)
+	selectedConfig := discoverConfig(*configPath, *kind)
+	c, err := config.Load(selectedConfig)
 	if err != nil && !os.IsNotExist(err) {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -69,7 +72,8 @@ func RunCombined() int {
 		fmt.Printf("%s %s (%s)\n", version.Product, version.String(), version.Revision())
 		return 0
 	}
-	c, err := config.Load(*configPath)
+	selectedConfig := discoverConfig(*configPath, "")
+	c, err := config.Load(selectedConfig)
 	if err != nil && !os.IsNotExist(err) {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -120,4 +124,24 @@ func newLogger(debug bool) *slog.Logger {
 		level = slog.LevelDebug
 	}
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+}
+
+func discoverConfig(explicit string, kind service.Kind) string {
+	if explicit != "" {
+		return explicit
+	}
+	cwd, err := os.Getwd()
+	if err != nil || strings.EqualFold(filepath.Base(filepath.Clean(cwd)), "bin") {
+		return ""
+	}
+	candidates := []string{"bin/worldserver.conf", "worldserver.conf"}
+	if kind == service.Auth {
+		candidates = []string{"bin/authserver.conf", "authserver.conf"}
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
 }
