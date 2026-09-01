@@ -119,7 +119,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		return s.sendChannelNotify(channelNotMemberNotice, channel, nil) == nil
 	}
 	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channel)
-	s.debug("chat accepted", "account", s.accountName, "type", typeID)
+	s.debug("chat accepted", "account", s.accountName, "type", typeID, "gm_chat", s.gmChat)
 	return true
 }
 
@@ -170,9 +170,25 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	s.sessionsMu.RUnlock()
 	for _, target := range targets {
 		receiverGUID := source.playerGUID
+		opcode := uint16(protocol.OpcodeSMSG_MESSAGECHAT)
 		payload := protocol.BuildChatMessage(chatType, language, source.playerGUID, receiverGUID, message, channel)
-		if err := target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true); err != nil {
+		if source.gmChat {
+			opcode = uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT)
+			payload = protocol.BuildChatMessageWithOptions(chatType, language, source.playerGUID, receiverGUID, message, channel, true, source.player.Name, source.chatTag())
+		}
+		if err := target.write(opcode, payload, true); err != nil {
 			target.debug("chat delivery failed", "account", target.accountName, "error", err)
 		}
 	}
+}
+
+func (s *session) chatTag() uint8 {
+	if s.player == nil {
+		return 0
+	}
+	var tag uint8
+	if s.player.ExtraFlags&0x20 != 0 {
+		tag |= 0x04
+	}
+	return tag
 }

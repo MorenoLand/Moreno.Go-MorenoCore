@@ -62,3 +62,38 @@ func TestBuildChatMessage(t *testing.T) {
 		t.Fatalf("tag=%d err=%v", value, err)
 	}
 }
+
+func TestBuildGMChatMessage(t *testing.T) {
+	data := BuildChatMessageWithOptions(1, 1, 99, 99, "hello", "", true, "Tester", 4)
+	reader := NewReader(data)
+	if value, err := reader.ReadU8(); err != nil || value != 1 {
+		t.Fatalf("chat type=%d err=%v", value, err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := reader.ReadU64(); err != nil || value != 99 {
+		t.Fatalf("sender=%d err=%v", value, err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := reader.ReadU32(); err != nil || value != 7 {
+		t.Fatalf("sender name length=%d err=%v", value, err)
+	}
+	if value, err := reader.ReadCString(); err != nil || value != "Tester" {
+		t.Fatalf("sender name=%q err=%v", value, err)
+	}
+	if value, err := reader.ReadU64(); err != nil || value != 99 {
+		t.Fatalf("receiver=%d err=%v", value, err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReadCString(); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := reader.ReadU8(); err != nil || value != 4 {
+		t.Fatalf("tag=%d err=%v", value, err)
+	}
+}

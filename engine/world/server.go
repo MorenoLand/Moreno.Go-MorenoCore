@@ -63,6 +63,7 @@ type session struct {
 	accountID    uint32
 	accountName  string
 	security     uint8
+	gmChat       bool
 	legitimate   map[uint64]struct{}
 	mounts       *MountState
 	playerGUID   uint64
@@ -482,7 +483,11 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	s.accountID = account.ID
 	s.accountName = accountName
 	s.security = account.Security
-	s.debug("world authentication accepted", "account", accountName, "build", build, "remote", remoteAddress(s.conn))
+	if s.gmChat, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionCommandGMChat); err != nil {
+		s.gmChat = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionCommandGMChat, "error", err)
+	}
+	s.debug("world authentication accepted", "account", accountName, "build", build, "gm_chat", s.gmChat, "remote", remoteAddress(s.conn))
 	return s.write(opcodeAuthResponse, []byte{authOK}, true) == nil
 }
 
