@@ -95,6 +95,7 @@ func (s *session) handleZoneUpdate(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	s.updateLocalChannels(zone)
+	s.streamNearbyObjects(ctx)
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ZONE", zone, s.playerGUID); err != nil {
 		s.debug("zone update failed", "account", s.accountName, "zone", zone, "error", err)
 		return false

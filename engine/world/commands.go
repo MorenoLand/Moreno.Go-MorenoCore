@@ -223,7 +223,16 @@ func (s *session) refreshNearbyObjects(ctx context.Context) {
 			rows.Close()
 		}
 	}
-	// Stream creature and gameobject updates for current visibility mode
+	s.streamNearbyObjects(ctx)
+}
+
+func (s *session) streamNearbyObjects(ctx context.Context) {
+	if !s.playerLoaded || s.player == nil || s.server == nil {
+		return
+	}
+	s.lastStreamX = s.player.X
+	s.lastStreamY = s.player.Y
+	s.lastStreamZ = s.player.Z
 	if packet, count, err := s.server.buildNearbyCreatureUpdates(ctx, *s.player); err == nil && count > 0 && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
