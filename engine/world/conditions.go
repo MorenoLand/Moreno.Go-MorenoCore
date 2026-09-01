@@ -129,6 +129,63 @@ func (s *session) loadGossipOptionConditions(ctx context.Context, menuID, option
 	return result, rows.Err()
 }
 
+func (s *session) loadQuestConditions(ctx context.Context, questID uint32) ([]conditionRow, error) {
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId IN (19, 20) AND SourceEntry = ? ORDER BY ElseGroup", questID)
+	if err != nil {
+		if missingTable(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]conditionRow, 0, 4)
+	for rows.Next() {
+		var row conditionRow
+		if err := rows.Scan(&row.ElseGroup, &row.ConditionType, &row.ConditionTarget, &row.Value1, &row.Value2, &row.Value3, &row.Negative); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	return result, rows.Err()
+}
+
+func (s *session) meetQuestConditions(ctx context.Context, questID uint32) (bool, error) {
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true, nil
+	}
+	conditions, err := s.loadQuestConditions(ctx, questID)
+	if err != nil {
+		return false, err
+	}
+	if len(conditions) == 0 {
+		return true, nil
+	}
+	groups := make(map[int64][]conditionRow)
+	for _, row := range conditions {
+		groups[row.ElseGroup] = append(groups[row.ElseGroup], row)
+	}
+	for _, group := range groups {
+		met := true
+		for _, row := range group {
+			ok, err := s.evalCondition(ctx, row, 0)
+			if err != nil {
+				return false, err
+			}
+			if row.Negative {
+				ok = !ok
+			}
+			if !ok {
+				met = false
+				break
+			}
+		}
+		if met {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // meetGossipOptionConditions evaluates the ElseGroup clause set; empty sets
 // pass (no conditions attached).
 func (s *session) meetGossipOptionConditions(ctx context.Context, menuID, optionID uint32, creatureEntry uint32) (bool, error) {

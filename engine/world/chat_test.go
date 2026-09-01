@@ -78,7 +78,7 @@ func TestBroadcastGMChatIncludesChatTag(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
-	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, gmChat: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Map: 0}}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, gmChat: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Map: 0, PlayerFlags: playerFlagGM}}
 	server.sessions[state] = struct{}{}
 	done := make(chan struct{})
 	go func() {
