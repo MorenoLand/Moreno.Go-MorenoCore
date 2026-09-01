@@ -48,12 +48,35 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 	if distance <= 0 {
 		return nil, 0, nil
 	}
-	rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT g.guid, g.id, g.map, g.position_x, g.position_y, g.position_z, g.orientation, g.rotation0, g.rotation1, g.rotation2, g.rotation3, g.state, g.animprogress, t.type, t.displayId, t.size, COALESCE(ta.flags, 0), COALESCE(ta.faction, 0), COALESCE(ta.artkit0, 0), COALESCE(ga.parent_rotation0, 0), COALESCE(ga.parent_rotation1, 0), COALESCE(ga.parent_rotation2, 0), COALESCE(ga.parent_rotation3, 1) FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id LEFT JOIN gameobject_template_addon AS ta ON ta.entry = g.id LEFT JOIN gameobject_addon AS ga ON ga.guid = g.guid WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ? AND (g.spawnMask = 0 OR (g.spawnMask & 1) <> 0) AND (g.phaseMask = 0 OR (g.phaseMask & 1) <> 0) ORDER BY g.guid", state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
+	query := `SELECT g.guid, g.id, g.map, g.position_x, g.position_y, g.position_z, g.orientation, g.rotation0, g.rotation1, g.rotation2, g.rotation3, g.state, g.animprogress, t.type, t.displayId, t.size, COALESCE(ta.flags, 0), COALESCE(ta.faction, 0), COALESCE(ta.artkit0, 0), COALESCE(ga.parent_rotation0, 0), COALESCE(ga.parent_rotation1, 0), COALESCE(ga.parent_rotation2, 0), COALESCE(ga.parent_rotation3, 1)
+		FROM gameobject AS g
+		JOIN gameobject_template AS t ON t.entry = g.id
+		LEFT JOIN gameobject_template_addon AS ta ON ta.entry = g.id
+		LEFT JOIN gameobject_addon AS ga ON ga.guid = g.guid
+		LEFT JOIN game_event_gameobject AS geg ON geg.guid = g.guid
+		WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ?
+		AND (g.spawnMask = 0 OR (g.spawnMask & 1) <> 0)
+		AND (g.phaseMask = 0 OR (g.phaseMask & 1) <> 0)
+		AND (geg.eventEntry IS NULL OR geg.eventEntry = 0)
+		ORDER BY g.guid`
+	rows, err := s.WorldStore.DB.QueryContext(ctx, query, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
 	if err != nil {
-		if missingTable(err) {
-			return nil, 0, nil
+		fallbackQuery := `SELECT g.guid, g.id, g.map, g.position_x, g.position_y, g.position_z, g.orientation, g.rotation0, g.rotation1, g.rotation2, g.rotation3, g.state, g.animprogress, t.type, t.displayId, t.size, COALESCE(ta.flags, 0), COALESCE(ta.faction, 0), COALESCE(ta.artkit0, 0), COALESCE(ga.parent_rotation0, 0), COALESCE(ga.parent_rotation1, 0), COALESCE(ga.parent_rotation2, 0), COALESCE(ga.parent_rotation3, 1)
+			FROM gameobject AS g
+			JOIN gameobject_template AS t ON t.entry = g.id
+			LEFT JOIN gameobject_template_addon AS ta ON ta.entry = g.id
+			LEFT JOIN gameobject_addon AS ga ON ga.guid = g.guid
+			WHERE g.map = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ?
+			AND (g.spawnMask = 0 OR (g.spawnMask & 1) <> 0)
+			AND (g.phaseMask = 0 OR (g.phaseMask & 1) <> 0)
+			ORDER BY g.guid`
+		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
+		if err != nil {
+			if missingTable(err) {
+				return nil, 0, nil
+			}
+			return nil, 0, err
 		}
-		return nil, 0, err
 	}
 	defer rows.Close()
 	updates := protocol.NewUpdateData()
