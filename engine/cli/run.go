@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/service"
@@ -63,6 +62,9 @@ func Run(kind *service.Kind) int {
 		return 1
 	}
 	logger := newLogger(*debug)
+	if len(c.UnrecognizedKeys) > 0 {
+		logger.Warn("configuration contains unrecognized or unmapped keys", "unmapped_count", len(c.UnrecognizedKeys))
+	}
 	if err := service.RunSingle(context.Background(), c, *kind, logger); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -121,6 +123,9 @@ func RunCombined() int {
 		return 1
 	}
 	logger := newLogger(*debug)
+	if len(c.UnrecognizedKeys) > 0 {
+		logger.Warn("configuration contains unrecognized or unmapped keys", "unmapped_count", len(c.UnrecognizedKeys))
+	}
 	if *authOnly && *worldOnly {
 		fmt.Fprintln(os.Stderr, "--auth and --world cannot be used together")
 		return 2
@@ -160,7 +165,7 @@ func discoverConfig(explicit string, kind service.Kind, workDir string) string {
 	if explicit != "" {
 		return explicit
 	}
-	candidates := make([]string, 0, 8)
+	candidates := make([]string, 0, 16)
 	if workDir != "" {
 		clean := filepath.Clean(workDir)
 		if kind == service.Auth {
@@ -176,17 +181,42 @@ func discoverConfig(explicit string, kind service.Kind, workDir string) string {
 		}
 	}
 	cwd, err := os.Getwd()
-	if err == nil && !strings.EqualFold(filepath.Base(filepath.Clean(cwd)), "bin") {
+	if err == nil {
+		cleanCwd := filepath.Clean(cwd)
 		if kind == service.Auth {
-			candidates = append(candidates, "bin/authserver.conf", "authserver.conf")
+			candidates = append(candidates,
+				filepath.Join(cleanCwd, "bin", "authserver.conf"),
+				filepath.Join(cleanCwd, "authserver.conf"),
+				filepath.Join(cleanCwd, "..", "bin", "authserver.conf"),
+				filepath.Join(cleanCwd, "..", "..", "bin", "authserver.conf"),
+				filepath.Join(cleanCwd, "configs", "authserver.conf.dist"),
+			)
 		} else {
-			candidates = append(candidates, "bin/worldserver.conf", "worldserver.conf")
+			candidates = append(candidates,
+				filepath.Join(cleanCwd, "bin", "worldserver.conf"),
+				filepath.Join(cleanCwd, "worldserver.conf"),
+				filepath.Join(cleanCwd, "..", "bin", "worldserver.conf"),
+				filepath.Join(cleanCwd, "..", "..", "bin", "worldserver.conf"),
+				filepath.Join(cleanCwd, "configs", "worldserver.conf.dist"),
+			)
 		}
-	} else {
+	}
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
 		if kind == service.Auth {
-			candidates = append(candidates, "authserver.conf", "bin/authserver.conf")
+			candidates = append(candidates,
+				filepath.Join(execDir, "authserver.conf"),
+				filepath.Join(execDir, "bin", "authserver.conf"),
+				filepath.Join(execDir, "..", "bin", "authserver.conf"),
+				filepath.Join(execDir, "..", "..", "bin", "authserver.conf"),
+			)
 		} else {
-			candidates = append(candidates, "worldserver.conf", "bin/worldserver.conf")
+			candidates = append(candidates,
+				filepath.Join(execDir, "worldserver.conf"),
+				filepath.Join(execDir, "bin", "worldserver.conf"),
+				filepath.Join(execDir, "..", "bin", "worldserver.conf"),
+				filepath.Join(execDir, "..", "..", "bin", "worldserver.conf"),
+			)
 		}
 	}
 	for _, candidate := range candidates {

@@ -57,3 +57,20 @@ func TestMaxOverspeedPingsParsing(t *testing.T) {
 	}
 }
 
+func TestStartPlayerMoneyDefaultAndUnrecognizedKeys(t *testing.T) {
+	c := Default()
+	if c.StartPlayerMoney != 10000 {
+		t.Fatalf("expected StartPlayerMoney 10000, got %d", c.StartPlayerMoney)
+	}
+	if c.StartPlayerLevel != 1 {
+		t.Fatalf("expected StartPlayerLevel 1, got %d", c.StartPlayerLevel)
+	}
+	if err := c.Set("SomeCustomUnknownKey", "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.UnrecognizedKeys) != 1 || c.UnrecognizedKeys[0] != "SomeCustomUnknownKey" {
+		t.Fatalf("expected unrecognized key recorded, got %+v", c.UnrecognizedKeys)
+	}
+}
+
+
