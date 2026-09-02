@@ -115,7 +115,16 @@ func (s *session) handleCalendarGetEvent(ctx context.Context, payload []byte) bo
 }
 
 // handleCalendarGuildFilter processes CMSG_CALENDAR_GUILD_FILTER (0x42B).
+// Reference: WorldSession::HandleCalendarGuildFilter (CalendarHandler.cpp:194).
 func (s *session) handleCalendarGuildFilter(ctx context.Context, payload []byte) bool {
+	if len(payload) < 12 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	minLevel, _ := r.ReadU32()
+	maxLevel, _ := r.ReadU32()
+	minRank, _ := r.ReadU32()
+	s.debug("calendar guild filter", "account", s.accountName, "minLevel", minLevel, "maxLevel", maxLevel, "minRank", minRank)
 	return true
 }
 
@@ -249,6 +258,14 @@ func (s *session) handleCalendarEventSignup(ctx context.Context, payload []byte)
 }
 
 // handleCalendarComplain processes CMSG_CALENDAR_COMPLAIN (0x446).
+// Reference: WorldSession::HandleCalendarComplain (CalendarHandler.cpp:760).
 func (s *session) handleCalendarComplain(ctx context.Context, payload []byte) bool {
+	if len(payload) < 16 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	eventID, _ := r.ReadU64()
+	complainGUID, _ := r.ReadU64()
+	s.debug("calendar complain", "account", s.accountName, "event", eventID, "guid", complainGUID)
 	return true
 }

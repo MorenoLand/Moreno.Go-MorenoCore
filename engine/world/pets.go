@@ -68,6 +68,12 @@ func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool 
 
 // handleDismissCritter processes CMSG_DISMISS_CRITTER (0x48D).
 func (s *session) handleDismissCritter(ctx context.Context, payload []byte) bool {
+	if len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	critterGUID, _ := r.ReadU64()
+	s.debug("dismiss critter", "account", s.accountName, "critter", critterGUID)
 	return true
 }
 
@@ -319,21 +325,56 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 // (284), HandlePetSetAction (328), HandlePetSpellAutocastOpcode (365),
 
 func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
-	if len(payload) >= 8 {
-		s.debug("pet action consumed (pet entity system pending)", "account", s.accountName)
+	if len(payload) < 12 {
+		return true
 	}
+	r := protocol.NewReader(payload)
+	petGUID, _ := r.ReadU64()
+	action, _ := r.ReadU32()
+	s.debug("pet action", "account", s.accountName, "pet", petGUID, "action", action)
 	return true
 }
 
 func (s *session) handlePetCancelAura(ctx context.Context, payload []byte) bool {
+	if len(payload) < 12 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petGUID, _ := r.ReadU64()
+	spellID, _ := r.ReadU32()
+	petNumber := uint32(petGUID & 0xFFFFFF)
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM pet_aura WHERE guid = ? AND spell = ?", petNumber, spellID)
+	}
+	s.debug("pet cancel aura", "account", s.accountName, "pet", petNumber, "spell", spellID)
 	return true
 }
 
 func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
+	if len(payload) < 13 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petGUID, _ := r.ReadU64()
+	castCount, _ := r.ReadU8()
+	spellID, _ := r.ReadU32()
+	s.debug("pet cast spell", "account", s.accountName, "pet", petGUID, "spell", spellID, "castCount", castCount)
 	return true
 }
 
 func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool {
+	if len(payload) < 16 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petGUID, _ := r.ReadU64()
+	talentID, _ := r.ReadU32()
+	rank, _ := r.ReadU32()
+	petNumber := uint32(petGUID & 0xFFFFFF)
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT OR REPLACE INTO pet_spell (guid, spell, active) VALUES (?, ?, 1)", petNumber, talentID)
+	}
+	s.debug("pet learn talent", "account", s.accountName, "pet", petNumber, "talent", talentID, "rank", rank)
 	return true
 }
 
@@ -386,34 +427,58 @@ func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
 // handlePetSetAction processes CMSG_PET_SET_ACTION (0x174).
 // Reference: WorldSession::HandlePetSetAction (PetHandler.cpp:328).
 func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
+	if len(payload) < 16 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petGUID, _ := r.ReadU64()
+	slot, _ := r.ReadU32()
+	action, _ := r.ReadU32()
+	s.debug("pet set action", "account", s.accountName, "pet", petGUID, "slot", slot, "action", action)
 	return true
 }
 
 // handlePetSpellAutocast processes CMSG_PET_SPELL_AUTOCAST (0x1F3).
 // Reference: WorldSession::HandlePetSpellAutocastOpcode (PetHandler.cpp:365).
 func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bool {
+	if len(payload) < 13 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petGUID, _ := r.ReadU64()
+	spellID, _ := r.ReadU32()
+	state, _ := r.ReadU8()
+	petNumber := uint32(petGUID & 0xFFFFFF)
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE pet_spell SET active = ? WHERE guid = ? AND spell = ?", state, petNumber, spellID)
+	}
+	s.debug("pet spell autocast", "account", s.accountName, "pet", petNumber, "spell", spellID, "state", state)
 	return true
 }
 
 // handlePetStopAttack processes CMSG_PET_STOP_ATTACK (0x2EA).
 // Reference: WorldSession::HandlePetStopAttack (PetHandler.cpp:401).
 func (s *session) handlePetStopAttack(ctx context.Context, payload []byte) bool {
+	if len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petGUID, _ := r.ReadU64()
+	s.debug("pet stop attack", "account", s.accountName, "pet", petGUID)
 	return true
 }
 
 // handleRequestPetInfo processes CMSG_REQUEST_PET_INFO (0x279).
 // Reference: WorldSession::HandleRequestPetInfoOpcode (PetHandler.cpp:412).
 func (s *session) handleRequestPetInfo(ctx context.Context, payload []byte) bool {
+	if s.player == nil {
+		return true
+	}
+	buf := protocol.NewBuffer(8)
+	buf.WriteU64(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 	return true
 }
-
-// handleStablePet processes CMSG_STABLE_PET (0x270).
-
-// handleStableRevivePet processes CMSG_STABLE_REVIVE_PET (0x274).
-
-// handleStableSwapPet processes CMSG_STABLE_SWAP_PET (0x275).
-
-// handleUnstablePet processes CMSG_UNSTABLE_PET (0x271).
 
 // handleListStabledPets processes MSG_LIST_STABLED_PETS (0x26F).
 // Reference: WorldSession::HandleListStabledPetsOpcode (NPCHandler.cpp:520).
@@ -424,10 +489,38 @@ func (s *session) handleListStabledPets(ctx context.Context, payload []byte) boo
 	r := protocol.NewReader(payload)
 	npcGUID, _ := r.ReadU64()
 
-	buf := protocol.NewBuffer(16)
+	type petInfo struct {
+		ID    uint32
+		Entry uint32
+		Level uint32
+		Name  string
+		Slot  uint8
+	}
+	var pets []petInfo
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT id, entry, level, name, slot FROM character_pet WHERE owner = ? AND slot > 0 ORDER BY slot", s.playerGUID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var p petInfo
+				if err := rows.Scan(&p.ID, &p.Entry, &p.Level, &p.Name, &p.Slot); err == nil {
+					pets = append(pets, p)
+				}
+			}
+		}
+	}
+
+	buf := protocol.NewBuffer(16 + len(pets)*32)
 	buf.WriteU64(npcGUID)
-	buf.WriteU8(0) // num pets
+	buf.WriteU8(uint8(len(pets)))
 	buf.WriteU8(4) // num slots
+	for _, p := range pets {
+		buf.WriteU32(p.ID)
+		buf.WriteU32(p.Entry)
+		buf.WriteU32(p.Level)
+		buf.WriteCString(p.Name)
+		buf.WriteU8(p.Slot)
+	}
 	_ = s.write(uint16(protocol.OpcodeMSG_LIST_STABLED_PETS), buf.Bytes(), true)
 	return true
 }
@@ -435,5 +528,12 @@ func (s *session) handleListStabledPets(ctx context.Context, payload []byte) boo
 // handleLearnPreviewTalentsPet processes CMSG_LEARN_PREVIEW_TALENTS_PET (0x4C2).
 // Reference: WorldSession::HandleLearnPreviewTalentsPet (PetHandler.cpp:430).
 func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []byte) bool {
+	if len(payload) < 12 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petGUID, _ := r.ReadU64()
+	talentCount, _ := r.ReadU32()
+	s.debug("pet preview talents learned", "account", s.accountName, "pet", petGUID, "count", talentCount)
 	return true
 }
