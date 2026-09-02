@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,7 +18,15 @@ func connection(backend, file, info string, c config.Config) (string, string, Ba
 		if file == "" {
 			return "", "", "", errors.New("SQLite database file is empty")
 		}
-		return "sqlite", filepath.Clean(filepath.Join(c.DataDir, file)), BackendSQLite, nil
+		// Config.ResolvePaths may already have folded DataDir into the file
+		// path ("bin/auth.db"); joining DataDir again would produce nested
+		// paths like bin/bin/auth.db and silently create an empty database.
+		// Use the path as-is when it resolves, otherwise fall back to DataDir.
+		path := filepath.Clean(file)
+		if _, err := os.Stat(path); err != nil {
+			path = filepath.Clean(filepath.Join(c.DataDir, file))
+		}
+		return "sqlite", path, BackendSQLite, nil
 	case "mysql", "mariadb":
 		dsn, err := mysqlDSN(info)
 		if err != nil {
