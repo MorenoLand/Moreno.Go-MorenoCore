@@ -371,12 +371,14 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS), buildTutorialFlags(s.tutorials), true); err != nil {
 		return false
 	}
+	// Persist cinematic state before spawning into world (TC: CharacterHandler.cpp)
+	// The actual SMSG_TRIGGER_CINEMATIC is sent after SMSG_UPDATE_OBJECT (player spawn)
+	// so the client world is loaded when the cinematic begins.
+	sendCinematic := false
 	if state.Cinematic == 0 {
 		cinematicID := getStartingCinematicID(state.Race, state.Class)
 		if cinematicID > 0 {
-			cinematicBuf := protocol.NewBuffer(4)
-			cinematicBuf.WriteU32(cinematicID)
-			_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), cinematicBuf.Bytes(), true)
+			sendCinematic = true
 		}
 		state.Cinematic = 1
 		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1 WHERE guid = ?", guid); err != nil {
@@ -460,6 +462,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
+	}
+	// Send starting cinematic AFTER player is fully spawned (TC: SendInitialPacketsAfterAddToMap)
+	if sendCinematic {
+		cinematicID := getStartingCinematicID(state.Race, state.Class)
+		if cinematicID > 0 {
+			cinematicBuf := protocol.NewBuffer(4)
+			cinematicBuf.WriteU32(cinematicID)
+			_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), cinematicBuf.Bytes(), true)
+		}
 	}
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true

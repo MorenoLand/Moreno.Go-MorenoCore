@@ -144,7 +144,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if heal == 0 {
 				heal = uint32(30 + int(s.player.Level)*15)
 			}
-			s.executeSpellHeal(ctx, s.playerGUID, spellID, heal)
+			s.executeSpellHeal(ctx, targetGUID, spellID, heal)
 		case 6: // Apply Aura
 			s.auras[spellID] = struct{}{}
 			s.sendPlayerUpdate()
