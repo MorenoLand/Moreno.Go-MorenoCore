@@ -102,6 +102,8 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	if err := s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_COMPLETE), buildQuestRewardComplete(view.Detail.ID, 0, view.Detail.RewardMoney, 0, view.Detail.RewardTalents, uint32(view.Detail.RewardArenaPoints)), true); err != nil {
 		return false
 	}
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
 	s.gossip = nil
 	s.gossipClosed = true
 	s.debug("quest rewarded", "account", s.accountName, "quest", questID, "reward", reward, "items", len(grants), "money", view.Detail.RewardMoney)

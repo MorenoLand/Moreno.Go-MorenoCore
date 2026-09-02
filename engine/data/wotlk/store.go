@@ -78,6 +78,7 @@ type Spell struct {
 	PowerType        uint32
 	ManaCost         uint32
 	RangeIndex       uint32
+	Speed            float32
 	Effects          [3]SpellEffect
 }
 
@@ -369,6 +370,9 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if *value.dest, err = record.Uint32(value.field); err != nil {
 			return Spell{}, false, err
 		}
+	}
+	if speed, speedErr := record.Float32(47); speedErr == nil {
+		spell.Speed = speed
 	}
 	for i := range spell.Effects {
 		effect, err := record.Uint32(71 + i)

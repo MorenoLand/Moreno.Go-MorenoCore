@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -126,32 +127,61 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	// Apply spell effects
-	for _, eff := range spell.Effects {
-		if eff.Effect == 0 {
-			continue
-		}
-		switch eff.Effect {
-		case 2, 87, 108, 17: // Damage effects (School damage, Weapon damage, etc.)
-			damage := uint32(eff.BasePoints + 1)
-			if damage == 0 {
-				damage = uint32(20 + int(s.player.Level)*10)
+	applyEffects := func() {
+		for _, eff := range spell.Effects {
+			if eff.Effect == 0 {
+				continue
 			}
-			if targetGUID != 0 && targetGUID != s.playerGUID {
-				s.executeSpellDamage(ctx, targetGUID, spellID, damage)
+			switch eff.Effect {
+			case 2, 87, 108, 17: // Damage effects (School damage, Weapon damage, etc.)
+				damage := uint32(eff.BasePoints + 1)
+				if damage == 0 {
+					damage = uint32(20 + int(s.player.Level)*10)
+				}
+				if targetGUID != 0 && targetGUID != s.playerGUID {
+					s.executeSpellDamage(ctx, targetGUID, spellID, damage)
+				}
+			case 10, 136, 105: // Heal effects
+				heal := uint32(eff.BasePoints + 1)
+				if heal == 0 {
+					heal = uint32(30 + int(s.player.Level)*15)
+				}
+				s.executeSpellHeal(ctx, targetGUID, spellID, heal)
+			case 6: // Apply Aura
+				s.auras[spellID] = struct{}{}
+				s.sendPlayerUpdate()
+			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
+				s.applySelfResurrectEffect(spell)
 			}
-		case 10, 136, 105: // Heal effects
-			heal := uint32(eff.BasePoints + 1)
-			if heal == 0 {
-				heal = uint32(30 + int(s.player.Level)*15)
-			}
-			s.executeSpellHeal(ctx, targetGUID, spellID, heal)
-		case 6: // Apply Aura
-			s.auras[spellID] = struct{}{}
-			s.sendPlayerUpdate()
-		case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
-			s.applySelfResurrectEffect(spell)
 		}
 	}
+
+	// Reference Spell.cpp:2156-2169:
+	// If spell has projectile speed and target is not self, delay effect execution until missile arrival
+	if spell.Speed > 0 && targetGUID != 0 && targetGUID != s.playerGUID {
+		dist := float32(20.0) // default 20 yards if positions unknown
+		if target, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			dx := target.X - s.player.X
+			dy := target.Y - s.player.Y
+			dz := target.Z - s.player.Z
+			computedDist := float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+			if computedDist > 5.0 {
+				dist = computedDist
+			} else {
+				dist = 5.0
+			}
+		}
+		timeDelayMs := int(math.Floor(float64(dist) / float64(spell.Speed) * 1000.0))
+		if timeDelayMs > 0 {
+			if timeDelayMs > 4000 {
+				timeDelayMs = 4000
+			}
+			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, applyEffects)
+			return
+		}
+	}
+
+	applyEffects()
 }
 
 func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32) {

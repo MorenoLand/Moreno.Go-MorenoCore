@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -199,4 +200,67 @@ func TestHandleCorpseMapPositionQuery(t *testing.T) {
 		}
 	}
 }
+
+func TestMissileSpellTravelDelay(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{
+		creatureMotion: map[uint64]*creatureMotion{
+			100: {GUID: 100, Map: 0, X: 20, Y: 0, Z: 0, Health: 100},
+		},
+	}
+	s := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   1,
+		player:       &playerState{GUID: 1, Map: 0, X: 0, Y: 0, Z: 0, Level: 1},
+	}
+	ctx := context.Background()
+
+	// Drain frames in background
+	go func() {
+		for {
+			if _, _, err := readServerFrame(clientConn, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	spell := wotlk.Spell{
+		ID:    686, // Shadow Bolt
+		Speed: 20,  // 20 yards/sec -> 20 yards = 1000ms
+		Effects: [3]wotlk.SpellEffect{
+			{Effect: 2, BasePoints: 24}, // 25 damage
+		},
+	}
+
+	target := protocol.SpellTargetData{
+		Flags:    protocol.SpellTargetFlagUnit,
+		UnitGUID: 100,
+	}
+
+	s.finishSpellCast(ctx, 1, 686, spell, target)
+
+	// Immediately at t=5ms, target health must NOT be damaged yet
+	time.Sleep(20 * time.Millisecond)
+	srv.motionMu.Lock()
+	healthEarly := srv.creatureMotion[100].Health
+	srv.motionMu.Unlock()
+	if healthEarly != 100 {
+		t.Fatalf("expected target health 100 immediately upon cast release, got %d", healthEarly)
+	}
+
+	// After travel time (1000ms + margin), target health must be damaged
+	time.Sleep(1100 * time.Millisecond)
+	srv.motionMu.Lock()
+	healthLate := srv.creatureMotion[100].Health
+	srv.motionMu.Unlock()
+	if healthLate >= 100 {
+		t.Fatalf("expected target health < 100 after projectile arrival, got %d", healthLate)
+	}
+}
+
 
