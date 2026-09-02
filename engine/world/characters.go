@@ -437,7 +437,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		s.debug("nearby gameobjects sent", "account", s.accountName, "count", goCount)
 	}
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = state.X, state.Y, state.Z
-	_ = s.sendInventoryItems(ctx)
+	if err := s.sendInventoryItems(ctx); err != nil {
+		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
+		return false
+	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
 	}
