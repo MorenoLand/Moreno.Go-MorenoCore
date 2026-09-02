@@ -65,6 +65,7 @@ type waypointPoint struct {
 	Y           float32
 	Z           float32
 	Orientation float32
+	MoveType    uint32
 	Delay       uint32
 }
 
@@ -174,7 +175,7 @@ func (s *Server) loadCreaturePathID(ctx context.Context, guid, entry uint32) uin
 }
 
 func (s *Server) loadWaypoints(ctx context.Context, pathID uint32) []waypointPoint {
-	query := "SELECT position_x, position_y, position_z, orientation, delay FROM waypoint_data WHERE id = ? ORDER BY point"
+	query := "SELECT position_x, position_y, position_z, orientation, move_type, delay FROM waypoint_data WHERE id = ? ORDER BY point"
 	rows, err := s.WorldStore.DB.QueryContext(ctx, query, pathID)
 	if err != nil {
 		return nil
@@ -184,11 +185,11 @@ func (s *Server) loadWaypoints(ctx context.Context, pathID uint32) []waypointPoi
 	for rows.Next() {
 		var p waypointPoint
 		var x, y, z, orientation float64
-		var delay int64
-		if err := rows.Scan(&x, &y, &z, &orientation, &delay); err != nil {
+		var moveType, delay int64
+		if err := rows.Scan(&x, &y, &z, &orientation, &moveType, &delay); err != nil {
 			continue
 		}
-		p.X, p.Y, p.Z, p.Orientation, p.Delay = float32(x), float32(y), float32(z), float32(orientation), uint32(delay)
+		p.X, p.Y, p.Z, p.Orientation, p.MoveType, p.Delay = float32(x), float32(y), float32(z), float32(orientation), uint32(moveType), uint32(delay)
 		points = append(points, p)
 	}
 	return points
@@ -373,6 +374,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		point := motion.Points[motion.NextIdx]
 		destX, destY, destZ = point.X, point.Y, point.Z
 		speed = motion.RunSpeed
+		if point.MoveType == 0 {
+			speed = motion.Speed
+		}
 		if point.Delay > 0 {
 			wait = time.Duration(point.Delay) * time.Second
 		}

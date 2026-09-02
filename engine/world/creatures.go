@@ -86,12 +86,12 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		LEFT JOIN game_event_creature AS gec ON gec.guid = c.guid
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
 		AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
-		AND (? OR (COALESCE(t.flags_extra, 0) & 1) = 0)
+		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
 		AND ` + eventClause + `
 		ORDER BY c.guid`
-	queryArgs := make([]any, 0, len(selectArgs)+7+len(eventArgs))
+	queryArgs := make([]any, 0, len(selectArgs)+8+len(eventArgs))
 	queryArgs = append(queryArgs, selectArgs...)
-	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM)
+	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM, state.Health == 0)
 	queryArgs = append(queryArgs, eventArgs...)
 	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, queryArgs...)
 	if err != nil {
@@ -103,9 +103,9 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			JOIN creature_template AS t ON t.entry = c.id
 			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
 			AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
-			AND (? OR (COALESCE(t.flags_extra, 0) & 1) = 0)
+			AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
 			ORDER BY c.guid`
-		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM, state.Health == 0)
 		if err != nil {
 			if missingTable(err) {
 				return nil, 0, nil
@@ -250,9 +250,9 @@ func buildMonsterMove(rawGUID uint64, startX, startY, startZ, destX, destY, dest
 	packet.WriteF32(startZ)
 	packet.WriteU32(uint32(time.Now().UnixMilli())) // SplineID
 	packet.WriteU8(0)                               // MonsterMoveNormal
-	packet.WriteU32(0)                               // SplineFlags (Linear)
-	packet.WriteU32(duration)                        // Duration in ms
-	packet.WriteU32(1)                               // Points count
+	packet.WriteU32(0)                              // SplineFlags (Linear)
+	packet.WriteU32(duration)                       // Duration in ms
+	packet.WriteU32(1)                              // Points count
 	packet.WriteF32(destX)
 	packet.WriteF32(destY)
 	packet.WriteF32(destZ)
@@ -329,4 +329,3 @@ func (s *Server) broadcastCreatureValuesUpdate(mapID uint32, guid uint64, fields
 		_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
 }
-

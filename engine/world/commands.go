@@ -213,7 +213,7 @@ func (s *session) refreshNearbyObjects(ctx context.Context) {
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id
 			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-			AND ((c.phaseMask <> 0 AND (c.phaseMask & 1) = 0) OR (COALESCE(t.flags_extra, 0) & 1) <> 0)`
+			AND ((c.phaseMask <> 0 AND (c.phaseMask & 1) = 0) OR (COALESCE(t.flags_extra, 0) & 0x400) <> 0 OR (COALESCE(t.npcflag, 0) & 0xC000) <> 0)`
 		if rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance); err == nil {
 			for rows.Next() {
 				var low, entry int64

@@ -22,13 +22,13 @@ func TestCreatureWaypointPatrol(t *testing.T) {
 		"CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL, position_y REAL, position_z REAL, orientation REAL, MovementType INTEGER NOT NULL DEFAULT 0, wander_distance REAL NOT NULL DEFAULT 0)",
 		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, speed_walk REAL NOT NULL DEFAULT 2.5)",
 		"CREATE TABLE creature_addon (guid INTEGER PRIMARY KEY, path_id INTEGER NOT NULL DEFAULT 0)",
-		"CREATE TABLE waypoint_data (id INTEGER NOT NULL, point INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, orientation REAL NOT NULL DEFAULT 0, delay INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (id, point))",
+		"CREATE TABLE waypoint_data (id INTEGER NOT NULL, point INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, orientation REAL NOT NULL DEFAULT 0, move_type INTEGER NOT NULL DEFAULT 1, delay INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (id, point))",
 		"INSERT INTO creature VALUES (10, 68, 0, 0, 0, 0, 0, 2, 0)",
 		"INSERT INTO creature_template VALUES (68, 2.5)",
 		"INSERT INTO creature_addon VALUES (10, 0)", // path defaults to spawn guid like TC
-		"INSERT INTO waypoint_data VALUES (10, 1, 0, 10, 0, 0, 0)",
-		"INSERT INTO waypoint_data VALUES (10, 2, 10, 10, 0, 0, 1)",
-		"INSERT INTO waypoint_data VALUES (10, 3, 10, 0, 0, 0, 0)",
+		"INSERT INTO waypoint_data VALUES (10, 1, 0, 10, 0, 0, 0, 0)",
+		"INSERT INTO waypoint_data VALUES (10, 2, 10, 10, 0, 0, 1, 1)",
+		"INSERT INTO waypoint_data VALUES (10, 3, 10, 0, 0, 0, 0, 0)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -42,6 +42,9 @@ func TestCreatureWaypointPatrol(t *testing.T) {
 	if len(motion.Points) != 3 {
 		t.Fatalf("expected 3 waypoints, got %d", len(motion.Points))
 	}
+	if motion.Points[0].MoveType != 0 || motion.Points[1].MoveType != 1 {
+		t.Fatalf("unexpected waypoint movement types: %d, %d", motion.Points[0].MoveType, motion.Points[1].MoveType)
+	}
 
 	// First step: walks toward point 1.
 	now := time.Now()
@@ -52,11 +55,18 @@ func TestCreatureWaypointPatrol(t *testing.T) {
 	if motion.X != 0 || motion.Y != 10 {
 		t.Fatalf("position should snap to waypoint target, got %f,%f", motion.X, motion.Y)
 	}
+	if duration := motion.MoveEnds.Sub(now); duration < 3900*time.Millisecond || duration > 4100*time.Millisecond {
+		t.Fatalf("walk waypoint duration=%v", duration)
+	}
 	// Simulate move completion + no delay.
 	after := now.Add(time.Duration(motion.MoveEnds.Sub(now)) + time.Second)
 	server.stepCreatureMotion(ctx, motion, nil, after)
 	if motion.NextIdx != 2 {
 		t.Fatalf("expected waypoint 3 queued, got idx %d", motion.NextIdx)
+	}
+	server.stepCreatureMotion(ctx, motion, nil, after)
+	if duration := motion.MoveEnds.Sub(after); duration < 1300*time.Millisecond || duration > 1500*time.Millisecond {
+		t.Fatalf("run waypoint duration=%v", duration)
 	}
 
 	// Random wander sanity: MotionType 1 stays within wander_distance of home.
