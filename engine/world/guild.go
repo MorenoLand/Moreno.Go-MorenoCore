@@ -222,6 +222,7 @@ func (s *session) handleGuildInvite(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	targetSess.guildInvitedID = uint32(guildID)
+	targetSess.guildInviterGUID = s.playerGUID
 
 	invBuf := protocol.NewBuffer(128)
 	invBuf.WriteCString(s.player.Name)
@@ -241,6 +242,7 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 	}
 	guildID := s.guildInvitedID
 	s.guildInvitedID = 0
+	s.guildInviterGUID = 0
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 4, '', '')", guildID, s.playerGUID)
 
 	// Broadcast join event
@@ -255,7 +257,18 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 }
 
 func (s *session) handleGuildDecline(ctx context.Context) bool {
+	if s.guildInviterGUID != 0 && s.server != nil && s.player != nil {
+		inviterSess := s.server.findSessionByGUID(s.guildInviterGUID)
+		if inviterSess != nil && inviterSess.playerLoaded {
+			eventBuf := protocol.NewBuffer(64)
+			eventBuf.WriteU8(2) // GE_DECLINED
+			eventBuf.WriteU8(1)
+			eventBuf.WriteCString(s.player.Name)
+			_ = inviterSess.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+		}
+	}
 	s.guildInvitedID = 0
+	s.guildInviterGUID = 0
 	return true
 }
 
@@ -1028,7 +1041,40 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 }
 
 // handleGuildBankSwapItems processes CMSG_GUILD_BANK_SWAP_ITEMS (0x3E9).
+// Reference: WorldSession::HandleGuildBankSwapItems (GuildHandler.cpp:320).
 func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 13 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU64() // bankerGUID
+	bankTab, _ := r.ReadU8()
+	bankSlot, _ := r.ReadU8()
+	_, _ = r.ReadU32() // itemEntry
+	isBankToBank, _ := r.ReadU8()
+
+	guildID := s.player.GuildID
+	if guildID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+
+	if isBankToBank != 0 && len(payload) >= 15 {
+		destTab, _ := r.ReadU8()
+		destSlot, _ := r.ReadU8()
+
+		var item1, item2 uint64
+		_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot).Scan(&item1)
+		_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, destTab, destSlot).Scan(&item2)
+
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ? AND ((TabId = ? AND SlotId = ?) OR (TabId = ? AND SlotId = ?))", guildID, bankTab, bankSlot, destTab, destSlot)
+		if item1 != 0 {
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, destTab, destSlot, item1)
+		}
+		if item2 != 0 {
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, item2)
+		}
+	}
 	return true
 }
 
@@ -1489,8 +1535,25 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 }
 
 // handleOfferPetition processes CMSG_OFFER_PETITION (0x1B3).
-// Reference: WorldSession::HandlePetitionOfferOpcode (PetitionsHandler.cpp:446).
+// Reference: WorldSession::HandleOfferPetitionOpcode (PetitionsHandler.cpp:514).
 func (s *session) handleOfferPetition(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU32() // junk
+	petitionGUID, _ := r.ReadU64()
+	targetGUID, _ := r.ReadU64()
+
+	if s.server != nil {
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess != nil && targetSess.playerLoaded {
+			buf := protocol.NewBuffer(24)
+			buf.WriteU64(petitionGUID)
+			buf.WriteU64(s.playerGUID)
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_PETITION_SHOW_SIGNATURES), buf.Bytes(), true)
+		}
+	}
 	return true
 }
 

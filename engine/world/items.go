@@ -716,6 +716,46 @@ func (s *session) freeInventorySlot(ctx context.Context, bagKey int64) (uint8, b
 // handleOpenItem processes CMSG_OPEN_ITEM (0x0AC).
 // Reference: WorldSession::HandleOpenItemOpcode (SpellHandler.cpp:183).
 func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if s.player.Health == 0 {
+		s.sendEquipError(equipErrYouAreDead, 0)
+		return true
+	}
+	if len(payload) < 2 {
+		return true
+	}
+	bagIndex := payload[0]
+	slot := payload[1]
+
+	itemGUID, _, _, err := s.inventoryItemAt(ctx, bagIndex, slot)
+	if err != nil || itemGUID == 0 {
+		s.sendEquipError(equipErrItemNotFound, 0)
+		return true
+	}
+
+	// Unwrap or open item: check if item has wrapped flag / gift
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		var giftEntry uint32
+		err := cdb.QueryRowContext(ctx, "SELECT entry FROM character_gifts WHERE item_guid = ?", itemGUID).Scan(&giftEntry)
+		if err == nil && giftEntry > 0 {
+			// Unwrapping: restore original entry and delete gift record
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ? WHERE guid = ?", giftEntry, itemGUID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_gifts WHERE item_guid = ?", itemGUID)
+			_ = s.sendInventoryItems(ctx)
+			return true
+		}
+	}
+
+	// Send loot response for openable item
+	buf := protocol.NewBuffer(32)
+	buf.WriteU64(uint64(itemGUID))
+	buf.WriteU8(1)  // LOOT_CORPSE / LOOT_ITEM
+	buf.WriteU32(0) // gold
+	buf.WriteU8(0)  // item count
+	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_RESPONSE), buf.Bytes(), true)
 	return true
 }
 
@@ -766,18 +806,163 @@ func (s *session) handlePageTextQuery(ctx context.Context, payload []byte) bool 
 // handleWrapItem processes CMSG_WRAP_ITEM (0x1D3).
 // Reference: WorldSession::HandleWrapItemOpcode (ItemHandler.cpp:802).
 func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	giftBag := payload[0]
+	giftSlot := payload[1]
+	itemBag := payload[2]
+	itemSlot := payload[3]
+
+	giftGUID, giftEntry, _, err := s.inventoryItemAt(ctx, giftBag, giftSlot)
+	if err != nil || giftGUID == 0 {
+		s.sendEquipError(equipErrItemNotFound, 0)
+		return true
+	}
+	targetGUID, targetEntry, _, err := s.inventoryItemAt(ctx, itemBag, itemSlot)
+	if err != nil || targetGUID == 0 {
+		s.sendEquipError(equipErrItemNotFound, 0)
+		return true
+	}
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		// Consume gift wrapper from inventory
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, giftBag, giftSlot)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", giftGUID)
+
+		// Record original entry in character_gifts
+		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_gifts (guid, item_guid, entry, flags) VALUES (?, ?, ?, 0)", s.playerGUID, targetGUID, targetEntry)
+
+		// Map wrapped item entry
+		var wrappedEntry uint32 = 5043
+		switch giftEntry {
+		case 5042:
+			wrappedEntry = 5043
+		case 5048:
+			wrappedEntry = 5044
+		case 17303:
+			wrappedEntry = 17302
+		case 17304:
+			wrappedEntry = 17305
+		case 17307:
+			wrappedEntry = 17308
+		case 21830:
+			wrappedEntry = 21831
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ? WHERE guid = ?", wrappedEntry, targetGUID)
+		_ = s.sendInventoryItems(ctx)
+	}
 	return true
 }
 
 // handleRepairItem processes CMSG_REPAIR_ITEM (0x1F8 / 0x2A8).
 // Reference: WorldSession::HandleRepairItemOpcode (NPCHandler.cpp:717).
 func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 16 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU64() // npcGUID
+	itemGUID, _ := r.ReadU64()
+	_, _ = r.ReadU8() // guildBank
+
+	if s.server == nil || s.server.CharactersStore == nil || s.server.WorldStore == nil {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	if cdb == nil || wdb == nil {
+		return true
+	}
+
+	if itemGUID != 0 {
+		rawGUID := itemGUID & 0x0000FFFFFFFFFFFF
+		var itemEntry, durability uint32
+		err := cdb.QueryRowContext(ctx, "SELECT itemEntry, durability FROM item_instance WHERE guid = ? AND owner_guid = ?", rawGUID, s.playerGUID).Scan(&itemEntry, &durability)
+		if err != nil {
+			return true
+		}
+		var maxDurability uint32
+		_ = wdb.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ?", itemEntry).Scan(&maxDurability)
+		if maxDurability > durability {
+			cost := (maxDurability - durability) * 10
+			if s.player.Money >= cost {
+				s.player.Money -= cost
+				_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", maxDurability, rawGUID)
+				_ = s.sendInventoryItems(ctx)
+				s.sendPlayerUpdate()
+			}
+		}
+	} else {
+		type repairItem struct {
+			guid uint64
+			cost uint32
+			maxD uint32
+		}
+		rows, err := cdb.QueryContext(ctx,
+			`SELECT ii.guid, ii.itemEntry, ii.durability, it.MaxDurability
+			 FROM character_inventory AS ci
+			 JOIN item_instance AS ii ON ii.guid = ci.item
+			 JOIN item_template AS it ON it.entry = ii.itemEntry
+			 WHERE ci.guid = ? AND it.MaxDurability > ii.durability`, s.playerGUID)
+		if err == nil {
+			var toRepair []repairItem
+			var totalCost uint32
+			for rows.Next() {
+				var guid uint64
+				var entry, curD, maxD uint32
+				if err := rows.Scan(&guid, &entry, &curD, &maxD); err == nil && maxD > curD {
+					cost := (maxD - curD) * 10
+					totalCost += cost
+					toRepair = append(toRepair, repairItem{guid: guid, cost: cost, maxD: maxD})
+				}
+			}
+			rows.Close()
+
+			if len(toRepair) > 0 {
+				if s.player.Money >= totalCost {
+					s.player.Money -= totalCost
+					_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+					for _, item := range toRepair {
+						_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", item.maxD, item.guid)
+					}
+					_ = s.sendInventoryItems(ctx)
+					s.sendPlayerUpdate()
+				}
+			}
+		}
+	}
 	return true
 }
 
 // handleSocketGems processes CMSG_SOCKET_GEMS (0x464).
 // Reference: WorldSession::HandleSocketOpcode (ItemHandler.cpp:920).
 func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 32 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	itemGUID, _ := r.ReadU64()
+	var gemGUIDs [3]uint64
+	for i := 0; i < 3; i++ {
+		gemGUIDs[i], _ = r.ReadU64()
+	}
+
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || itemGUID == 0 {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+
+	for _, gemGUID := range gemGUIDs {
+		if gemGUID != 0 {
+			rawGemGUID := gemGUID & 0x0000FFFFFFFFFFFF
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", rawGemGUID, s.playerGUID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", rawGemGUID)
+		}
+	}
+	_ = s.sendInventoryItems(ctx)
 	return true
 }
 

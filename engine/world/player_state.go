@@ -157,6 +157,7 @@ type playerState struct {
 	AmmoID           uint32
 	ChosenTitle      uint32
 	ActionBars       uint32
+	PassOnGroupLoot  bool
 	Skills           []playerSkill
 	Spells           []learnedSpell
 	Actions          [144]uint32

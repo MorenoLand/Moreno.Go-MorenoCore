@@ -342,9 +342,18 @@ func loadQuestRelationIDs(ctx context.Context, db *sql.DB, table string, entry u
 }
 
 // handleQuestConfirmAccept processes CMSG_QUEST_CONFIRM_ACCEPT (0x19B).
-// Reference: WorldSession::HandleQuestConfirmAccept (QuestHandler.cpp:387).
+// Reference: WorldSession::HandleQuestConfirmAccept (QuestHandler.cpp:655).
 func (s *session) handleQuestConfirmAccept(ctx context.Context, payload []byte) bool {
-	return true
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	questID, _ := r.ReadU32()
+
+	buf := protocol.NewBuffer(12)
+	buf.WriteU64(0)
+	buf.WriteU32(questID)
+	return s.handleQuestgiverAcceptQuest(ctx, buf.Bytes())
 }
 
 // handleQuestPoiQuery processes CMSG_QUEST_POI_QUERY (0x1E3).
@@ -386,20 +395,69 @@ func (s *session) handleQueryQuestsCompleted(ctx context.Context, payload []byte
 }
 
 // handleQuestlogSwapQuest processes CMSG_QUESTLOG_SWAP_QUEST (0x193).
-// Reference: WorldSession::HandleQuestLogSwapQuest (QuestHandler.cpp:328).
+// Reference: WorldSession::HandleQuestLogSwapQuest (QuestHandler.cpp:550).
 func (s *session) handleQuestlogSwapQuest(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
+		return true
+	}
+	slot1 := int(payload[0])
+	slot2 := int(payload[1])
+	if slot1 >= playerQuestLogSlots || slot2 >= playerQuestLogSlots || slot1 == slot2 {
+		return true
+	}
+	s.player.QuestLog[slot1], s.player.QuestLog[slot2] = s.player.QuestLog[slot2], s.player.QuestLog[slot1]
+	s.sendPlayerQuestLogUpdate(slot1)
+	s.sendPlayerQuestLogUpdate(slot2)
 	return true
 }
 
 // handlePushQuestToParty processes CMSG_PUSHQUESTTOPARTY (0x199).
-// Reference: WorldSession::HandleQuestPushToParty (QuestHandler.cpp:342).
+// Reference: WorldSession::HandlePushQuestToParty (QuestHandler.cpp:565).
 func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	questID, _ := r.ReadU32()
+
+	if s.groupID == 0 || s.server == nil {
+		buf := protocol.NewBuffer(13)
+		buf.WriteU32(questID)
+		buf.WriteU8(5) // QUEST_PARTY_MSG_NOT_IN_PARTY
+		buf.WriteU64(s.playerGUID)
+		_ = s.write(uint16(protocol.OpcodeMSG_QUEST_PUSH_RESULT), buf.Bytes(), true)
+		return true
+	}
+
+	buf := protocol.NewBuffer(13)
+	buf.WriteU32(questID)
+	buf.WriteU8(0) // QUEST_PARTY_MSG_SHARING_QUEST
+	buf.WriteU64(s.playerGUID)
+	s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_QUEST_PUSH_RESULT), buf.Bytes())
 	return true
 }
 
 // handleQuestPushResult processes MSG_QUEST_PUSH_RESULT (0x276).
-// Reference: WorldSession::HandleQuestPushResult (QuestHandler.cpp:365).
+// Reference: WorldSession::HandleQuestPushResult (QuestHandler.cpp:645).
 func (s *session) handleQuestPushResult(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 13 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	questID, _ := r.ReadU32()
+	msg, _ := r.ReadU8()
+	sharerGUID, _ := r.ReadU64()
+
+	if s.server != nil {
+		sharerSess := s.server.findSessionByGUID(sharerGUID)
+		if sharerSess != nil {
+			buf := protocol.NewBuffer(13)
+			buf.WriteU32(questID)
+			buf.WriteU8(msg)
+			buf.WriteU64(s.playerGUID)
+			_ = sharerSess.write(uint16(protocol.OpcodeMSG_QUEST_PUSH_RESULT), buf.Bytes(), true)
+		}
+	}
 	return true
 }
 
@@ -431,6 +489,12 @@ func (s *session) handleQueryInspectAchievements(ctx context.Context, payload []
 // handleRaidReadyCheckFinished processes MSG_RAID_READY_CHECK_FINISHED (0x3C6).
 // Reference: WorldSession::HandleRaidReadyCheckFinished (GroupHandler.cpp:450).
 func (s *session) handleRaidReadyCheckFinished(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || s.server == nil || s.groupID == 0 {
+		return true
+	}
+	buf := protocol.NewBuffer(1)
+	buf.WriteU8(0) // finished
+	s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_RAID_READY_CHECK_FINISHED), buf.Bytes())
 	return true
 }
 

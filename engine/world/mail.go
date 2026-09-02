@@ -465,8 +465,35 @@ func buildSendMailResult(mailID, action, result uint32) []byte {
 }
 
 // handleMailCreateTextItem processes CMSG_MAIL_CREATE_TEXT_ITEM (0x24A).
-// Reference: WorldSession::HandleMailCreateTextItem (MailHandler.cpp:333).
+// Reference: WorldSession::HandleMailCreateTextItem (MailHandler.cpp:565).
 func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 12 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU64() // mailbox GUID
+	mailID, _ := r.ReadU32()
+
+	// Grant letter item (entry 8383: Plain Letter)
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		var nextGUID int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
+		if nextGUID <= 0 {
+			nextGUID = 1
+		}
+		const mailBodyItemTemplate uint32 = 8383
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, 0, '', 0, '', 0, 0, 0, '')", nextGUID, mailBodyItemTemplate, s.playerGUID)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, 23, ?)", s.playerGUID, nextGUID)
+		_ = s.sendInventoryItems(ctx)
+	}
+
+	// Send result: action 9 (MAIL_MADE_PERMANENT), result 0 (MAIL_OK)
+	buf := protocol.NewBuffer(12)
+	buf.WriteU32(mailID)
+	buf.WriteU32(9) // MAIL_MADE_PERMANENT
+	buf.WriteU32(0) // MAIL_OK
+	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buf.Bytes(), true)
 	return true
 }
 
