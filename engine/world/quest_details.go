@@ -147,18 +147,16 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32) bool {
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false
 	}
-	query := `INSERT INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)
-		ON CONFLICT(guid, quest) DO UPDATE SET status = excluded.status`
+	query := `INSERT OR REPLACE INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)`
 	if s.server.CharactersStore.Backend != database.BackendSQLite {
 		query = `INSERT INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)
 			ON DUPLICATE KEY UPDATE status = VALUES(status)`
 	}
 	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, query, s.playerGUID, questID, questStatusIncomplete); err != nil {
-		if missingTable(err) {
-			return true
+		if !missingTable(err) {
+			s.debug("quest accept failed", "account", s.accountName, "quest", questID, "error", err)
+			return false
 		}
-		s.debug("quest accept failed", "account", s.accountName, "quest", questID, "error", err)
-		return false
 	}
 	// Player::AddQuest claims a free log slot and updates PLAYER_QUEST_LOG
 	if s.player != nil {
