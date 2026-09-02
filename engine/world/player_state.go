@@ -80,50 +80,51 @@ type playerSkill struct {
 }
 
 type playerState struct {
-	GUID           uint64
-	Name           string
-	Race           uint8
-	Class          uint8
-	Gender         uint8
-	Skin           uint8
-	Face           uint8
-	HairStyle      uint8
-	HairColor      uint8
-	FacialStyle    uint8
-	Level          uint8
-	XP             uint32
-	Money          uint32
-	PlayerFlags    uint32
-	GuildID        uint32
-	GuildRank      uint8
-	Map            uint32
-	X              float32
-	Y              float32
-	Z              float32
-	Orientation    float32
-	ExtraFlags     uint32
-	AtLogin        uint32
-	Zone           uint32
-	Health         uint32
-	MaxHealth      uint32
-	Powers         [7]uint32
-	MaxPowers      [7]uint32
-	Cinematic      uint32
-	KnownCurrency  uint32
-	WatchedFaction uint32
-	AmmoID         uint32
-	ActionBars     uint32
-	Skills         []playerSkill
-	Spells         []learnedSpell
-	Actions        [144]uint32
-	Cooldowns      []spellCooldown
-	Equipment      string
-	SheathState    uint8
-	TaxiMask       [taxiMaskSize]uint32
-	QuestLog       [playerQuestLogSlots]questLogEntry
-	MountDisplayID uint32
-	StandState     uint8
-	Reputations    []playerReputation
+	GUID             uint64
+	Name             string
+	Race             uint8
+	Class            uint8
+	Gender           uint8
+	Skin             uint8
+	Face             uint8
+	HairStyle        uint8
+	HairColor        uint8
+	FacialStyle      uint8
+	Level            uint8
+	XP               uint32
+	Money            uint32
+	PlayerFlags      uint32
+	GuildID          uint32
+	GuildRank        uint8
+	Map              uint32
+	X                float32
+	Y                float32
+	Z                float32
+	Orientation      float32
+	ExtraFlags       uint32
+	AtLogin          uint32
+	Zone             uint32
+	Health           uint32
+	MaxHealth        uint32
+	Powers           [7]uint32
+	MaxPowers        [7]uint32
+	Cinematic        uint32
+	KnownCurrency    uint32
+	WatchedFaction   uint32
+	AmmoID           uint32
+	ActionBars       uint32
+	Skills           []playerSkill
+	Spells           []learnedSpell
+	Actions          [144]uint32
+	Cooldowns        []spellCooldown
+	Equipment        string
+	SheathState      uint8
+	TaxiMask         [taxiMaskSize]uint32
+	QuestLog         [playerQuestLogSlots]questLogEntry
+	MountDisplayID   uint32
+	StandState       uint8
+	PlayerFieldBytes uint32
+	Reputations      []playerReputation
 }
 
 type playerReputation struct {
@@ -136,11 +137,12 @@ type playerReputation struct {
 
 func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState, error) {
 	state := playerState{GUID: guid, Health: 1, MaxHealth: 1}
-	var race, class, gender, level, playerFlags, mapID, extraFlags, atLogin, zone int64
+	var race, class, gender, level, playerFlags, mapID, extraFlags, atLogin, zone, deathExpireTime int64
 	var equipment sql.NullString
-	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, name, race, class, gender, level, playerFlags, map, position_x, position_y, position_z, orientation, extra_flags, at_login, zone, equipmentCache FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&state.GUID, &state.Name, &race, &class, &gender, &level, &playerFlags, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &extraFlags, &atLogin, &zone, &equipment); err != nil {
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, name, race, class, gender, level, playerFlags, map, position_x, position_y, position_z, orientation, extra_flags, at_login, zone, equipmentCache, death_expire_time FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&state.GUID, &state.Name, &race, &class, &gender, &level, &playerFlags, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &extraFlags, &atLogin, &zone, &equipment, &deathExpireTime); err != nil {
 		return playerState{}, err
 	}
+	s.deathExpireTime = deathExpireTime
 	state.Race, state.Class, state.Gender, state.Level = uint8(race), uint8(class), uint8(gender), uint8(level)
 	state.PlayerFlags, state.Map, state.ExtraFlags, state.AtLogin, state.Zone = uint32(playerFlags), uint32(mapID), uint32(extraFlags), uint32(atLogin), uint32(zone)
 	if equipment.Valid {
@@ -461,6 +463,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		values[unitFieldMountDisplayID] = state.MountDisplayID
 	}
 	values[unitFieldPlayerFlags] = state.PlayerFlags
+	values[unitFieldPlayerFieldBytes] = state.PlayerFieldBytes
 	values[unitFieldPlayerBytes] = uint32(state.Skin) | uint32(state.Face)<<8 | uint32(state.HairStyle)<<16 | uint32(state.HairColor)<<24
 	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.SheathState)<<8
 	values[unitFieldGuildID] = state.GuildID

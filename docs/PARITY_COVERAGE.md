@@ -4,15 +4,15 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 161 / 33440 | — |
+| Server source files / lines | 1410 / 710273 | 163 / 34286 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 175 | 552 |
-| Client behavioral opcode handlers | 430 | 175 | 257 |
+| Client opcode registrations | 727 | 177 | 550 |
+| Client behavioral opcode handlers | 430 | 177 | 255 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 63 / 5724 | — |
+| Test source files / lines | 9 / 1390 | 64 / 6081 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -200,10 +200,8 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_QUEST_CONFIRM_ACCEPT`
 - `CMSG_QUEST_POI_QUERY`
 - `CMSG_READ_ITEM`
-- `CMSG_RECLAIM_CORPSE`
 - `CMSG_REMOVE_GLYPH`
 - `CMSG_REPAIR_ITEM`
-- `CMSG_REPOP_REQUEST`
 - `CMSG_REPORT_PVP_AFK`
 - `CMSG_REQUEST_PARTY_MEMBER_STATS`
 - `CMSG_REQUEST_PET_INFO`

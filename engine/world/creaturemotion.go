@@ -343,6 +343,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if damage >= target.Sess.player.Health {
 				overkill = damage - target.Sess.player.Health
 				target.Sess.player.Health = 0
+				target.Sess.killPlayer(ctx)
 			} else {
 				target.Sess.player.Health -= damage
 			}

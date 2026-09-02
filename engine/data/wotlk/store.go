@@ -90,6 +90,17 @@ type LFGDungeon struct {
 	GroupID        uint32
 }
 
+// WorldSafeLoc mirrors WorldSafeLocsEntry (DBCStructure.h): fields ID (u32),
+// continent/map (u32), and x/y/z (f32); locale name fields follow and are not
+// used by the server.
+type WorldSafeLoc struct {
+	ID    uint32
+	MapID uint32
+	X     float32
+	Y     float32
+	Z     float32
+}
+
 func NewStore(dir string) *Store {
 	return &Store{Dir: dir, files: make(map[string]*dbc.File)}
 }
@@ -409,4 +420,35 @@ func HasMountedFlightSpeed(spell Spell, speed int32) bool {
 		}
 	}
 	return false
+}
+
+// WorldSafeLoc loads one WorldSafeLocs.dbc record by id. The record layout is
+// "nifff" (DBCfmt.h WorldSafeLocsEntryfmt): id, map, x, y, z, then locale
+// string references that the server does not use.
+func (s *Store) WorldSafeLoc(id uint32) (WorldSafeLoc, bool, error) {
+	file, err := s.File("WorldSafeLocs")
+	if err != nil {
+		return WorldSafeLoc{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return WorldSafeLoc{}, false, nil
+	}
+	mapID, err := record.Uint32(1)
+	if err != nil {
+		return WorldSafeLoc{}, false, err
+	}
+	x, err := record.Float32(2)
+	if err != nil {
+		return WorldSafeLoc{}, false, err
+	}
+	y, err := record.Float32(3)
+	if err != nil {
+		return WorldSafeLoc{}, false, err
+	}
+	z, err := record.Float32(4)
+	if err != nil {
+		return WorldSafeLoc{}, false, err
+	}
+	return WorldSafeLoc{ID: id, MapID: mapID, X: x, Y: y, Z: z}, true, nil
 }
