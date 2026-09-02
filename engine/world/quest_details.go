@@ -99,7 +99,7 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	// In TrinityCore Player.cpp:14836, if quest is AutoAccept, add it upon viewing details
 	var specialFlags int64
 	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
-	if specialFlags&4 != 0 || data.Flags&0x00080000 != 0 {
+	if specialFlags&4 != 0 {
 		if canTake, _ := s.canTakeQuest(ctx, questID); canTake {
 			s.addQuestToPlayer(ctx, questID)
 		}
@@ -140,6 +140,25 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	}
 	s.addQuestToPlayer(ctx, questID)
 	s.debug("quest accepted", "account", s.accountName, "quest", questID)
+
+	// Refresh questgiver overhead status (Player::AddQuestAndCheckCompletion)
+	if guid != 0 {
+		entry := uint32((guid >> 24) & 0x00FFFFFF)
+		if entry == 0 {
+			if creature := s.luaCreature(ctx, guid); creature != nil {
+				entry = objectUint32OrZero(creature, "Entry")
+			}
+		}
+		if entry != 0 {
+			if status, err := s.questDialogStatus(ctx, entry); err == nil {
+				packet := protocol.NewBuffer(9)
+				packet.WriteU64(guid)
+				packet.WriteU8(status)
+				_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS), packet.Bytes(), true)
+			}
+		}
+	}
+
 	return s.sendGossipComplete()
 }
 
@@ -174,6 +193,11 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32) bool {
 			s.player.QuestLog[targetSlot] = questLogEntry{QuestID: questID}
 			s.sendPlayerQuestLogUpdate(targetSlot)
 		}
+	}
+
+	// If quest has no objectives or immediate completion requirements, mark complete immediately (Player::AddQuestAndCheckCompletion)
+	if s.canCompleteQuest(ctx, questID) {
+		s.completeQuest(ctx, questID)
 	}
 
 	// Grant starter item if specified in quest_template (e.g. quest items, letters, containers)
@@ -216,6 +240,7 @@ func (s *session) grantQuestStartItem(ctx context.Context, itemEntry uint32) {
 	}
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, 0, 0, 0, '', 0, 100, 0, '')", nextGUID, itemEntry, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
+	_ = s.sendItemCreate(nextGUID, itemEntry, 1, 0, freeSlot)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 }
@@ -354,6 +379,17 @@ func (s *session) loadQuestDetailData(ctx context.Context, questID uint32) (ques
 	}
 	query := "SELECT " + strings.Join(columns, ", ") + " FROM quest_template WHERE ID = ?"
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, query, questID).Scan(targets...); err != nil {
+		// Fallback for minimal schema
+		var minFlags int64
+		var minTitle, minDesc sql.NullString
+		if err2 := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(LogTitle, ''), Flags FROM quest_template WHERE ID = ?", questID).Scan(&minTitle, &minFlags); err2 == nil {
+			data.ID = questID
+			data.Title = minTitle.String
+			data.Flags = uint32(minFlags)
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(LogDescription, Details, '') FROM quest_template WHERE ID = ?", questID).Scan(&minDesc)
+			data.Details = minDesc.String
+			return data, nil
+		}
 		return data, err
 	}
 	data.ID, data.Title, data.Objectives, data.Details = questID, title.String, objectives.String, details.String

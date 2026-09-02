@@ -193,6 +193,12 @@ func (s *session) questDialogStatus(ctx context.Context, entry uint32) (uint8, e
 		if err != nil {
 			return questDialogNone, err
 		}
+		if status == questStatusIncomplete {
+			if s.canCompleteQuest(ctx, questID) {
+				s.completeQuest(ctx, questID)
+				status = questStatusComplete
+			}
+		}
 		if status == questStatusComplete {
 			return questDialogReward, nil
 		}
@@ -220,12 +226,27 @@ func (s *session) questDialogStatus(ctx context.Context, entry uint32) (uint8, e
 }
 
 func (s *session) characterQuestStatus(ctx context.Context, questID uint32) (int64, error) {
-	var status int64
-	err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT status FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&status)
-	if errors.Is(err, sql.ErrNoRows) || (err != nil && missingTable(err)) {
-		return 0, nil
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var status int64
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT status FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID).Scan(&status)
+		if err == nil {
+			return status, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) && !missingTable(err) {
+			return 0, err
+		}
 	}
-	return status, err
+	if s.player != nil {
+		for _, entry := range s.player.QuestLog {
+			if entry.QuestID == questID {
+				if entry.State != 0 {
+					return questStatusComplete, nil
+				}
+				return questStatusIncomplete, nil
+			}
+		}
+	}
+	return 0, nil
 }
 
 func (s *session) loadCreatureQuestMenu(ctx context.Context, entry uint32, playerLevel uint8) ([]gossipQuestItem, error) {
@@ -244,10 +265,20 @@ func (s *session) loadCreatureQuestMenu(ctx context.Context, entry uint32, playe
 		if err != nil {
 			return nil, err
 		}
+		if status == questStatusIncomplete {
+			if s.canCompleteQuest(ctx, questID) {
+				s.completeQuest(ctx, questID)
+				status = questStatusComplete
+			}
+		}
 		if status != questStatusComplete && status != questStatusIncomplete {
 			continue
 		}
-		quest, err := s.loadQuestMenuItem(ctx, questID, 4, playerLevel)
+		icon := uint32(4) // incomplete
+		if status == questStatusComplete {
+			icon = 2 // complete / reward
+		}
+		quest, err := s.loadQuestMenuItem(ctx, questID, icon, playerLevel)
 		if err != nil {
 			return nil, err
 		}
@@ -400,6 +431,117 @@ func (s *session) handleQueryInspectAchievements(ctx context.Context, payload []
 // handleRaidReadyCheckFinished processes MSG_RAID_READY_CHECK_FINISHED (0x3C6).
 // Reference: WorldSession::HandleRaidReadyCheckFinished (GroupHandler.cpp:450).
 func (s *session) handleRaidReadyCheckFinished(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+func (s *session) completeQuest(ctx context.Context, questID uint32) {
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, s.playerGUID, questID)
+	}
+	if s.player != nil {
+		for slot := 0; slot < playerQuestLogSlots; slot++ {
+			if s.player.QuestLog[slot].QuestID == questID {
+				s.player.QuestLog[slot].State = questCompleteStateFlag(questStatusComplete)
+				s.sendPlayerQuestLogUpdate(slot)
+				break
+			}
+		}
+	}
+}
+
+func (s *session) countPlayerInventoryItem(ctx context.Context, itemEntry uint32) uint32 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	var count sql.NullInt64
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT SUM(ii.count)
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ii.itemEntry = ?`, s.playerGUID, itemEntry).Scan(&count)
+	if count.Valid && count.Int64 > 0 {
+		return uint32(count.Int64)
+	}
+	return 0
+}
+
+func (s *session) canCompleteQuest(ctx context.Context, questID uint32) bool {
+	if questID == 0 || s.player == nil {
+		return false
+	}
+	if s.isQuestRewarded(ctx, questID) {
+		return false
+	}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	wdb := s.server.WorldStore.DB
+
+	// 1. Fetch quest requirements from quest_template
+	var flags int64
+	var reqNpc1, reqNpc2, reqNpc3, reqNpc4 int64
+	var reqNpcCount1, reqNpcCount2, reqNpcCount3, reqNpcCount4 int64
+	var reqItem1, reqItem2, reqItem3, reqItem4, reqItem5, reqItem6 int64
+	var reqItemCount1, reqItemCount2, reqItemCount3, reqItemCount4, reqItemCount5, reqItemCount6 int64
+
+	row := wdb.QueryRowContext(ctx, `SELECT Flags,
+		RequiredNpcOrGo1, RequiredNpcOrGo2, RequiredNpcOrGo3, RequiredNpcOrGo4,
+		RequiredNpcOrGoCount1, RequiredNpcOrGoCount2, RequiredNpcOrGoCount3, RequiredNpcOrGoCount4,
+		RequiredItemId1, RequiredItemId2, RequiredItemId3, RequiredItemId4, RequiredItemId5, RequiredItemId6,
+		RequiredItemCount1, RequiredItemCount2, RequiredItemCount3, RequiredItemCount4, RequiredItemCount5, RequiredItemCount6
+		FROM quest_template WHERE ID = ?`, questID)
+	err := row.Scan(&flags,
+		&reqNpc1, &reqNpc2, &reqNpc3, &reqNpc4,
+		&reqNpcCount1, &reqNpcCount2, &reqNpcCount3, &reqNpcCount4,
+		&reqItem1, &reqItem2, &reqItem3, &reqItem4, &reqItem5, &reqItem6,
+		&reqItemCount1, &reqItemCount2, &reqItemCount3, &reqItemCount4, &reqItemCount5, &reqItemCount6)
+	if err != nil {
+		// Fallback for minimalist quest_template schema
+		var simpleFlags int64
+		if err2 := wdb.QueryRowContext(ctx, "SELECT Flags FROM quest_template WHERE ID = ?", questID).Scan(&simpleFlags); err2 != nil {
+			return false
+		}
+		flags = simpleFlags
+	}
+
+	if uint32(flags)&questAutoCompleteFlags != 0 {
+		return true
+	}
+
+	// Check NPC/Creature/GO kill/cast counters against quest log slot
+	var entryCounters [4]uint16
+	foundSlot := false
+	for slot := 0; slot < playerQuestLogSlots; slot++ {
+		if s.player.QuestLog[slot].QuestID == questID {
+			entryCounters = s.player.QuestLog[slot].Counters
+			foundSlot = true
+			break
+		}
+	}
+	if !foundSlot {
+		return false
+	}
+
+	reqNpcs := [4]int64{reqNpc1, reqNpc2, reqNpc3, reqNpc4}
+	reqNpcCounts := [4]int64{reqNpcCount1, reqNpcCount2, reqNpcCount3, reqNpcCount4}
+	for i := 0; i < 4; i++ {
+		if reqNpcs[i] != 0 && reqNpcCounts[i] > 0 {
+			if int64(entryCounters[i]) < reqNpcCounts[i] {
+				return false
+			}
+		}
+	}
+
+	// Check Item requirements in inventory
+	reqItems := [6]int64{reqItem1, reqItem2, reqItem3, reqItem4, reqItem5, reqItem6}
+	reqItemCounts := [6]int64{reqItemCount1, reqItemCount2, reqItemCount3, reqItemCount4, reqItemCount5, reqItemCount6}
+	for i := 0; i < 6; i++ {
+		if reqItems[i] != 0 && reqItemCounts[i] > 0 {
+			count := s.countPlayerInventoryItem(ctx, uint32(reqItems[i]))
+			if int64(count) < reqItemCounts[i] {
+				return false
+			}
+		}
+	}
+
 	return true
 }
 
