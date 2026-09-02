@@ -939,3 +939,26 @@ func (s *session) dispatchCommand(ctx context.Context, fields []string) bool {
 	return node.invoke(ctx, args)
 }
 
+// handleSetFactionCheat processes CMSG_SET_FACTION_CHEAT (0x126).
+func (s *session) handleSetFactionCheat(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleWorldTeleport processes CMSG_WORLD_TELEPORT (0x008).
+// Reference: WorldSession::HandleWorldTeleportOpcode (MovementHandler.cpp:810).
+func (s *session) handleWorldTeleport(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU32() // time
+	mapID, _ := r.ReadU32()
+	x, _ := r.ReadF32()
+	y, _ := r.ReadF32()
+	z, _ := r.ReadF32()
+	o, _ := r.ReadF32()
+	s.teleportTo(mapID, x, y, z, o)
+	return true
+}
+
+

@@ -551,5 +551,24 @@ func (s *MountState) PreferredFlightSpeed(canFly bool) int {
 	return 280
 }
 
+// handleRemoveGlyph processes CMSG_REMOVE_GLYPH (0x48A).
+// Reference: WorldSession::HandleRemoveGlyph (SpellHandler.cpp:840).
+func (s *session) handleRemoveGlyph(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleUpdateMissileTrajectory processes CMSG_UPDATE_MISSILE_TRAJECTORY (0x462).
+// Reference: WorldSession::HandleUpdateMissileTrajectory (SpellHandler.cpp:860).
+func (s *session) handleUpdateMissileTrajectory(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleUpdateProjectilePosition processes CMSG_UPDATE_PROJECTILE_POSITION (0x4BE).
+// Reference: WorldSession::HandleUpdateProjectilePosition (SpellHandler.cpp:875).
+func (s *session) handleUpdateProjectilePosition(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+
 
 

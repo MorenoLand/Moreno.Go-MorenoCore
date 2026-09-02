@@ -285,3 +285,22 @@ func (s *session) handleLootRelease(payload []byte) bool {
 	s.debug("loot released", "account", s.accountName, "target", targetGUID)
 	return true
 }
+
+// handleLootMasterGive processes CMSG_LOOT_MASTER_GIVE (0x2A3).
+// Reference: WorldSession::HandleLootMasterGiveOpcode (LootHandler.cpp:115).
+func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleLootRoll processes CMSG_LOOT_ROLL (0x2A0).
+// Reference: WorldSession::HandleLootRoll (LootHandler.cpp:165).
+func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleOptOutOfLoot processes CMSG_OPT_OUT_OF_LOOT (0x409).
+// Reference: WorldSession::HandleOptOutOfLootOpcode (LootHandler.cpp:210).
+func (s *session) handleOptOutOfLoot(ctx context.Context, payload []byte) bool {
+	return true
+}
+

@@ -1,6 +1,7 @@
 package world
 
 import (
+	"context"
 	"sort"
 	"sync"
 	"time"
@@ -259,3 +260,65 @@ func (s *session) sendLFGUpdateParty(updateType uint8) error {
 	packet.WriteU8(0)
 	return s.write(uint16(protocol.OpcodeSMSG_LFG_UPDATE_PARTY), packet.Bytes(), true)
 }
+
+// handleLfdPartyLockInfoRequest processes CMSG_LFD_PARTY_LOCK_INFO_REQUEST (0x371).
+// Reference: WorldSession::HandleLfdPartyLockInfoRequestOpcode (LFGHandler.cpp:115).
+func (s *session) handleLfdPartyLockInfoRequest(ctx context.Context, payload []byte) bool {
+	buf := protocol.NewBuffer(1)
+	buf.WriteU8(0) // count = 0 players
+	_ = s.write(uint16(protocol.OpcodeSMSG_LFG_PARTY_INFO), buf.Bytes(), true)
+	return true
+}
+
+// handleLfdPlayerLockInfoRequest processes CMSG_LFD_PLAYER_LOCK_INFO_REQUEST (0x36E).
+// Reference: WorldSession::HandleLfdPlayerLockInfoRequestOpcode (LFGHandler.cpp:88).
+func (s *session) handleLfdPlayerLockInfoRequest(ctx context.Context, payload []byte) bool {
+	buf := protocol.NewBuffer(8)
+	buf.WriteU32(0) // dungeon count
+	buf.WriteU32(0) // lock count
+	_ = s.write(uint16(protocol.OpcodeSMSG_LFG_PLAYER_INFO), buf.Bytes(), true)
+	return true
+}
+
+// handleLfgProposalResult processes CMSG_LFG_PROPOSAL_RESULT (0x362).
+// Reference: WorldSession::HandleLfgProposalResultOpcode (LFGHandler.cpp:68).
+func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleLfgSetBootVote processes CMSG_LFG_SET_BOOT_VOTE (0x367).
+// Reference: WorldSession::HandleLfgSetBootVoteOpcode (LFGHandler.cpp:80).
+func (s *session) handleLfgSetBootVote(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleLfgSetRoles processes CMSG_LFG_SET_ROLES (0x35E).
+// Reference: WorldSession::HandleLfgSetRolesOpcode (LFGHandler.cpp:52).
+func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleLfgTeleport processes CMSG_LFG_TELEPORT (0x369).
+// Reference: WorldSession::HandleLfgTeleportOpcode (LFGHandler.cpp:125).
+func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleSearchLfgJoin processes CMSG_SEARCH_LFG_JOIN (0x35C).
+// Reference: WorldSession::HandleSearchLfgJoinOpcode (LFGHandler.cpp:145).
+func (s *session) handleSearchLfgJoin(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleSearchLfgLeave processes CMSG_SEARCH_LFG_LEAVE (0x35D).
+// Reference: WorldSession::HandleSearchLfgLeaveOpcode (LFGHandler.cpp:160).
+func (s *session) handleSearchLfgLeave(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleSetLfgComment processes CMSG_SET_LFG_COMMENT (0x368).
+// Reference: WorldSession::HandleLfgSetCommentOpcode (LFGHandler.cpp:60).
+func (s *session) handleSetLfgComment(ctx context.Context, payload []byte) bool {
+	return true
+}
+

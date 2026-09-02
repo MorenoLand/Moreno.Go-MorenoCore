@@ -273,3 +273,36 @@ func (s *session) handleBfQueueExitRequest(ctx context.Context, payload []byte) 
 	s.debug("battlefield exit request", "battle", battleID)
 	return true
 }
+
+// handleLeaveBattlefield processes CMSG_LEAVE_BATTLEFIELD (0x2E1).
+// Reference: WorldSession::HandleBattlefieldLeaveOpcode (BattlegroundHandler.cpp:88).
+func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleReportPvPAfk processes CMSG_REPORT_PVP_AFK (0x3E4).
+// Reference: WorldSession::HandleReportPvPAFK (BattlegroundHandler.cpp:230).
+func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	targetGUID, _ := r.ReadU64()
+
+	buf := protocol.NewBuffer(9)
+	buf.WriteU64(targetGUID)
+	buf.WriteU8(1) // reported
+	_ = s.write(uint16(protocol.OpcodeSMSG_REPORT_PVP_AFK_RESULT), buf.Bytes(), true)
+	return true
+}
+
+// handleBattlegroundPlayerPositions processes MSG_BATTLEGROUND_PLAYER_POSITIONS (0x2E9).
+// Reference: WorldSession::HandleBattlegroundPlayerPositionsOpcode (BattlegroundHandler.cpp:115).
+func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload []byte) bool {
+	buf := protocol.NewBuffer(8)
+	buf.WriteU32(0) // count 1
+	buf.WriteU32(0) // count 2
+	_ = s.write(uint16(protocol.OpcodeMSG_BATTLEGROUND_PLAYER_POSITIONS), buf.Bytes(), true)
+	return true
+}
+

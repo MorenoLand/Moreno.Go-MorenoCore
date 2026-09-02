@@ -412,3 +412,19 @@ func (s *session) handleGetChannelMemberCount(ctx context.Context, payload []byt
 	return true
 }
 
+// handleSetActiveVoiceChannel processes CMSG_SET_ACTIVE_VOICE_CHANNEL (0x3D3).
+func (s *session) handleSetActiveVoiceChannel(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleVoiceSessionEnable processes CMSG_VOICE_SESSION_ENABLE (0x3AF).
+func (s *session) handleVoiceSessionEnable(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleSetChannelWatch processes CMSG_SET_CHANNEL_WATCH (0x3EF).
+func (s *session) handleSetChannelWatch(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+
