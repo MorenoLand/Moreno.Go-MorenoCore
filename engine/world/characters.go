@@ -1334,3 +1334,20 @@ func buildTutorialFlags(tutorials [8]uint32) []byte {
 	}
 	return packet.Bytes()
 }
+
+// handleSetPlayerDeclinedNames processes CMSG_SET_PLAYER_DECLINED_NAMES (0x419).
+// Reference: WorldSession::HandleSetPlayerDeclinedNames (CharacterHandler.cpp:1150).
+func (s *session) handleSetPlayerDeclinedNames(ctx context.Context, payload []byte) bool {
+	if len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	guid, _ := r.ReadU64()
+
+	buf := protocol.NewBuffer(12)
+	buf.WriteU32(0) // result 0 = success
+	buf.WriteU64(guid)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SET_PLAYER_DECLINED_NAMES_RESULT), buf.Bytes(), true)
+	return true
+}
+

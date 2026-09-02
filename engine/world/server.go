@@ -1688,6 +1688,215 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 
+		// Pets & Pet Stabling
+		case uint32(protocol.OpcodeCMSG_PET_ABANDON):
+			if !state.authed || !state.handlePetAbandon(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PET_ACTION):
+			if !state.authed || !state.handlePetAction(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PET_CANCEL_AURA):
+			if !state.authed || !state.handlePetCancelAura(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PET_CAST_SPELL):
+			if !state.authed || !state.handlePetCastSpell(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PET_LEARN_TALENT):
+			if !state.authed || !state.handlePetLearnTalent(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PET_NAME_QUERY):
+			if !state.authed || !state.handlePetNameQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PET_RENAME):
+			if !state.authed || !state.handlePetRename(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PET_SET_ACTION):
+			if !state.authed || !state.handlePetSetAction(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PET_SPELL_AUTOCAST):
+			if !state.authed || !state.handlePetSpellAutocast(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PET_STOP_ATTACK):
+			if !state.authed || !state.handlePetStopAttack(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REQUEST_PET_INFO):
+			if !state.authed || !state.handleRequestPetInfo(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_STABLE_PET):
+			if !state.authed || !state.handleStablePet(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_STABLE_REVIVE_PET):
+			if !state.authed || !state.handleStableRevivePet(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_STABLE_SWAP_PET):
+			if !state.authed || !state.handleStableSwapPet(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_UNSTABLE_PET):
+			if !state.authed || !state.handleUnstablePet(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_LIST_STABLED_PETS):
+			if !state.authed || !state.handleListStabledPets(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LEARN_PREVIEW_TALENTS_PET):
+			if !state.authed || !state.handleLearnPreviewTalentsPet(ctx, payload) {
+				return
+			}
+
+		// LFG / Dungeon Finder
+		case uint32(protocol.OpcodeCMSG_LFD_PARTY_LOCK_INFO_REQUEST):
+			if !state.authed || !state.handleLfdPartyLockInfoRequest(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LFD_PLAYER_LOCK_INFO_REQUEST):
+			if !state.authed || !state.handleLfdPlayerLockInfoRequest(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LFG_PROPOSAL_RESULT):
+			if !state.authed || !state.handleLfgProposalResult(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LFG_SET_BOOT_VOTE):
+			if !state.authed || !state.handleLfgSetBootVote(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LFG_SET_ROLES):
+			if !state.authed || !state.handleLfgSetRoles(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LFG_TELEPORT):
+			if !state.authed || !state.handleLfgTeleport(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SEARCH_LFG_JOIN):
+			if !state.authed || !state.handleSearchLfgJoin(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SEARCH_LFG_LEAVE):
+			if !state.authed || !state.handleSearchLfgLeave(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_LFG_COMMENT):
+			if !state.authed || !state.handleSetLfgComment(ctx, payload) {
+				return
+			}
+
+		// Loot
+		case uint32(protocol.OpcodeCMSG_LOOT_MASTER_GIVE):
+			if !state.authed || !state.handleLootMasterGive(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LOOT_ROLL):
+			if !state.authed || !state.handleLootRoll(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_OPT_OUT_OF_LOOT):
+			if !state.authed || !state.handleOptOutOfLoot(ctx, payload) {
+				return
+			}
+
+		// Mail
+		case uint32(protocol.OpcodeCMSG_MAIL_CREATE_TEXT_ITEM):
+			if !state.authed || !state.handleMailCreateTextItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MAIL_RETURN_TO_SENDER):
+			if !state.authed || !state.handleMailReturnToSender(ctx, payload) {
+				return
+			}
+
+		// Battleground & PvP
+		case uint32(protocol.OpcodeCMSG_LEAVE_BATTLEFIELD):
+			if !state.authed || !state.handleLeaveBattlefield(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REPORT_PVP_AFK):
+			if !state.authed || !state.handleReportPvPAfk(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_BATTLEGROUND_PLAYER_POSITIONS):
+			if !state.authed || !state.handleBattlegroundPlayerPositions(ctx, payload) {
+				return
+			}
+
+		// Spells & Glyphs
+		case uint32(protocol.OpcodeCMSG_REMOVE_GLYPH):
+			if !state.authed || !state.handleRemoveGlyph(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_UPDATE_MISSILE_TRAJECTORY):
+			if !state.authed || !state.handleUpdateMissileTrajectory(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_UPDATE_PROJECTILE_POSITION):
+			if !state.authed || !state.handleUpdateProjectilePosition(ctx, payload) {
+				return
+			}
+
+		// Group
+		case uint32(protocol.OpcodeCMSG_REQUEST_PARTY_MEMBER_STATS):
+			if !state.authed || !state.handleRequestPartyMemberStats(ctx, payload) {
+				return
+			}
+
+		// Voice & Channels
+		case uint32(protocol.OpcodeCMSG_SET_ACTIVE_VOICE_CHANNEL):
+			if !state.authed || !state.handleSetActiveVoiceChannel(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_VOICE_SESSION_ENABLE):
+			if !state.authed || !state.handleVoiceSessionEnable(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_CHANNEL_WATCH):
+			if !state.authed || !state.handleSetChannelWatch(ctx, payload) {
+				return
+			}
+
+		// Commands & Admin
+		case uint32(protocol.OpcodeCMSG_SET_FACTION_CHEAT):
+			if !state.authed || !state.handleSetFactionCheat(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_WORLD_TELEPORT):
+			if !state.authed || !state.handleWorldTeleport(ctx, payload) {
+				return
+			}
+
+		// Character Declined Names
+		case uint32(protocol.OpcodeCMSG_SET_PLAYER_DECLINED_NAMES):
+			if !state.authed || !state.handleSetPlayerDeclinedNames(ctx, payload) {
+				return
+			}
+
+		// Taxi
+		case uint32(protocol.OpcodeCMSG_SET_TAXI_BENCHMARK_MODE):
+			if !state.authed || !state.handleSetTaxiBenchmarkMode(ctx, payload) {
+				return
+			}
+
+		// Warden
+		case uint32(protocol.OpcodeCMSG_WARDEN_DATA):
+			if !state.authed || !state.handleWardenData(ctx, payload) {
+				return
+			}
+
+
 		case uint32(protocol.OpcodeMSG_MOVE_START_FORWARD), uint32(protocol.OpcodeMSG_MOVE_START_BACKWARD), uint32(protocol.OpcodeMSG_MOVE_STOP), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_STRAFE), uint32(protocol.OpcodeMSG_MOVE_JUMP), uint32(protocol.OpcodeMSG_MOVE_START_TURN_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_TURN_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_TURN), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_UP), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_DOWN), uint32(protocol.OpcodeMSG_MOVE_STOP_PITCH), uint32(protocol.OpcodeMSG_MOVE_SET_RUN_MODE), uint32(protocol.OpcodeMSG_MOVE_SET_WALK_MODE), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), uint32(protocol.OpcodeMSG_MOVE_START_SWIM), uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM), uint32(protocol.OpcodeMSG_MOVE_ROOT), uint32(protocol.OpcodeMSG_MOVE_UNROOT), uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT), uint32(protocol.OpcodeMSG_MOVE_HOVER), uint32(protocol.OpcodeMSG_MOVE_SET_FACING), uint32(protocol.OpcodeMSG_MOVE_SET_PITCH), uint32(protocol.OpcodeMSG_MOVE_START_ASCEND), uint32(protocol.OpcodeMSG_MOVE_START_DESCEND), uint32(protocol.OpcodeMSG_MOVE_STOP_ASCEND), uint32(protocol.OpcodeMSG_MOVE_GRAVITY_CHNG):
 			if !state.authed || !state.handleMovement(ctx, header.Opcode, payload) {
 				return
@@ -2358,3 +2567,10 @@ func compressAccountData(data []byte) ([]byte, error) {
 	}
 	return compressed.Bytes(), nil
 }
+
+// handleWardenData processes CMSG_WARDEN_DATA (0x2E7).
+// Reference: WorldSession::HandleWardenDataOpcode (WardenHandler.cpp:25).
+func (s *session) handleWardenData(ctx context.Context, payload []byte) bool {
+	return true
+}
+

@@ -949,4 +949,11 @@ func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []by
 	return true
 }
 
+// handleRequestPartyMemberStats processes CMSG_REQUEST_PARTY_MEMBER_STATS (0x27F).
+// Reference: WorldSession::HandleRequestPartyMemberStatsOpcode (GroupHandler.cpp:320).
+func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+
 

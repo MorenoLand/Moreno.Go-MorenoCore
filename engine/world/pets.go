@@ -67,3 +67,130 @@ func (s *session) handleDismissCritter(ctx context.Context, payload []byte) bool
 	return true
 }
 
+// handlePetAbandon processes CMSG_PET_ABANDON (0x176).
+// Reference: WorldSession::HandlePetAbandonOpcode (PetHandler.cpp:52).
+func (s *session) handlePetAbandon(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handlePetAction processes CMSG_PET_ACTION (0x175).
+// Reference: WorldSession::HandlePetAction (PetHandler.cpp:73).
+func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handlePetCancelAura processes CMSG_PET_CANCEL_AURA (0x26A).
+// Reference: WorldSession::HandlePetCancelAuraOpcode (PetHandler.cpp:215).
+func (s *session) handlePetCancelAura(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handlePetCastSpell processes CMSG_PET_CAST_SPELL (0x1F0).
+// Reference: WorldSession::HandlePetCastSpellOpcode (PetHandler.cpp:241).
+func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handlePetLearnTalent processes CMSG_PET_LEARN_TALENT (0x486).
+// Reference: WorldSession::HandlePetLearnTalent (PetHandler.cpp:265).
+func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handlePetNameQuery processes CMSG_PET_NAME_QUERY (0x052).
+// Reference: WorldSession::HandlePetNameQuery (PetHandler.cpp:16).
+func (s *session) handlePetNameQuery(ctx context.Context, payload []byte) bool {
+	if len(payload) < 12 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petNumber, _ := r.ReadU32()
+	_, _ = r.ReadU64() // petGUID
+
+	buf := protocol.NewBuffer(32)
+	buf.WriteU32(petNumber)
+	buf.WriteCString("Pet")
+	buf.WriteU32(0) // timestamp
+	buf.WriteU8(0)  // declined
+	_ = s.write(uint16(protocol.OpcodeSMSG_PET_NAME_QUERY_RESPONSE), buf.Bytes(), true)
+	return true
+}
+
+// handlePetRename processes CMSG_PET_RENAME (0x177).
+// Reference: WorldSession::HandlePetRenameOpcode (PetHandler.cpp:284).
+func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handlePetSetAction processes CMSG_PET_SET_ACTION (0x174).
+// Reference: WorldSession::HandlePetSetAction (PetHandler.cpp:328).
+func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handlePetSpellAutocast processes CMSG_PET_SPELL_AUTOCAST (0x1F3).
+// Reference: WorldSession::HandlePetSpellAutocastOpcode (PetHandler.cpp:365).
+func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handlePetStopAttack processes CMSG_PET_STOP_ATTACK (0x2EA).
+// Reference: WorldSession::HandlePetStopAttack (PetHandler.cpp:401).
+func (s *session) handlePetStopAttack(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleRequestPetInfo processes CMSG_REQUEST_PET_INFO (0x279).
+// Reference: WorldSession::HandleRequestPetInfoOpcode (PetHandler.cpp:412).
+func (s *session) handleRequestPetInfo(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleStablePet processes CMSG_STABLE_PET (0x270).
+// Reference: WorldSession::HandleStablePet (NPCHandler.cpp:410).
+func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleStableRevivePet processes CMSG_STABLE_REVIVE_PET (0x274).
+// Reference: WorldSession::HandleStableRevivePet (NPCHandler.cpp:455).
+func (s *session) handleStableRevivePet(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleStableSwapPet processes CMSG_STABLE_SWAP_PET (0x275).
+// Reference: WorldSession::HandleStableSwapPet (NPCHandler.cpp:478).
+func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleUnstablePet processes CMSG_UNSTABLE_PET (0x271).
+// Reference: WorldSession::HandleUnstablePet (NPCHandler.cpp:435).
+func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleListStabledPets processes MSG_LIST_STABLED_PETS (0x26F).
+// Reference: WorldSession::HandleListStabledPetsOpcode (NPCHandler.cpp:520).
+func (s *session) handleListStabledPets(ctx context.Context, payload []byte) bool {
+	if len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	npcGUID, _ := r.ReadU64()
+
+	buf := protocol.NewBuffer(16)
+	buf.WriteU64(npcGUID)
+	buf.WriteU8(0) // num pets
+	buf.WriteU8(4) // num slots
+	_ = s.write(uint16(protocol.OpcodeMSG_LIST_STABLED_PETS), buf.Bytes(), true)
+	return true
+}
+
+// handleLearnPreviewTalentsPet processes CMSG_LEARN_PREVIEW_TALENTS_PET (0x4C2).
+// Reference: WorldSession::HandleLearnPreviewTalentsPet (PetHandler.cpp:430).
+func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+

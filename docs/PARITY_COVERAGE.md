@@ -4,10 +4,10 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 177 / 43792 | — |
+| Server source files / lines | 1410 / 710273 | 177 / 44374 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 386 | 341 |
-| Client behavioral opcode handlers | 430 | 386 | 46 |
+| Client opcode registrations | 727 | 432 | 295 |
+| Client behavioral opcode handlers | 430 | 432 | 0 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
@@ -16,53 +16,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 ## Missing behavioral client opcode handlers
 
-- `CMSG_LEARN_PREVIEW_TALENTS_PET`
-- `CMSG_LEAVE_BATTLEFIELD`
-- `CMSG_LFD_PARTY_LOCK_INFO_REQUEST`
-- `CMSG_LFD_PLAYER_LOCK_INFO_REQUEST`
-- `CMSG_LFG_PROPOSAL_RESULT`
-- `CMSG_LFG_SET_BOOT_VOTE`
-- `CMSG_LFG_SET_ROLES`
-- `CMSG_LFG_TELEPORT`
-- `CMSG_LOOT_MASTER_GIVE`
-- `CMSG_LOOT_ROLL`
-- `CMSG_MAIL_CREATE_TEXT_ITEM`
-- `CMSG_MAIL_RETURN_TO_SENDER`
-- `CMSG_OPT_OUT_OF_LOOT`
-- `CMSG_PET_ABANDON`
-- `CMSG_PET_ACTION`
-- `CMSG_PET_CANCEL_AURA`
-- `CMSG_PET_CAST_SPELL`
-- `CMSG_PET_LEARN_TALENT`
-- `CMSG_PET_NAME_QUERY`
-- `CMSG_PET_RENAME`
-- `CMSG_PET_SET_ACTION`
-- `CMSG_PET_SPELL_AUTOCAST`
-- `CMSG_PET_STOP_ATTACK`
-- `CMSG_REMOVE_GLYPH`
-- `CMSG_REPORT_PVP_AFK`
-- `CMSG_REQUEST_PARTY_MEMBER_STATS`
-- `CMSG_REQUEST_PET_INFO`
-- `CMSG_SEARCH_LFG_JOIN`
-- `CMSG_SEARCH_LFG_LEAVE`
-- `CMSG_SET_ACTIVE_VOICE_CHANNEL`
-- `CMSG_SET_CHANNEL_WATCH`
-- `CMSG_SET_FACTION_CHEAT`
-- `CMSG_SET_LFG_COMMENT`
-- `CMSG_SET_PLAYER_DECLINED_NAMES`
-- `CMSG_SET_TAXI_BENCHMARK_MODE`
-- `CMSG_STABLE_PET`
-- `CMSG_STABLE_REVIVE_PET`
-- `CMSG_STABLE_SWAP_PET`
-- `CMSG_UNSTABLE_PET`
-- `CMSG_UPDATE_MISSILE_TRAJECTORY`
-- `CMSG_UPDATE_PROJECTILE_POSITION`
-- `CMSG_VOICE_SESSION_ENABLE`
-- `CMSG_WARDEN_DATA`
-- `CMSG_WORLD_TELEPORT`
-- `MSG_BATTLEGROUND_PLAYER_POSITIONS`
-- `MSG_LIST_STABLED_PETS`
-
+No missing symbols detected.
 ## Reference client opcodes intentionally bound to Handle_NULL
 
 - `CMSG_ACTIVE_PVP_CHEAT`

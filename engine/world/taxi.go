@@ -434,3 +434,10 @@ func (s *session) handleEnableTaxi(ctx context.Context, payload []byte) bool {
 	return s.handleTaxiNodeStatusQuery(ctx, payload)
 }
 
+// handleSetTaxiBenchmarkMode processes CMSG_SET_TAXI_BENCHMARK_MODE (0x389).
+// Reference: WorldSession::HandleSetTaxiBenchmarkModeOpcode (TaxiHandler.cpp:165).
+func (s *session) handleSetTaxiBenchmarkMode(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+

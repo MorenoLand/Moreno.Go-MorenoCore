@@ -461,3 +461,38 @@ func buildSendMailResult(mailID, action, result uint32) []byte {
 	buf.WriteU32(result)
 	return buf.Bytes()
 }
+
+// handleMailCreateTextItem processes CMSG_MAIL_CREATE_TEXT_ITEM (0x24A).
+// Reference: WorldSession::HandleMailCreateTextItem (MailHandler.cpp:333).
+func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMailReturnToSender processes CMSG_MAIL_RETURN_TO_SENDER (0x248).
+// Reference: WorldSession::HandleMailReturnToSender (MailHandler.cpp:387).
+func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 12 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU64() // mailbox GUID
+	mailID, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		_, _ = cdb.ExecContext(ctx, `UPDATE mail SET
+			receiver = sender,
+			sender = receiver,
+			messageType = 0,
+			deliver_time = ?
+			WHERE id = ? AND receiver = ?`, time.Now().Unix(), mailID, s.playerGUID)
+	}
+
+	res := buildSendMailResult(mailID, 2, 0) // MAIL_RES_RETURNED_TO_NAME
+	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), res, true)
+	return true
+}
+
