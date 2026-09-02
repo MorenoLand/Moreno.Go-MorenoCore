@@ -28,6 +28,33 @@ func TestAttackPacketBuilders(t *testing.T) {
 	if dead, err := reader.ReadU32(); err != nil || dead != 1 {
 		t.Fatalf("dead=%d err=%v", dead, err)
 	}
+	state := protocol.NewReader(buildAttackerStateUpdate(11, 22, 10, 0))
+	if _, err := state.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.ReadPackedGUID(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.ReadPackedGUID(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.ReadU8(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := state.ReadU32(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if value, err := state.ReadU8(); err != nil || value != 1 {
+		t.Fatalf("target state=%d err=%v", value, err)
+	}
 }
 
 func TestHandleAttackSwingStartsAndStopsCombat(t *testing.T) {
@@ -125,4 +152,3 @@ func TestHandleSetSheathed(t *testing.T) {
 		t.Fatalf("expected sheath state 1, got %d", state.player.SheathState)
 	}
 }
-

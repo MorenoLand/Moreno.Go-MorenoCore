@@ -250,10 +250,10 @@ func buildAttackerStateUpdate(attacker, victim uint64, damage, overkill uint32) 
 	packet.WriteU32(damage)          // Full damage
 	packet.WriteU32(overkill)        // Overkill
 	packet.WriteU8(1)                // Sub damage count
-	packet.WriteU32(1)                // Damage school: Physical (1)
+	packet.WriteU32(1)               // Damage school: Physical (1)
 	packet.WriteF32(float32(damage)) // float sub damage
 	packet.WriteU32(damage)          // uint32 sub damage
-	packet.WriteU8(0)                // TargetState: VICTIMSTATE_HIT
+	packet.WriteU8(1)                // TargetState: VICTIMSTATE_HIT
 	packet.WriteU32(0)               // Unknown
 	packet.WriteU32(0)               // Melee spell ID
 	return packet.Bytes()

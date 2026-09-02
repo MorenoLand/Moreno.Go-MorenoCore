@@ -75,6 +75,18 @@ func dist2D(ax, ay, bx, by float32) float64 {
 	return sqrt64(dx*dx + dy*dy)
 }
 
+func TestCreatureSpeedMultipliersUseReferenceBaseSpeeds(t *testing.T) {
+	if got := creatureWalkVelocity(1); got != 2.5 {
+		t.Fatalf("walk speed=%v", got)
+	}
+	if got := creatureRunVelocity(1.14286); got < 7.99 || got > 8.01 {
+		t.Fatalf("run speed=%v", got)
+	}
+	if got := creatureWalkVelocity(0); got != 2.5 {
+		t.Fatalf("default walk speed=%v", got)
+	}
+}
+
 func sqrt64(v float64) float64 {
 	if v <= 0 {
 		return 0

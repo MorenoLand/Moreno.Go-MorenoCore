@@ -128,14 +128,14 @@ func (s *session) handleCmdGM(args []string) {
 		if len(args) > 1 && strings.ToLower(args[1]) == "off" {
 			s.gmChat = false
 			if s.player != nil {
-				s.player.ExtraFlags &= ^uint32(0x20)
+				s.player.ExtraFlags &= ^playerExtraGMChat
 			}
 			s.sendNotification("GM chat badge is OFF")
 			s.sendSysMessage("GM chat badge is OFF")
 		} else {
 			s.gmChat = true
 			if s.player != nil {
-				s.player.ExtraFlags |= 0x20
+				s.player.ExtraFlags |= playerExtraGMChat
 			}
 			s.sendNotification("GM chat badge is ON")
 			s.sendSysMessage("GM chat badge is ON")
@@ -158,14 +158,16 @@ func (s *session) handleCmdGM(args []string) {
 	case "visible", "vis":
 		if len(args) > 1 && strings.ToLower(args[1]) == "off" {
 			if s.player != nil {
-				s.player.PlayerFlags |= 0x00000010
+				s.player.ExtraFlags |= playerExtraGMInvisible
+				s.persistExtraFlags()
 				s.sendPlayerUpdate()
 			}
 			s.sendNotification("You are now invisible.")
 			s.sendSysMessage("GM visibility is OFF (Invisible)")
 		} else {
 			if s.player != nil {
-				s.player.PlayerFlags &= ^uint32(0x00000010)
+				s.player.ExtraFlags &= ^playerExtraGMInvisible
+				s.persistExtraFlags()
 				s.sendPlayerUpdate()
 			}
 			s.sendNotification("You are now visible.")

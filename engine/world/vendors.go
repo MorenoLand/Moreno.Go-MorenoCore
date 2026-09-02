@@ -55,10 +55,7 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 			itemSlot = fallbackSlot
 		}
 		fallbackSlot++
-		inStock := int32(-1)
-		if maxCount > 0 {
-			inStock = int32(maxCount)
-		}
+		inStock := vendorStockValue(maxCount)
 		if buyCount <= 0 {
 			buyCount = 1
 		}
@@ -89,6 +86,16 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 	_ = s.write(uint16(protocol.OpcodeSMSG_LIST_INVENTORY), packet.Bytes(), true)
 	s.debug("vendor list sent", "account", s.accountName, "vendor", vendorGUID, "items", len(items))
 	return true
+}
+
+func vendorStockValue(maxCount int64) int32 {
+	if maxCount <= 0 {
+		return 0
+	}
+	if maxCount > int64(^uint32(0)>>1) {
+		return int32(^uint32(0) >> 1)
+	}
+	return int32(maxCount)
 }
 
 func (s *session) handleBuyItem(ctx context.Context, payload []byte) bool {

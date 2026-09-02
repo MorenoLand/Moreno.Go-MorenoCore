@@ -868,7 +868,8 @@ func (s *session) createStarterSpells(ctx context.Context, guid uint64, race, cl
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, sp.ID)
 	}
 
-	rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = ? OR racemask = 0) AND (classmask = ? OR classmask = 0)", race, class)
+	raceMask, classMask := playerCreateMask(race), playerCreateMask(class)
+	rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR (racemask & ?) <> 0) AND (classmask = 0 OR (classmask & ?) <> 0)", raceMask, classMask)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -923,7 +924,8 @@ func (s *session) createStarterSkills(ctx context.Context, guid uint64, race, cl
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, 109, 300, 300)", guid)
 	}
 
-	rows, err := wdb.QueryContext(ctx, "SELECT skill, rank FROM playercreateinfo_skills WHERE (raceMask = ? OR raceMask = 0) AND (classMask = ? OR classMask = 0)", race, class)
+	raceMask, classMask := playerCreateMask(race), playerCreateMask(class)
+	rows, err := wdb.QueryContext(ctx, "SELECT skill, rank FROM playercreateinfo_skills WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0)", raceMask, classMask)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {

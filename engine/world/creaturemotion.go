@@ -72,6 +72,25 @@ type waypointPoint struct {
 // creature nobody observes stops consuming memory.
 const motionTTL = 10 * time.Minute
 
+const (
+	creatureBaseWalkSpeed = 2.5
+	creatureBaseRunSpeed  = 7.0
+)
+
+func creatureWalkVelocity(multiplier float64) float32 {
+	if multiplier <= 0 {
+		return creatureBaseWalkSpeed
+	}
+	return float32(multiplier) * creatureBaseWalkSpeed
+}
+
+func creatureRunVelocity(multiplier float64) float32 {
+	if multiplier <= 0 {
+		return creatureBaseRunSpeed
+	}
+	return float32(multiplier) * creatureBaseRunSpeed
+}
+
 func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y, z float32, moveType uint32, wander float64, walkSpeed float32) *creatureMotion {
 	s.motionMu.Lock()
 	defer s.motionMu.Unlock()
@@ -82,18 +101,18 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 	motion := s.creatureMotion[key]
 	if motion == nil || motion.Entry != entry {
 		motion = &creatureMotion{
-			GUID:     key,
-			Entry:    entry,
-			Map:      mapID,
-			HomeX:    x, HomeY: y, HomeZ: z,
+			GUID:  key,
+			Entry: entry,
+			Map:   mapID,
+			HomeX: x, HomeY: y, HomeZ: z,
 			X: x, Y: y, Z: z,
 			Speed:    walkSpeed,
-			RunSpeed: 7.0,
+			RunSpeed: creatureBaseRunSpeed,
 			MoveType: moveType,
 			Wander:   wander,
 		}
 		if walkSpeed <= 0 {
-			motion.Speed = 2.5
+			motion.Speed = creatureBaseWalkSpeed
 		}
 		if moveType == 2 {
 			motion.PathID = s.loadCreaturePathID(ctx, guid, entry)
@@ -123,13 +142,13 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 			JOIN creature_template AS t ON t.entry = c.id
 			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &faction, &level); err == nil {
 			motion = &creatureMotion{
-				GUID:     creatureGUID,
-				Entry:    entry,
-				Map:      uint32(mapID),
-				HomeX:    float32(x), HomeY: float32(y), HomeZ: float32(z),
+				GUID:  creatureGUID,
+				Entry: entry,
+				Map:   uint32(mapID),
+				HomeX: float32(x), HomeY: float32(y), HomeZ: float32(z),
 				X: float32(x), Y: float32(y), Z: float32(z),
-				Speed:    2.5,
-				RunSpeed: 7.0,
+				Speed:    creatureBaseWalkSpeed,
+				RunSpeed: creatureBaseRunSpeed,
 				Faction:  uint32(faction),
 				Level:    uint32(level),
 			}
@@ -186,7 +205,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	s.sessionsMu.RLock()
 	for sess := range s.sessions {
 		if sess.playerLoaded && sess.player != nil {
-			isGM := (sess.player.ExtraFlags&0x00000001 != 0) || sess.gmChat
+			isGM := (sess.player.ExtraFlags&playerExtraGMOn != 0) || (sess.player.PlayerFlags&playerFlagGM != 0)
 			isDead := sess.player.Health == 0
 			players = append(players, playerPos{
 				Map:    sess.player.Map,
@@ -213,7 +232,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 		distance = 100.0
 	}
 	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.MovementType, c.wander_distance,
-		COALESCE(NULLIF(t.speed_walk, 0), 2.5), COALESCE(NULLIF(t.speed_run, 0), 7.0),
+		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
 		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(c.curhealth, 100)
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
@@ -237,11 +256,20 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			if curHealth <= 0 {
 				continue
 			}
-			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, float32(x), float32(y), float32(z), uint32(moveType), wander, float32(walkSpeed))
+			walkVelocity := creatureWalkVelocity(walkSpeed)
+			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, float32(x), float32(y), float32(z), uint32(moveType), wander, walkVelocity)
 			motion.Faction = uint32(faction)
 			motion.Level = uint32(level)
-			if runSpeed > 0 {
-				motion.RunSpeed = float32(runSpeed)
+			motion.RunSpeed = creatureRunVelocity(runSpeed)
+			if motion.MaxHealth == 0 {
+				health := uint32(curHealth)
+				if health == 0 {
+					health = 1
+				}
+				motion.Health, motion.MaxHealth = health, health
+			}
+			if motion.Health == 0 {
+				continue
 			}
 			s.stepCreatureMotion(ctx, motion, players, now)
 		}
@@ -344,7 +372,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if motion.MoveType == 2 {
 		point := motion.Points[motion.NextIdx]
 		destX, destY, destZ = point.X, point.Y, point.Z
-		speed = motion.Speed * 2.0 // WaypointMovementGenerator defaults to run speed
+		speed = motion.RunSpeed
 		if point.Delay > 0 {
 			wait = time.Duration(point.Delay) * time.Second
 		}
@@ -437,7 +465,7 @@ func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z flo
 	packet.WriteF32(y)
 	packet.WriteF32(z)
 	packet.WriteU32(0) // Spline ID
-	packet.WriteU8(1) // MonsterMoveStop = 1
+	packet.WriteU8(1)  // MonsterMoveStop = 1
 	distance := s.Config.VisibilityDistanceContinents
 	if distance <= 0 {
 		distance = 150.0
@@ -453,5 +481,3 @@ func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z flo
 		}
 	}
 }
-
-

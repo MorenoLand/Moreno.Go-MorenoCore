@@ -38,6 +38,15 @@ func TestBuildChannelNotify(t *testing.T) {
 	}
 }
 
+func TestTradeChannelKeepsCityRestrictionForLocalizedNames(t *testing.T) {
+	if channelFlags(2, "Trade - Dun Morogh")&channelFlagCity == 0 {
+		t.Fatal("trade channel lost its city-only flag")
+	}
+	if channelFlags(2, "Trade - Stormwind")&channelFlagCity == 0 {
+		t.Fatal("localized trade channel lost its city-only flag")
+	}
+}
+
 func TestHandleJoinAndLeaveChannel(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()

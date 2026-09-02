@@ -6,6 +6,12 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+func TestPlayerCreateMask(t *testing.T) {
+	if playerCreateMask(3) != 0x04 || playerCreateMask(11) != 0x400 || playerCreateMask(0) != 0 {
+		t.Fatalf("masks are incorrect")
+	}
+}
+
 func TestBuildPlayerUpdateKeepsMovementAndUpdateMaskAligned(t *testing.T) {
 	server := &Server{}
 	packet, err := server.buildPlayerUpdate(playerState{GUID: 26, Level: 21, Map: 0, X: 1, Y: 2, Z: 3, Orientation: 4})

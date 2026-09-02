@@ -268,7 +268,11 @@ func channelFlags(id uint32, name string) uint8 {
 	if id == 0 {
 		return channelFlagCustom
 	}
-	switch strings.ToLower(strings.ReplaceAll(name, " ", "")) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if separator := strings.Index(name, " - "); separator >= 0 {
+		name = name[:separator]
+	}
+	switch strings.ReplaceAll(name, " ", "") {
 	case "trade":
 		return channelFlagGeneral | channelFlagNotLFG | channelFlagTrade | channelFlagCity
 	case "lookingforgroup":
