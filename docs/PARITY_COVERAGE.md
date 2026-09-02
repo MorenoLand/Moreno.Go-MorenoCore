@@ -4,15 +4,15 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 167 / 36953 | — |
+| Server source files / lines | 1410 / 710273 | 168 / 37242 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 195 | 532 |
-| Client behavioral opcode handlers | 430 | 195 | 237 |
+| Client opcode registrations | 727 | 200 | 527 |
+| Client behavioral opcode handlers | 430 | 200 | 232 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 66 / 7517 | — |
+| Test source files / lines | 9 / 1390 | 67 / 7718 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -62,10 +62,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_CALENDAR_GUILD_FILTER`
 - `CMSG_CALENDAR_REMOVE_EVENT`
 - `CMSG_CALENDAR_UPDATE_EVENT`
-- `CMSG_CANCEL_AUTO_REPEAT_SPELL`
-- `CMSG_CANCEL_GROWTH_AURA`
-- `CMSG_CANCEL_MOUNT_AURA`
-- `CMSG_CANCEL_TEMP_ENCHANTMENT`
 - `CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE`
 - `CMSG_CHANNEL_ANNOUNCEMENTS`
 - `CMSG_CHANNEL_BAN`
@@ -87,7 +83,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_COMPLAIN`
 - `CMSG_COMPLETE_MOVIE`
 - `CMSG_CONTROLLER_EJECT_PASSENGER`
-- `CMSG_CORPSE_MAP_POSITION_QUERY`
 - `CMSG_DECLINE_CHANNEL_INVITE`
 - `CMSG_DELETEEQUIPMENT_SET`
 - `CMSG_DISMISS_CONTROLLED_VEHICLE`

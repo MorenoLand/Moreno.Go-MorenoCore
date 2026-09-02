@@ -592,6 +592,26 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleCancelAura(payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_CANCEL_MOUNT_AURA):
+			if !state.authed || !state.handleCancelMountAura(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CANCEL_GROWTH_AURA):
+			if !state.authed || !state.handleCancelGrowthAura(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CANCEL_AUTO_REPEAT_SPELL):
+			if !state.authed || !state.handleCancelAutoRepeatSpell(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CANCEL_TEMP_ENCHANTMENT):
+			if !state.authed || !state.handleCancelTempEnchantment(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CORPSE_MAP_POSITION_QUERY):
+			if !state.authed || !state.handleCorpseMapPositionQuery(payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_GOSSIP_HELLO):
 			if !state.authed || !state.handleGossipHello(ctx, payload) {
 				return
