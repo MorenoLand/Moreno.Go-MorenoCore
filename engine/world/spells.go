@@ -412,3 +412,37 @@ func buildSpellCooldown(playerGUID uint64, spellID uint32, cooldownDurationMs ui
 	buf.WriteU32(cooldownDurationMs)
 	return buf.Bytes()
 }
+
+// handleFarSight processes CMSG_FAR_SIGHT (0x27A).
+func (s *session) handleFarSight(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleGetMirrorImageData processes CMSG_GET_MIRRORIMAGE_DATA (0x401).
+// Reference: WorldSession::HandleMirrorImageDataRequest (SpellHandler.cpp:635).
+func (s *session) handleGetMirrorImageData(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	guid, _ := r.ReadU64()
+
+	buf := protocol.NewBuffer(68)
+	buf.WriteU64(guid)
+	buf.WriteU32(0) // displayId
+	buf.WriteU8(s.player.Race)
+	buf.WriteU8(s.player.Gender)
+	buf.WriteU8(s.player.Class)
+	buf.WriteU8(s.player.Skin)
+	buf.WriteU8(s.player.Face)
+	buf.WriteU8(s.player.HairStyle)
+	buf.WriteU8(s.player.HairColor)
+	buf.WriteU8(s.player.FacialStyle)
+	buf.WriteU32(0) // guildId
+	for i := 0; i < 11; i++ {
+		buf.WriteU32(0) // outfit item displays
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_MIRRORIMAGE_DATA), buf.Bytes(), true)
+	return true
+}
+

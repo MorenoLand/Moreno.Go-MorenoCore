@@ -884,3 +884,14 @@ func (s *session) handleRandomRoll(_ context.Context, payload []byte) bool {
 	}
 	return true
 }
+
+// handleGroupAssistantLeader processes CMSG_GROUP_ASSISTANT_LEADER (0x28F).
+func (s *session) handleGroupAssistantLeader(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleGroupChangeSubGroup processes CMSG_GROUP_CHANGE_SUB_GROUP (0x27E).
+func (s *session) handleGroupChangeSubGroup(ctx context.Context, payload []byte) bool {
+	return true
+}
+

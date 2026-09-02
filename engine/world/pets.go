@@ -1,4 +1,4 @@
-﻿package world
+package world
 
 import (
 	"context"
@@ -61,3 +61,9 @@ func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool 
 	s.debug("stable slot purchased", "account", s.accountName, "slot", purchasedCount+1)
 	return true
 }
+
+// handleDismissCritter processes CMSG_DISMISS_CRITTER (0x48D).
+func (s *session) handleDismissCritter(ctx context.Context, payload []byte) bool {
+	return true
+}
+
