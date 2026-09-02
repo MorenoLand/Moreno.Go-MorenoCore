@@ -130,6 +130,7 @@ func (s *session) handleCmdGM(args []string) {
 			s.gmChat = false
 			if s.player != nil {
 				s.player.ExtraFlags &= ^playerExtraGMChat
+				s.persistExtraFlags() // persist chat badge state across restarts
 			}
 			s.sendNotification("GM chat badge is OFF")
 			s.sendSysMessage("GM chat badge is OFF")
@@ -137,6 +138,7 @@ func (s *session) handleCmdGM(args []string) {
 			s.gmChat = true
 			if s.player != nil {
 				s.player.ExtraFlags |= playerExtraGMChat
+				s.persistExtraFlags() // persist chat badge state across restarts
 			}
 			s.sendNotification("GM chat badge is ON")
 			s.sendSysMessage("GM chat badge is ON")
