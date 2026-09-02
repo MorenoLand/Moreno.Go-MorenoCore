@@ -23,8 +23,9 @@ type toolStatus struct {
 
 var (
 	opcodePattern         = regexp.MustCompile(`DEFINE_(?:SERVER_)?(?:OPCODE_)?HANDLER\(\s*([A-Z0-9_]+)`)
-	goHandlerPattern      = regexp.MustCompile(`case uint32\(protocol\.Opcode([A-Z0-9_]+)\)`)
-	statementPattern      = regexp.MustCompile(`PrepareStatement\(\s*([A-Z0-9_]+)`)
+	nullOpcodePattern     = regexp.MustCompile(`DEFINE_HANDLER\(\s*([A-Z0-9_]+)[^;]*Handle_NULL`)
+	goCasePattern         = regexp.MustCompile(`(?ms)^\s*case\s+([^:]+):`)
+	goOpcodePattern       = regexp.MustCompile(`protocol\.Opcode([A-Z0-9_]+)`)
 	statementSQLPattern   = regexp.MustCompile(`PrepareStatement\(\s*([A-Z0-9_]+)\s*,\s*"((?:[^"\\]|\\.)*)"`)
 	goStatementSQLPattern = regexp.MustCompile(`ID:\s*"([A-Z0-9_]+)"\s*,\s*SQL:\s*"((?:[^"\\]|\\.)*)"`)
 	schemaPattern         = regexp.MustCompile(`(?i)CREATE\s+(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?[\x60]?([A-Za-z0-9_]+)[\x60]?`)
@@ -70,14 +71,22 @@ func buildReport(reference, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	refOpcodes, err := matches(filepath.Join(reference, "src", "server"), opcodePattern, func(path string) bool { return filepath.Base(path) == "Opcodes.cpp" })
+	allRefOpcodes, err := matches(filepath.Join(reference, "src", "server"), opcodePattern, func(path string) bool { return filepath.Base(path) == "Opcodes.cpp" })
 	if err != nil {
 		return "", err
 	}
-	goOpcodes, err := matches(filepath.Join(repo, "engine", "world"), goHandlerPattern, nil)
+	goOpcodes, err := goHandlers(filepath.Join(repo, "engine", "world"))
 	if err != nil {
 		return "", err
 	}
+	refOpcodes := clientOpcodes(allRefOpcodes)
+	goOpcodes = clientOpcodes(goOpcodes)
+	refNullOpcodes, err := matches(filepath.Join(reference, "src", "server"), nullOpcodePattern, func(path string) bool { return filepath.Base(path) == "Opcodes.cpp" })
+	if err != nil {
+		return "", err
+	}
+	refNullOpcodes = clientOpcodes(refNullOpcodes)
+	refBehavioralOpcodes := difference(refOpcodes, refNullOpcodes)
 	refStatementSQL, err := statementDetails(filepath.Join(reference, "src", "server"), statementSQLPattern, nil)
 	if err != nil {
 		return "", err
@@ -132,13 +141,15 @@ func buildReport(reference, repo string) (string, error) {
 	fmt.Fprintf(&report, "| Area | Reference | Go | Missing reference symbols |\n| --- | ---: | ---: | ---: |\n")
 	fmt.Fprintf(&report, "| Server source files / lines | %d / %d | %d / %d | — |\n", refServer.Files, refServer.Lines, goSources.Files, goSources.Lines)
 	fmt.Fprintf(&report, "| Tool source files / lines | %d / %d | — | — |\n", refTools.Files, refTools.Lines)
-	fmt.Fprintf(&report, "| Opcode handlers | %d | %d | %d |\n", len(refOpcodes), len(goOpcodes), len(difference(refOpcodes, goOpcodes)))
+	fmt.Fprintf(&report, "| Client opcode registrations | %d | %d | %d |\n", len(refOpcodes), len(goOpcodes), len(difference(refOpcodes, goOpcodes)))
+	fmt.Fprintf(&report, "| Client behavioral opcode handlers | %d | %d | %d |\n", len(refBehavioralOpcodes), len(goOpcodes), len(difference(refBehavioralOpcodes, goOpcodes)))
 	fmt.Fprintf(&report, "| Prepared statement identifiers | %d | %d | %d |\n", len(refStatements), len(goStatements), len(difference(refStatements, goStatements)))
 	fmt.Fprintf(&report, "| Prepared statement SQL mismatches | — | — | %d |\n", len(sqlDifferences(refStatementSQL, goStatementSQL)))
 	fmt.Fprintf(&report, "| Schema tables/views | %d | %d mysql / %d sqlite | %d mysql / %d sqlite |\n", len(refSchema), len(goMySQLSchema), len(goSQLiteSchema), len(difference(keys(refSchema), keys(goMySQLSchema))), len(difference(keys(refSchema), keys(goSQLiteSchema))))
 	fmt.Fprintf(&report, "| Script source files / lines | %d / %d | %d / %d | — |\n", refScripts.Files, refScripts.Lines, goScripts.Files, goScripts.Lines)
 	fmt.Fprintf(&report, "| Test source files / lines | %d / %d | %d / %d | — |\n", refTests.Files, refTests.Lines, goTests.Files, goTests.Lines)
-	fmt.Fprintf(&report, "\n## Missing opcode handlers\n\n%s\n", list(difference(refOpcodes, goOpcodes)))
+	fmt.Fprintf(&report, "\n## Missing behavioral client opcode handlers\n\n%s\n", list(difference(refBehavioralOpcodes, goOpcodes)))
+	fmt.Fprintf(&report, "## Reference client opcodes intentionally bound to Handle_NULL\n\n%s\n", list(refNullOpcodes))
 	fmt.Fprintf(&report, "## Missing prepared statements\n\n%s\n", list(difference(refStatements, goStatements)))
 	fmt.Fprintf(&report, "## Prepared statement SQL mismatches\n\n%s\n", list(sqlDifferences(refStatementSQL, goStatementSQL)))
 	fmt.Fprintf(&report, "## Missing schema tables/views\n\n### MySQL\n\n%s\n\n### SQLite\n\n%s\n", list(difference(keys(refSchema), keys(goMySQLSchema))), list(difference(keys(refSchema), keys(goSQLiteSchema))))
@@ -202,6 +213,57 @@ func matches(root string, pattern *regexp.Regexp, filter func(string) bool) ([]s
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func goHandlers(root string) ([]string, error) {
+	values := make(map[string]struct{})
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		for _, clause := range goCasePattern.FindAllStringSubmatch(text, -1) {
+			if len(clause) <= 1 {
+				continue
+			}
+			for _, opcode := range goOpcodePattern.FindAllStringSubmatch(clause[1], -1) {
+				if len(opcode) > 1 {
+					values[opcode[1]] = struct{}{}
+				}
+			}
+		}
+		if strings.Contains(text, "opcodeAuthSession") {
+			values["CMSG_AUTH_SESSION"] = struct{}{}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func clientOpcodes(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.HasPrefix(value, "CMSG_") || strings.HasPrefix(value, "MSG_") || strings.HasPrefix(value, "UMSG_") {
+			result = append(result, value)
+		}
+	}
+	sort.Strings(result)
+	return result
 }
 
 func statementDetails(root string, pattern *regexp.Regexp, filter func(string) bool) (map[string]string, error) {

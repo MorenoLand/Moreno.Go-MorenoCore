@@ -467,6 +467,19 @@ func (s *session) handleNextCinematicCamera() bool {
 	return true
 }
 
+func (s *session) handleOpeningCinematic() bool {
+	if !s.playerLoaded || s.player == nil || s.player.XP != 0 {
+		return true
+	}
+	cinematicID := getStartingCinematicID(s.player.Race, s.player.Class)
+	if cinematicID == 0 {
+		return true
+	}
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(cinematicID)
+	return s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), packet.Bytes(), true) == nil
+}
+
 func (s *session) handleCompleteCinematic(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
