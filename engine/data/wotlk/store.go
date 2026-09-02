@@ -77,6 +77,7 @@ type Spell struct {
 	RecoveryTime     uint32
 	PowerType        uint32
 	ManaCost         uint32
+	ManaCostPct      uint32
 	RangeIndex       uint32
 	Speed            float32
 	Effects          [3]SpellEffect
@@ -364,6 +365,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{29, &spell.RecoveryTime},
 		{41, &spell.PowerType},
 		{42, &spell.ManaCost},
+		{204, &spell.ManaCostPct}, // Spell.dbc field 204 = ManaCostPct (DBCStructure.h:1476)
 		{46, &spell.RangeIndex},
 	}
 	for _, value := range values {

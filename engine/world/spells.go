@@ -16,6 +16,43 @@ const (
 	spellCastFlagGo       uint32 = 0x00000100
 )
 
+// isSelfCastOnly checks if all active spell effects are self/caster targeting.
+// Dynamically resolves from Spell.dbc effect targets:
+// 1 = TARGET_UNIT_CASTER, 18 = TARGET_DEST_CASTER, 22 = TARGET_SRC_CASTER.
+func isSelfCastOnly(spell wotlk.Spell) bool {
+	hasEffect := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		hasEffect = true
+		// In TrinityCore SpellInfo::IsSelfCast:
+		// Every active effect must target TARGET_UNIT_CASTER (1), TARGET_DEST_CASTER (18), or TARGET_SRC_CASTER (22).
+		if eff.ImplicitTargetA != 1 && eff.ImplicitTargetA != 18 && eff.ImplicitTargetA != 22 {
+			return false
+		}
+	}
+	return hasEffect
+}
+
+func (s *session) calculateSpellPowerCost(spell wotlk.Spell) uint32 {
+	cost := spell.ManaCost
+	if spell.ManaCostPct > 0 && s.player != nil {
+		pType := spell.PowerType
+		if pType < 7 {
+			basePower := s.player.MaxPowers[pType]
+			if basePower == 0 {
+				basePower = s.player.Powers[pType]
+			}
+			if basePower == 0 {
+				basePower = 100
+			}
+			cost += (basePower * spell.ManaCostPct) / 100
+		}
+	}
+	return cost
+}
+
 func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.server.Data == nil {
 		return true
@@ -64,7 +101,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
-	cost := spell.ManaCost
+	// Self-cast only spells (e.g. Demon Skin, Demon Armor, Ice Barrier) must always target the caster
+	if isSelfCastOnly(spell) {
+		target.UnitGUID = s.playerGUID
+		target.Flags = protocol.SpellTargetFlagUnit
+	}
+	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
 	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
@@ -84,7 +126,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 			s.finishSpellCast(context.Background(), castID, spellID, spell, target)
 		})
 	} else {
-		s.finishSpellCast(ctx, castID, spellID, spell, target)
+		s.finishSpellCast(context.Background(), castID, spellID, spell, target)
 	}
 
 	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime, "cost", cost)
@@ -96,7 +138,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		return
 	}
 	hitTargets := []uint64{s.playerGUID}
-	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+	if isSelfCastOnly(spell) {
+		hitTargets[0] = s.playerGUID
+	} else if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
 		hitTargets[0] = target.UnitGUID
 	} else if s.selection != 0 {
 		hitTargets[0] = s.selection
@@ -107,9 +151,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, target), true)
 
 	pType := spell.PowerType
-	cost := spell.ManaCost
-	if pType < 7 && cost > 0 && s.player.Powers[pType] >= cost {
-		s.player.Powers[pType] -= cost
+	cost := s.calculateSpellPowerCost(spell)
+	if pType < 7 && cost > 0 {
+		if s.player.Powers[pType] >= cost {
+			s.player.Powers[pType] -= cost
+		} else {
+			s.player.Powers[pType] = 0
+		}
 		s.sendPlayerUpdate()
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			col := fmt.Sprintf("power%d", pType+1)
@@ -127,7 +175,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	// Apply spell effects
-	applyEffects := func() {
+	applyEffects := func(effCtx context.Context) {
 		for _, eff := range spell.Effects {
 			if eff.Effect == 0 {
 				continue
@@ -135,18 +183,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			switch eff.Effect {
 			case 2, 87, 108, 17: // Damage effects (School damage, Weapon damage, etc.)
 				damage := uint32(eff.BasePoints + 1)
-				if damage == 0 {
+				if damage <= 1 {
 					damage = uint32(20 + int(s.player.Level)*10)
 				}
 				if targetGUID != 0 && targetGUID != s.playerGUID {
-					s.executeSpellDamage(ctx, targetGUID, spellID, damage)
+					s.executeSpellDamage(effCtx, targetGUID, spellID, damage)
 				}
 			case 10, 136, 105: // Heal effects
 				heal := uint32(eff.BasePoints + 1)
 				if heal == 0 {
 					heal = uint32(30 + int(s.player.Level)*15)
 				}
-				s.executeSpellHeal(ctx, targetGUID, spellID, heal)
+				s.executeSpellHeal(effCtx, targetGUID, spellID, heal)
 			case 6: // Apply Aura
 				s.applyAura(spellID)
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
@@ -175,18 +223,26 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			if timeDelayMs > 4000 {
 				timeDelayMs = 4000
 			}
-			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, applyEffects)
+			time.AfterFunc(time.Duration(timeDelayMs)*time.Millisecond, func() {
+				applyEffects(context.Background())
+			})
 			return
 		}
 	}
 
-	applyEffects()
+	applyEffects(ctx)
 }
 
 func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32) {
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
 	target, ok := s.getCombatTarget(ctx, targetGUID)
-	if !ok || target.Health == 0 {
+	if !ok {
 		return
+	}
+	if target.Health == 0 {
+		target.Health = 100
 	}
 	overkill := uint32(0)
 	if damage >= target.Health {

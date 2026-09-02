@@ -247,7 +247,13 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
 	s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: true, Disabled: false})
 	_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_SUCCEEDED), buildTrainerBuySucceeded(trainerGUID, spellID), true)
+	// TrinityCore Player::LearnSpell sends SMSG_LEARNED_SPELL (0x12B)
+	learnedBuf := protocol.NewBuffer(6)
+	learnedBuf.WriteU32(spellID)
+	learnedBuf.WriteU16(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), learnedBuf.Bytes(), true)
 	s.sendPlayerUpdate()
+	_ = s.sendTrainerList(ctx, trainerGUID)
 	s.debug("trainer spell learned", "account", s.accountName, "spell", spellID, "cost", moneyCost)
 	return true
 }

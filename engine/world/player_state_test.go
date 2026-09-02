@@ -248,6 +248,11 @@ func TestBuildPlayerUpdateCharacterSheetFields(t *testing.T) {
 	if raceByte != 1 || classByte != 1 || genderByte != 0 || powerTypeByte != 1 {
 		t.Errorf("expected bytes0=(race 1, class 1, gender 0, power 1), got race %d, class %d, gender %d, power %d", raceByte, classByte, genderByte, powerTypeByte)
 	}
+
+	// PLAYER_NEXT_LEVEL_XP: Must match xpCurve so client displays EXP bar
+	if values[unitFieldNextLevelXP] != xpCurve[state.Level] {
+		t.Errorf("expected unitFieldNextLevelXP %d, got %d", xpCurve[state.Level], values[unitFieldNextLevelXP])
+	}
 }
 
 func TestIsAllowedClassSkill(t *testing.T) {
