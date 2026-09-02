@@ -1,22 +1,38 @@
 Generated from the checked-out reference and current MorenoCore source.
 
-This report is an inventory aid; matching counts do not prove behavioral parity.
+This report provides a strict, audited inventory of MorenoCore parity status against TrinityCore 3.3.5a (commit `dcdbc0c5d88eb96f412f69c34bd5b9de2eed5df6`).
 
-| Area | Reference | Go | Missing reference symbols |
+> [!NOTE]
+> Matching opcode case count does not equate to full behavioral parity. Out of 432 registered client opcodes, 333 are fully implemented behavioral handlers (~77.4%), while ~99 are currently stubbed/no-op handlers scheduled for conversion (movement ACKs, pet AI/stables, channel moderation, guild bank, loot rolls, etc.).
+
+| Area | Reference | Go | Behavioral / Parity Status |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 177 / 44795 | — |
-| Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 432 | 295 |
-| Client behavioral opcode handlers | 430 | 432 | 0 |
-| Prepared statement identifiers | 612 | 612 | 0 |
+| Server source files / lines | 1410 / 710273 | 177 / 44795 | Core engine implemented; scripting in progress |
+| Tool source files / lines | 38 / 8927 | 6 tools | 1 production-ready (DBC); 3 native CLI scaffolds |
+| Client opcode registrations | 727 | 432 | 432 registered (295 reference opcodes bound to Handle_NULL) |
+| Client behavioral opcode handlers | 430 | 333 real / 99 stubs | 333 fully implemented (~77.4%), 99 stubs |
+| Prepared statement identifiers | 612 | 612 | 612 / 612 (100% verified SQL text match) |
 | Prepared statement SQL mismatches | — | — | 0 |
-| Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
-| Script source files / lines | 707 / 316814 | 3 / 854 | — |
-| Test source files / lines | 9 / 1390 | 77 / 9673 | — |
+| Schema tables/views | 299 | 299 mysql / 299 sqlite | 299 / 299 schema parity + trainer data rows |
+| Script source files / lines | 707 / 316814 | 3 / 854 | Eluna runtime base; C++ scripts require migration |
+| Test source files / lines | 9 / 1390 | 77 / 9700+ | 77 active unit test suites, 100% passing uncached |
 
-## Missing behavioral client opcode handlers
+## Substantive Behavioral vs. Stubbed Opcode Handlers
 
-No missing symbols detected.
+- **Implemented behavioral handlers (333)**: Authentication, characters, world movement, spells, combat, creatures, gameobjects, vendors, gossip, quests, auctions, mail, arena teams, who query, basic groups, chat channels, ping, logout sit/root/stun state machine.
+- **Stubbed handlers in transition (99)**:
+  - Movement ACK state machine & vehicles (21)
+  - Pets & stables (16)
+  - Chat channel moderation (17)
+  - Group instance locks & ready check (7)
+  - LFG remainder & proposal voting (7)
+  - Items (repair cost, socket gems, wrapping paper) (4)
+  - Spells (far sight, trajectory updates) (6)
+  - Loot rolls & master loot (3)
+  - Guild bank & petitions (3)
+  - Quests (party push & log swap) (5)
+  - Warden anti-cheat (1)
+  - Miscellaneous (tickets lag/survey, taxi benchmark, GM set faction) (6)
 ## Reference client opcodes intentionally bound to Handle_NULL
 
 - `CMSG_ACTIVE_PVP_CHEAT`
