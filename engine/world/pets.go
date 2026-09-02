@@ -14,10 +14,13 @@ var stableSlotPrices = []uint32{
 	1500000, // 150g
 }
 
+// StableResultCode mirrors NPCHandler.cpp:48.
 const (
-	stableSuccessBuySlot = 8
-	stableErrMoney       = 1
-	stableErrFull        = 0
+	stableErrMoney       uint8 = 0x01 // STABLE_ERR_MONEY
+	stableErrStable      uint8 = 0x06 // STABLE_ERR_STABLE
+	stableSuccessStable  uint8 = 0x08 // STABLE_SUCCESS_STABLE
+	stableSuccessUnslot  uint8 = 0x09 // STABLE_SUCCESS_UNSTABLE
+	stableSuccessBuySlot uint8 = 0x0A // STABLE_SUCCESS_BUY_SLOT
 )
 
 // handleBuyStableSlot processes CMSG_BUY_STABLE_SLOT (0x272).
@@ -39,7 +42,7 @@ func (s *session) handleBuyStableSlot(ctx context.Context, payload []byte) bool 
 
 	if purchasedCount >= len(stableSlotPrices) {
 		res := protocol.NewBuffer(1)
-		res.WriteU8(stableErrFull)
+		res.WriteU8(stableErrStable)
 		_ = s.write(uint16(protocol.OpcodeSMSG_STABLE_RESULT), res.Bytes(), true)
 		return true
 	}
@@ -71,35 +74,269 @@ func (s *session) handleDismissCritter(ctx context.Context, payload []byte) bool
 // handlePetAbandon processes CMSG_PET_ABANDON (0x176).
 // Reference: WorldSession::HandlePetAbandonOpcode (PetHandler.cpp:52).
 func (s *session) handlePetAbandon(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	// Pet object GUIDs carry the character_pet id in the low 32 bits; the
+	// reference deletes the owned pet records outright (Pet::Unsummon with
+	// PET_SAVE_AS_DELETED for abandon).
+	petID := uint32(petGUID & 0xFFFFFFFF)
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || petID == 0 {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	result, err := cdb.ExecContext(ctx, "DELETE FROM character_pet WHERE owner = ? AND id = ?", s.playerGUID, petID)
+	if err == nil {
+		if rows, _ := result.RowsAffected(); rows > 0 {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_pet_declinedname WHERE owner = ? AND id = ?", s.playerGUID, petID)
+			s.debug("pet abandoned", "account", s.accountName, "pet", petID)
+		}
+	}
 	return true
 }
 
-// handlePetAction processes CMSG_PET_ACTION (0x175).
-// Reference: WorldSession::HandlePetAction (PetHandler.cpp:73).
+// creatureHasNpcFlag resolves a spawned creature's template npcflag, used for
+// stablemaster and other service guards.
+func (s *session) creatureHasNpcFlag(ctx context.Context, guid uint64, flag uint32) bool {
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil || guid == 0 {
+		return false
+	}
+	var npcFlag uint32
+	err := s.server.WorldStore.DB.QueryRowContext(ctx,
+		"SELECT COALESCE(t.npcflag, 0) FROM creature c JOIN creature_template t ON t.entry = c.id1 WHERE c.guid = ?", guid).Scan(&npcFlag)
+	return err == nil && npcFlag&flag != 0
+}
+
+// npcFlagStablemaster mirrors UNIT_NPC_FLAG_STABLEMASTER (UnitDefines.h:208).
+const npcFlagStablemaster = 0x00400000
+
+// checkStableMaster mirrors WorldSession::CheckStableMaster: the player
+// opening their own stable requires GM state, otherwise the target creature
+// must be a stablemaster.
+func (s *session) checkStableMaster(ctx context.Context, guid uint64) bool {
+	if guid == s.playerGUID {
+		return s.player.ExtraFlags&playerExtraGMOn != 0
+	}
+	return s.creatureHasNpcFlag(ctx, guid, npcFlagStablemaster)
+}
+
+// sendPetStableResult mirrors WorldSession::SendPetStableResult.
+func (s *session) sendPetStableResult(code uint8) {
+	buf := protocol.NewBuffer(1)
+	buf.WriteU8(code)
+	_ = s.write(uint16(protocol.OpcodeSMSG_STABLE_RESULT), buf.Bytes(), true)
+}
+
+// handleStablePet processes CMSG_STABLE_PET (0x270).
+// Reference: WorldSession::HandleStablePet (NPCHandler.cpp:410): a living
+// player stables its active hunter pet (slot 0) into the first free stable
+// slot; results flow through SMSG_STABLE_RESULT.
+func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	npcGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	if s.player.Health == 0 || !s.checkStableMaster(ctx, npcGUID) {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	var currentPetType, currentHealth int64
+	err = cdb.QueryRowContext(ctx, "SELECT PetType, curhealth FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&currentPetType, &currentHealth)
+	if err != nil || currentPetType != 1 || currentHealth <= 0 { // only living hunter pets
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	var freeSlot int64 = -1
+	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_pet WHERE owner = ? AND slot > 0 ORDER BY slot", s.playerGUID)
+	if err == nil {
+		taken := map[int64]struct{}{}
+		for rows.Next() {
+			var slot int64
+			if rows.Scan(&slot) == nil {
+				taken[slot] = struct{}{}
+			}
+		}
+		rows.Close()
+		for slot := int64(1); slot <= 4; slot++ {
+			if _, used := taken[slot]; !used {
+				freeSlot = slot
+				break
+			}
+		}
+	}
+	if freeSlot < 0 {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ?, savetime = ? WHERE owner = ? AND slot = 0", freeSlot, time.Now().Unix(), s.playerGUID); err != nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	s.sendPetStableResult(stableSuccessStable)
+	return true
+}
+
+// handleStableRevivePet processes CMSG_STABLE_REVIVE_PET (0x274).
+// Reference: WorldSession::HandleStableRevivePet (NPCHandler.cpp:455): the
+// stablemaster revives the player's dead current pet.
+func (s *session) handleStableRevivePet(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	npcGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	if !s.checkStableMaster(ctx, npcGUID) {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	var level int64
+	if err := cdb.QueryRowContext(ctx, "SELECT level FROM character_pet WHERE owner = ? AND slot = 0 AND curhealth <= 0", s.playerGUID).Scan(&level); err != nil {
+		// nothing dead to revive is still a successful interaction
+		s.sendPetStableResult(stableSuccessUnslot)
+		return true
+	}
+	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET curhealth = 1 WHERE owner = ? AND slot = 0", s.playerGUID); err != nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	s.sendPetStableResult(stableSuccessUnslot)
+	return true
+}
+
+// handleStableSwapPet processes CMSG_STABLE_SWAP_PET (0x275).
+// Reference: WorldSession::HandleStableSwapPet: swap the active pet with a
+// stabled one by pet number.
+func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 12 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	npcGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	petNumber, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	if !s.checkStableMaster(ctx, npcGUID) {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	var stabledSlot int64
+	err = cdb.QueryRowContext(ctx, "SELECT slot FROM character_pet WHERE owner = ? AND id = ? AND slot > 0", s.playerGUID, petNumber).Scan(&stabledSlot)
+	if err != nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = ? WHERE owner = ? AND slot = 0", stabledSlot, s.playerGUID); err != nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	if _, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0, savetime = ? WHERE owner = ? AND id = ?", time.Now().Unix(), s.playerGUID, petNumber); err != nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	s.sendPetStableResult(stableSuccessUnslot)
+	return true
+}
+
+// handleUnstablePet processes CMSG_UNSTABLE_PET (0x272? see dispatch).
+// Reference: WorldSession::HandleUnstablePet: move a stabled pet into the
+// active slot; an occupied active slot must use the swap opcode instead.
+func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 12 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	npcGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	petNumber, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	if !s.checkStableMaster(ctx, npcGUID) {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	var active int64
+	if err := cdb.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&active); err != nil || active > 0 {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	result, err := cdb.ExecContext(ctx, "UPDATE character_pet SET slot = 0, savetime = ? WHERE owner = ? AND id = ? AND slot > 0", time.Now().Unix(), s.playerGUID, petNumber)
+	if err != nil {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	if rows, _ := result.RowsAffected(); rows == 0 {
+		s.sendPetStableResult(stableErrStable)
+		return true
+	}
+	s.sendPetStableResult(stableSuccessUnslot)
+	return true
+}
+
+// Pet command handlers below require a live pet entity (spawned pet object,
+// pet AI, charm info) which the Go server does not model yet; the packets are
+// consumed and logged until the pet entity system exists. Reference:
+// PetHandler.cpp HandlePetAction (73), HandlePetCancelAuraOpcode (215),
+// HandlePetCastSpellOpcode (241), HandlePetLearnTalent (265), HandlePetRename
+// (284), HandlePetSetAction (328), HandlePetSpellAutocastOpcode (365),
+
 func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
+	if len(payload) >= 8 {
+		s.debug("pet action consumed (pet entity system pending)", "account", s.accountName)
+	}
 	return true
 }
 
-// handlePetCancelAura processes CMSG_PET_CANCEL_AURA (0x26A).
-// Reference: WorldSession::HandlePetCancelAuraOpcode (PetHandler.cpp:215).
 func (s *session) handlePetCancelAura(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// handlePetCastSpell processes CMSG_PET_CAST_SPELL (0x1F0).
-// Reference: WorldSession::HandlePetCastSpellOpcode (PetHandler.cpp:241).
 func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// handlePetLearnTalent processes CMSG_PET_LEARN_TALENT (0x486).
-// Reference: WorldSession::HandlePetLearnTalent (PetHandler.cpp:265).
 func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// handlePetNameQuery processes CMSG_PET_NAME_QUERY (0x052).
-// Reference: WorldSession::HandlePetNameQuery (PetHandler.cpp:16).
 func (s *session) handlePetNameQuery(ctx context.Context, payload []byte) bool {
 	if len(payload) < 12 {
 		return true
@@ -171,28 +408,12 @@ func (s *session) handleRequestPetInfo(ctx context.Context, payload []byte) bool
 }
 
 // handleStablePet processes CMSG_STABLE_PET (0x270).
-// Reference: WorldSession::HandleStablePet (NPCHandler.cpp:410).
-func (s *session) handleStablePet(ctx context.Context, payload []byte) bool {
-	return true
-}
 
 // handleStableRevivePet processes CMSG_STABLE_REVIVE_PET (0x274).
-// Reference: WorldSession::HandleStableRevivePet (NPCHandler.cpp:455).
-func (s *session) handleStableRevivePet(ctx context.Context, payload []byte) bool {
-	return true
-}
 
 // handleStableSwapPet processes CMSG_STABLE_SWAP_PET (0x275).
-// Reference: WorldSession::HandleStableSwapPet (NPCHandler.cpp:478).
-func (s *session) handleStableSwapPet(ctx context.Context, payload []byte) bool {
-	return true
-}
 
 // handleUnstablePet processes CMSG_UNSTABLE_PET (0x271).
-// Reference: WorldSession::HandleUnstablePet (NPCHandler.cpp:435).
-func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
-	return true
-}
 
 // handleListStabledPets processes MSG_LIST_STABLED_PETS (0x26F).
 // Reference: WorldSession::HandleListStabledPetsOpcode (NPCHandler.cpp:520).
