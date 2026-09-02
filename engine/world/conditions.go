@@ -327,10 +327,16 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 		status, _ := s.characterQuestStatus(ctx, uint32(row.Value1))
 		rewarded := count("SELECT COUNT(1) FROM character_queststatus_rewarded WHERE guid = ? AND quest = ?", s.playerGUID, row.Value1)
 		return status == 0 && rewarded == 0, nil
-	case 15: // CONDITION_CLASS
-		return s.player != nil && uint32(row.Value1) == uint32(s.player.Class), nil
-	case 16: // CONDITION_RACE
-		return s.player != nil && uint32(row.Value1) == uint32(s.player.Race), nil
+	case 15: // CONDITION_CLASS (bitmask: 1<<(class-1))
+		if s.player == nil || s.player.Class == 0 {
+			return false, nil
+		}
+		return (1<<(s.player.Class-1))&uint32(row.Value1) != 0, nil
+	case 16: // CONDITION_RACE (bitmask: 1<<(race-1))
+		if s.player == nil || s.player.Race == 0 {
+			return false, nil
+		}
+		return (1<<(s.player.Race-1))&uint32(row.Value1) != 0, nil
 	case 19: // CONDITION_SPAWNMASK
 		return s.player != nil && uint32(row.Value1)&1 != 0, nil
 	case 20: // CONDITION_GENDER

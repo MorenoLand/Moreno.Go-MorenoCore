@@ -275,13 +275,23 @@ func (s *session) handleBfQueueExitRequest(ctx context.Context, payload []byte) 
 }
 
 // handleLeaveBattlefield processes CMSG_LEAVE_BATTLEFIELD (0x2E1).
-// Reference: WorldSession::HandleBattlefieldLeaveOpcode (BattlegroundHandler.cpp:88).
+// Reference: WorldSession::HandleBattlefieldLeaveOpcode (BattleGroundHandler.cpp:528).
 func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	for slot := 0; slot < len(s.bgQueues); slot++ {
+		if s.bgQueues[slot].Active {
+			s.bgQueues[slot].Active = false
+			s.bgQueues[slot].Status = 0 // STATUS_NONE
+			s.sendBattlefieldStatus(uint8(slot))
+		}
+	}
 	return true
 }
 
 // handleReportPvPAfk processes CMSG_REPORT_PVP_AFK (0x3E4).
-// Reference: WorldSession::HandleReportPvPAFK (BattlegroundHandler.cpp:230).
+// Reference: WorldSession::HandleReportPvPAFK (BattleGroundHandler.cpp:795).
 func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -289,10 +299,15 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	targetGUID, _ := r.ReadU64()
 
-	buf := protocol.NewBuffer(9)
-	buf.WriteU64(targetGUID)
-	buf.WriteU8(1) // reported
-	_ = s.write(uint16(protocol.OpcodeSMSG_REPORT_PVP_AFK_RESULT), buf.Bytes(), true)
+	if s.server != nil {
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess != nil && targetSess.player != nil {
+			buf := protocol.NewBuffer(9)
+			buf.WriteU64(targetGUID)
+			buf.WriteU8(1) // reported
+			_ = s.write(uint16(protocol.OpcodeSMSG_REPORT_PVP_AFK_RESULT), buf.Bytes(), true)
+		}
+	}
 	return true
 }
 

@@ -39,12 +39,10 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 	}
 	creatureEntry := uint32((trainerGUID >> 24) & 0xFFFFFF)
 	if creatureEntry == 0 {
-		creatureEntry = uint32(trainerGUID & 0xFFFFFF)
-	}
-	var spawnEntry uint32
-	spawnGUID := uint32(trainerGUID & 0xFFFFFF)
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&spawnEntry); err == nil && spawnEntry != 0 {
-		creatureEntry = spawnEntry
+		spawnGUID := uint32(trainerGUID & 0xFFFFFF)
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry); err != nil || creatureEntry == 0 {
+			creatureEntry = spawnGUID
+		}
 	}
 
 	var spells []trainerSpellRecord
@@ -59,7 +57,7 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 		LEFT JOIN trainer AS t ON t.Id = ts.TrainerId
 		WHERE ts.TrainerId IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
 		   OR ts.TrainerId = ?
-		ORDER BY ts.ReqLevel, ts.SpellId LIMIT 128`, creatureEntry, creatureEntry)
+		ORDER BY ts.ReqLevel, ts.SpellId LIMIT 512`, creatureEntry, creatureEntry)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -210,12 +208,10 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	}
 	creatureEntry := uint32((trainerGUID >> 24) & 0xFFFFFF)
 	if creatureEntry == 0 {
-		creatureEntry = uint32(trainerGUID & 0xFFFFFF)
-	}
-	var spawnEntry uint32
-	spawnGUID := uint32(trainerGUID & 0xFFFFFF)
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&spawnEntry); err == nil && spawnEntry != 0 {
-		creatureEntry = spawnEntry
+		spawnGUID := uint32(trainerGUID & 0xFFFFFF)
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry); err != nil || creatureEntry == 0 {
+			creatureEntry = spawnGUID
+		}
 	}
 
 	var moneyCost, reqLevel int64

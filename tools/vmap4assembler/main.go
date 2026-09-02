@@ -1,3 +1,4 @@
+// Note: Spatial BIH tree assembly and vmtile compilation is not implemented.
 package main
 
 import (
