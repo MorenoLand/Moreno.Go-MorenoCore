@@ -126,9 +126,11 @@ type playerState struct {
 }
 
 type playerReputation struct {
-	ListID   uint32
-	Standing int32
-	Flags    uint8
+	FactionID uint32
+	ListID    uint32
+	Standing  int32
+	Base      int32
+	Flags     uint8
 }
 
 func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState, error) {
@@ -242,7 +244,7 @@ func (s *session) loadPlayerReputations(ctx context.Context, state *playerState)
 		if !found || reputation.ReputationList < 0 || reputation.ReputationList >= 128 {
 			continue
 		}
-		state.Reputations = append(state.Reputations, playerReputation{ListID: uint32(reputation.ReputationList), Standing: int32(standing), Flags: uint8(flags)})
+		state.Reputations = append(state.Reputations, playerReputation{FactionID: uint32(faction), ListID: uint32(reputation.ReputationList), Standing: int32(standing), Base: reputation.BaseStanding, Flags: uint8(flags)})
 	}
 	return rows.Err()
 }
