@@ -110,6 +110,8 @@ type session struct {
 	latency            atomic.Uint32
 	lastPing           time.Time
 	overSpeedPings     uint32
+	deathExpireTime    int64
+	deathTimer         time.Time
 }
 
 type account struct {
@@ -156,6 +158,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateActiveCreatures(ctx)
 			s.updatePlayerCombat(ctx)
 			s.processCreatureRespawns(ctx, time.Now())
+			s.updatePlayerDeathTimers(ctx, time.Now())
 		}
 	}
 }
@@ -799,6 +802,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_SET_FACTION_INACTIVE):
 			if !state.authed || !state.handleSetFactionInactive(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REPOP_REQUEST):
+			if !state.authed || !state.handleRepopRequest(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_RECLAIM_CORPSE):
+			if !state.authed || !state.handleReclaimCorpse(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
