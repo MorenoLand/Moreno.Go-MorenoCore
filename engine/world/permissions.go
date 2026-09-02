@@ -7,6 +7,9 @@ import (
 
 const permissionCommandGMChat uint32 = 372
 
+// permissionSkipCheckOverSpeedPing mirrors rbac::RBAC_PERM_SKIP_CHECK_OVERSPEED_PING (RBAC.h).
+const permissionSkipCheckOverSpeedPing uint32 = 23
+
 const permissionTwoSideInteractionChat uint32 = 25
 
 func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID uint32, security uint8, permissionID uint32) (bool, error) {

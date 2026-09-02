@@ -23,3 +23,36 @@ func TestFeatureConfigurationDefaultsAndOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMaxOverspeedPingsParsing(t *testing.T) {
+	c := Default()
+	if c.MaxOverSpeedPings != 2 {
+		t.Fatalf("default MaxOverSpeedPings=%d", c.MaxOverSpeedPings)
+	}
+	if err := c.Set("MaxOverspeedPings", "5"); err != nil {
+		t.Fatal(err)
+	}
+	if c.MaxOverSpeedPings != 5 {
+		t.Fatalf("MaxOverSpeedPings=%d", c.MaxOverSpeedPings)
+	}
+	// Reference: World.cpp clamps non-zero values below 2 to 2.
+	if err := c.Set("MaxOverspeedPings", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if c.MaxOverSpeedPings != 2 {
+		t.Fatalf("clamped MaxOverSpeedPings=%d", c.MaxOverSpeedPings)
+	}
+	// Reference: 0 disables the over-speed check entirely.
+	if err := c.Set("MaxOverspeedPings", "0"); err != nil {
+		t.Fatal(err)
+	}
+	if c.MaxOverSpeedPings != 0 {
+		t.Fatalf("disabled MaxOverSpeedPings=%d", c.MaxOverSpeedPings)
+	}
+	t.Setenv("MORENOCORE_MAX_OVERSPEED_PINGS", "3")
+	c = Default()
+	c.ApplyEnv()
+	if c.MaxOverSpeedPings != 3 {
+		t.Fatalf("env MaxOverSpeedPings=%d", c.MaxOverSpeedPings)
+	}
+}

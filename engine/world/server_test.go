@@ -97,7 +97,7 @@ func TestAuthSessionAndPing(t *testing.T) {
 	ping := protocol.NewBuffer(8)
 	ping.WriteU32(123)
 	ping.WriteU32(45)
-	if err := writeClientFrame(clientConn, opcodePing, ping.Bytes(), clientCrypt); err != nil {
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_PING), ping.Bytes(), clientCrypt); err != nil {
 		t.Fatal(err)
 	}
 	pongOpcode, pongPayload, err := readServerFrame(clientConn, clientCrypt)

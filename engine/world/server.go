@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
@@ -23,7 +24,6 @@ import (
 )
 
 const (
-	opcodePing          uint32 = uint32(protocol.OpcodeCMSG_PING)
 	opcodePong          uint16 = uint16(protocol.OpcodeSMSG_PONG)
 	opcodeAuthChallenge uint16 = uint16(protocol.OpcodeSMSG_AUTH_CHALLENGE)
 	opcodeAuthSession   uint32 = uint32(protocol.OpcodeCMSG_AUTH_SESSION)
@@ -35,6 +35,10 @@ const (
 	authBanned          byte   = 28
 	loginServerNotFound byte   = 26
 )
+
+// overspeedPingWindow mirrors the fixed 27 second threshold in
+// WorldSocket::HandlePing before the over-speed ping counter resets.
+const overspeedPingWindow = 27 * time.Second
 
 type Server struct {
 	AuthStore         *database.Store
@@ -63,34 +67,34 @@ type Server struct {
 }
 
 type session struct {
-	server       *Server
-	conn         net.Conn
-	authSeed     [4]byte
-	crypt        *crypto.AuthCrypt
-	authed       bool
-	accountID    uint32
-	accountName      string
-	security         uint8
-	accountExpansion uint8
-	gmChat           bool
-	twoSideChat      bool
-	legitimate   map[uint64]struct{}
-	mounts       *MountState
-	playerGUID   uint64
-	playerLoaded bool
-	player       *playerState
-	logoutAt     time.Time
-	writeMu      sync.Mutex
-	selection    uint64
-	auras        map[uint32]struct{}
-	scale        float32
-	emoteState   uint32
-	playerLocked bool
-	rooted       bool
-	attackTarget uint64
-	lastSwing    time.Time
-	logoutHook   bool
-	gossip       *gossipMenuState
+	server             *Server
+	conn               net.Conn
+	authSeed           [4]byte
+	crypt              *crypto.AuthCrypt
+	authed             bool
+	accountID          uint32
+	accountName        string
+	security           uint8
+	accountExpansion   uint8
+	gmChat             bool
+	twoSideChat        bool
+	legitimate         map[uint64]struct{}
+	mounts             *MountState
+	playerGUID         uint64
+	playerLoaded       bool
+	player             *playerState
+	logoutAt           time.Time
+	writeMu            sync.Mutex
+	selection          uint64
+	auras              map[uint32]struct{}
+	scale              float32
+	emoteState         uint32
+	playerLocked       bool
+	rooted             bool
+	attackTarget       uint64
+	lastSwing          time.Time
+	logoutHook         bool
+	gossip             *gossipMenuState
 	gossipClosed       bool
 	channels           map[string]struct{}
 	tutorials          [8]uint32
@@ -103,6 +107,9 @@ type session struct {
 	lastStreamX        float32
 	lastStreamY        float32
 	lastStreamZ        float32
+	latency            atomic.Uint32
+	lastPing           time.Time
+	overSpeedPings     uint32
 }
 
 type account struct {
@@ -244,8 +251,8 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if state.authed || !state.handleAuthSession(ctx, payload) {
 				return
 			}
-		case opcodePing:
-			if !state.authed || !state.handlePing(payload) {
+		case uint32(protocol.OpcodeCMSG_PING):
+			if !state.authed || !state.handlePing(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_TIME_SYNC_RESP):
@@ -938,12 +945,12 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 
 	authBuf := protocol.NewBuffer(12)
 	authBuf.WriteU8(authOK)
-	authBuf.WriteU32(0)                  // BillingTimeRemaining
-	authBuf.WriteU8(0)                   // BillingPlanFlags
-	authBuf.WriteU32(0)                  // BillingTimeRested
-	authBuf.WriteU8(s.accountExpansion)  // 0 Vanilla, 1 TBC, 2 WotLK
-	authBuf.WriteU32(0)                  // Queue position
-	authBuf.WriteU8(0)                   // Free character migration bool
+	authBuf.WriteU32(0)                 // BillingTimeRemaining
+	authBuf.WriteU8(0)                  // BillingPlanFlags
+	authBuf.WriteU32(0)                 // BillingTimeRested
+	authBuf.WriteU8(s.accountExpansion) // 0 Vanilla, 1 TBC, 2 WotLK
+	authBuf.WriteU32(0)                 // Queue position
+	authBuf.WriteU8(0)                  // Free character migration bool
 	return s.write(opcodeAuthResponse, authBuf.Bytes(), true) == nil
 }
 
@@ -1003,15 +1010,45 @@ func (s *session) handleTutorialReset(ctx context.Context) bool {
 	return true
 }
 
-func (s *session) handlePing(payload []byte) bool {
+func (s *session) handlePing(ctx context.Context, payload []byte) bool {
 	b := protocol.NewReader(payload)
 	ping, err := b.ReadU32()
 	if err != nil {
 		return false
 	}
-	if _, err := b.ReadU32(); err != nil {
+	latency, err := b.ReadU32()
+	if err != nil {
 		return false
 	}
+	// Reference: WorldSocket::HandlePing — over-speed ping protection with a 27 second window,
+	// latency tracking on the session, and a SMSG_PONG echo of the ping counter.
+	now := time.Now()
+	if s.lastPing.IsZero() {
+		s.lastPing = now
+	} else {
+		diff := now.Sub(s.lastPing)
+		s.lastPing = now
+		if diff < overspeedPingWindow {
+			s.overSpeedPings++
+			if s.server != nil && s.server.Config.MaxOverSpeedPings != 0 && s.overSpeedPings > s.server.Config.MaxOverSpeedPings {
+				if s.server.AuthStore == nil {
+					return false
+				}
+				skip, permErr := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionSkipCheckOverSpeedPing)
+				if permErr != nil {
+					s.debug("over-speed ping permission lookup failed", "account", s.accountName, "error", permErr)
+					return false
+				}
+				if !skip {
+					s.debug("session kicked for over-speed pings", "account", s.accountName)
+					return false
+				}
+			}
+		} else {
+			s.overSpeedPings = 0
+		}
+	}
+	s.latency.Store(latency)
 	response := protocol.NewBuffer(4)
 	response.WriteU32(ping)
 	return s.write(opcodePong, response.Bytes(), true) == nil

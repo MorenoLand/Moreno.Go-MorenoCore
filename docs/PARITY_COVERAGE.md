@@ -4,15 +4,15 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 159 / 32851 | — |
+| Server source files / lines | 1410 / 710273 | 160 / 33132 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 171 | 556 |
-| Client behavioral opcode handlers | 430 | 171 | 261 |
+| Client opcode registrations | 727 | 172 | 555 |
+| Client behavioral opcode handlers | 430 | 172 | 260 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 61 / 5285 | — |
+| Test source files / lines | 9 / 1390 | 62 / 5514 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -191,7 +191,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_PET_SET_ACTION`
 - `CMSG_PET_SPELL_AUTOCAST`
 - `CMSG_PET_STOP_ATTACK`
-- `CMSG_PING`
 - `CMSG_PLAYER_LOGOUT`
 - `CMSG_PLAYER_VEHICLE_ENTER`
 - `CMSG_PUSHQUESTTOPARTY`
