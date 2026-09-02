@@ -27,6 +27,7 @@ type Race struct {
 	FactionID         uint32
 	MaleDisplayID     uint32
 	FemaleDisplayID   uint32
+	CinematicSequence uint32
 	Alliance          uint32
 	RequiredExpansion uint32
 }
@@ -181,6 +182,7 @@ func (s *Store) Race(id uint32) (Race, bool, error) {
 	if err != nil {
 		return Race{}, false, err
 	}
+	cinematic, _ := record.Uint32(12)
 	alliance, err := record.Uint32(13)
 	if err != nil {
 		return Race{}, false, err
@@ -189,7 +191,7 @@ func (s *Store) Race(id uint32) (Race, bool, error) {
 	if err != nil {
 		return Race{}, false, err
 	}
-	return Race{ID: id, Flags: flags, FactionID: factionID, MaleDisplayID: maleDisplayID, FemaleDisplayID: femaleDisplayID, Alliance: alliance, RequiredExpansion: requiredExpansion}, true, nil
+	return Race{ID: id, Flags: flags, FactionID: factionID, MaleDisplayID: maleDisplayID, FemaleDisplayID: femaleDisplayID, CinematicSequence: cinematic, Alliance: alliance, RequiredExpansion: requiredExpansion}, true, nil
 }
 
 func (s *Store) Class(id uint32) (Class, bool, error) {
