@@ -4,15 +4,15 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 170 / 37549 | — |
+| Server source files / lines | 1410 / 710273 | 172 / 37897 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 205 | 522 |
-| Client behavioral opcode handlers | 430 | 205 | 227 |
+| Client opcode registrations | 727 | 213 | 514 |
+| Client behavioral opcode handlers | 430 | 213 | 219 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 68 / 7851 | — |
+| Test source files / lines | 9 / 1390 | 69 / 8070 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -95,15 +95,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_FORCE_TURN_RATE_CHANGE_ACK`
 - `CMSG_GET_CHANNEL_MEMBER_COUNT`
 - `CMSG_GET_MIRRORIMAGE_DATA`
-- `CMSG_GMRESPONSE_RESOLVE`
-- `CMSG_GMSURVEY_SUBMIT`
 - `CMSG_GMTICKETSYSTEM_TOGGLE`
-- `CMSG_GMTICKET_CREATE`
-- `CMSG_GMTICKET_DELETETICKET`
-- `CMSG_GMTICKET_GETTICKET`
-- `CMSG_GMTICKET_SYSTEMSTATUS`
-- `CMSG_GMTICKET_UPDATETEXT`
-- `CMSG_GM_REPORT_LAG`
 - `CMSG_GRANT_LEVEL`
 - `CMSG_GROUP_ASSISTANT_LEADER`
 - `CMSG_GROUP_CHANGE_SUB_GROUP`
