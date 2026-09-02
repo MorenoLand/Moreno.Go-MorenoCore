@@ -169,6 +169,7 @@ type playerState struct {
 	StandState       uint8
 	PlayerFieldBytes uint32
 	SelfResSpell     uint32
+	UnitFlags        uint32
 	HomebindMap      uint32
 	HomebindZone     uint32
 	HomebindX        float32
@@ -515,7 +516,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldLevel] = uint32(state.Level)
 	values[unitFieldBytes1] = uint32(state.StandState)
 	values[unitFieldFaction] = s.raceFaction(state.Race)
-	values[unitFieldFlags] = unitFlagPlayerControlled
+	values[unitFieldFlags] = unitFlagPlayerControlled | state.UnitFlags
 	values[unitFieldAttackTime] = 2000
 	values[unitFieldAttackTimeOffhand] = 2000
 	values[unitFieldBoundingRadius] = math.Float32bits(0.306349)
