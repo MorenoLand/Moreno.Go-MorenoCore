@@ -280,3 +280,189 @@ func inventoryTypeToSlot(invType uint8) uint8 {
 		return 255
 	}
 }
+
+// handleItemNameQuery processes CMSG_ITEM_NAME_QUERY (0x2C4).
+// Reference: WorldSession::HandleItemNameQueryOpcode (ItemHandler.cpp:812).
+func (s *session) handleItemNameQuery(ctx context.Context, payload []byte) bool {
+	r := protocol.NewReader(payload)
+	itemID, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	_, _ = r.ReadU64() // skip guid
+
+	var name string
+	var invType uint32
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT name, InventoryType FROM item_template WHERE entry = ? LIMIT 1", itemID).Scan(&name, &invType)
+	}
+	if name == "" {
+		return true
+	}
+
+	buf := protocol.NewBuffer(len(name) + 16)
+	buf.WriteU32(itemID)
+	buf.WriteCString(name)
+	buf.WriteU32(invType)
+	return s.write(uint16(protocol.OpcodeSMSG_ITEM_NAME_QUERY_RESPONSE), buf.Bytes(), true) == nil
+}
+
+// handleItemTextQuery processes CMSG_ITEM_TEXT_QUERY (0x243).
+// Reference: WorldSession::HandleItemTextQuery (ItemHandler.cpp:1211).
+func (s *session) handleItemTextQuery(ctx context.Context, payload []byte) bool {
+	r := protocol.NewReader(payload)
+	itemGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+
+	var text string
+	var found bool
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT text FROM item_text WHERE id = (SELECT itemTextId FROM item_instance WHERE guid = ?) LIMIT 1", itemGUID).Scan(&text)
+		if err == nil {
+			found = true
+		} else {
+			var count int
+			_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM item_instance WHERE guid = ?", itemGUID).Scan(&count)
+			if count > 0 {
+				found = true
+				text = ""
+			}
+		}
+	}
+
+	buf := protocol.NewBuffer(len(text) + 16)
+	if found {
+		buf.WriteU8(0) // has text
+		buf.WriteU64(itemGUID)
+		buf.WriteCString(text)
+	} else {
+		buf.WriteU8(1) // no text
+	}
+	return s.write(uint16(protocol.OpcodeSMSG_ITEM_TEXT_QUERY_RESPONSE), buf.Bytes(), true) == nil
+}
+
+// handleItemRefundInfo processes CMSG_ITEM_REFUND_INFO (0x4B3).
+// Reference: WorldSession::HandleItemRefundInfoRequest (ItemHandler.cpp:1169) and Player::SendRefundInfo (Player.cpp:26503).
+func (s *session) handleItemRefundInfo(ctx context.Context, payload []byte) bool {
+	r := protocol.NewReader(payload)
+	itemGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+
+	var itemEntry int64
+	err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry)
+	if err != nil || itemEntry == 0 {
+		return true
+	}
+
+	var buyPrice uint32
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT BuyPrice FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&buyPrice)
+	}
+
+	buf := protocol.NewBuffer(64)
+	buf.WriteU64(itemGUID)
+	buf.WriteU32(buyPrice) // money cost
+	buf.WriteU32(0)        // honor points
+	buf.WriteU32(0)        // arena points
+	for i := 0; i < 5; i++ {
+		buf.WriteU32(0) // item requirement id
+		buf.WriteU32(0) // item requirement count
+	}
+	buf.WriteU32(0)    // unk
+	buf.WriteU32(7200) // remaining seconds (2 hours)
+	return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_INFO_RESPONSE), buf.Bytes(), true) == nil
+}
+
+// handleItemRefund processes CMSG_ITEM_REFUND (0x4B4).
+// Reference: WorldSession::HandleItemRefund (ItemHandler.cpp:1186) and Player::RefundItem (Player.cpp:26574).
+func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
+	r := protocol.NewReader(payload)
+	itemGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	if !s.playerLoaded || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+
+	var itemEntry int64
+	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry FROM item_instance AS ii
+		JOIN character_inventory AS ci ON ci.item = ii.guid
+		WHERE ii.guid = ? AND ci.guid = ? LIMIT 1`, itemGUID, s.playerGUID).Scan(&itemEntry)
+
+	buf := protocol.NewBuffer(16)
+	buf.WriteU64(itemGUID)
+	if err != nil || itemEntry == 0 {
+		buf.WriteU32(10) // error (expired or not refundable)
+		return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
+	}
+
+	var buyPrice uint32
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT BuyPrice FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&buyPrice)
+	}
+
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", itemGUID, s.playerGUID)
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+
+	if buyPrice > 0 {
+		s.player.Money += buyPrice
+		s.sendPlayerUpdate()
+	}
+
+	buf.WriteU32(0) // success
+	return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
+}
+
+// handleUseItem processes CMSG_USE_ITEM (0x0AB).
+// Reference: WorldSession::HandleUseItemOpcode (SpellHandler.cpp:73).
+func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return false
+	}
+	r := protocol.NewReader(payload)
+	_, err := r.ReadU8() // bagIndex
+	if err != nil {
+		return false
+	}
+	_, err = r.ReadU8() // slot
+	if err != nil {
+		return false
+	}
+	_, err = r.ReadU8() // castCount
+	if err != nil {
+		return false
+	}
+	spellID, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	_, err = r.ReadU64() // itemGUID
+	if err != nil {
+		return false
+	}
+	_, err = r.ReadU32() // glyphIndex
+	if err != nil {
+		return false
+	}
+	_, err = r.ReadU8() // castFlags
+	if err != nil {
+		return false
+	}
+
+	target, _ := protocol.ReadSpellTargetData(r)
+
+	if spellID != 0 && s.server != nil && s.server.Data != nil {
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			s.finishSpellCast(ctx, 1, spellID, spell, target)
+		}
+	}
+	return true
+}

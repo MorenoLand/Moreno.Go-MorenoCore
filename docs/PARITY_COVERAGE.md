@@ -4,15 +4,15 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 167 / 36458 | — |
+| Server source files / lines | 1410 / 710273 | 167 / 36953 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 190 | 537 |
-| Client behavioral opcode handlers | 430 | 190 | 242 |
+| Client opcode registrations | 727 | 195 | 532 |
+| Client behavioral opcode handlers | 430 | 195 | 237 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 66 / 7228 | — |
+| Test source files / lines | 9 / 1390 | 66 / 7517 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -137,10 +137,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_GUILD_SET_OFFICER_NOTE`
 - `CMSG_GUILD_SET_PUBLIC_NOTE`
 - `CMSG_INSTANCE_LOCK_RESPONSE`
-- `CMSG_ITEM_NAME_QUERY`
-- `CMSG_ITEM_REFUND`
-- `CMSG_ITEM_REFUND_INFO`
-- `CMSG_ITEM_TEXT_QUERY`
 - `CMSG_LEARN_PREVIEW_TALENTS_PET`
 - `CMSG_LEAVE_BATTLEFIELD`
 - `CMSG_LFD_PARTY_LOCK_INFO_REQUEST`
@@ -229,7 +225,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_UNSTABLE_PET`
 - `CMSG_UPDATE_MISSILE_TRAJECTORY`
 - `CMSG_UPDATE_PROJECTILE_POSITION`
-- `CMSG_USE_ITEM`
 - `CMSG_VOICE_SESSION_ENABLE`
 - `CMSG_WARDEN_DATA`
 - `CMSG_WORLD_TELEPORT`
