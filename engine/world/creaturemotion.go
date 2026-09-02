@@ -156,18 +156,23 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				Map:   uint32(mapID),
 				HomeX: float32(x), HomeY: float32(y), HomeZ: float32(z),
 				X: float32(x), Y: float32(y), Z: float32(z),
-				Speed:    creatureBaseWalkSpeed,
-				RunSpeed: creatureBaseRunSpeed,
-				Faction:  uint32(faction),
-				Level:    uint32(level),
+				Speed:     creatureBaseWalkSpeed,
+				RunSpeed:  creatureBaseRunSpeed,
+				Faction:   uint32(faction),
+				Level:     uint32(level),
+				Health:    uint32(math.Max(float64(level)*30, 42)),
+				MaxHealth: uint32(math.Max(float64(level)*30, 42)),
 			}
 			s.creatureMotion[creatureGUID] = motion
 		}
 	}
-	if motion != nil {
+	if motion != nil && motion.Health > 0 {
 		motion.TargetGUID = playerGUID
 		motion.InCombat = true
 		motion.Moving = false
+		if motion.LastAttack.IsZero() {
+			motion.LastAttack = time.Now()
+		}
 	}
 }
 
@@ -245,7 +250,8 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	}
 	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.MovementType, c.wander_distance,
 		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
-		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000), COALESCE(c.curhealth, 100)
+		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000),
+		CASE WHEN c.curhealth > 0 THEN c.curhealth ELSE COALESCE(NULLIF(t.maxlevel*30, 0), 42) END
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ? AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)`
@@ -279,7 +285,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			if motion.MaxHealth == 0 {
 				health := uint32(curHealth)
 				if health == 0 {
-					health = 1
+					health = 42
 				}
 				motion.Health, motion.MaxHealth = health, health
 			}
@@ -295,6 +301,19 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 // stepCreatureMotion advances one creature: handles combat pursuit/attacks,
 // finishes in-flight moves, honors waypoint delays, or wanders randomly.
 func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion, players []playerPos, now time.Time) {
+	if motion == nil {
+		return
+	}
+	if motion.MaxHealth == 0 {
+		health := uint32(math.Max(float64(motion.Level)*30, 42))
+		motion.Health, motion.MaxHealth = health, health
+	}
+	if motion.Health == 0 {
+		motion.InCombat = false
+		motion.TargetGUID = 0
+		motion.Moving = false
+		return
+	}
 	// 1. If currently in combat with a target:
 	if motion.InCombat && motion.TargetGUID != 0 {
 		var target *playerPos
@@ -340,7 +359,27 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			attackTime = 2 * time.Second
 		}
 		if now.Sub(motion.LastAttack) >= attackTime {
-			damage := uint32(10 + int(motion.Level)*2)
+			lvl := float64(motion.Level)
+			if lvl < 1 {
+				lvl = 1
+			}
+			attSpeed := float64(motion.AttackTime) / 1000.0
+			if attSpeed <= 0 {
+				attSpeed = 2.0
+			}
+			// TrinityCore StatSystem.cpp:1122: lvl * 0.75 * att_speed to lvl * 1.25 * att_speed
+			minDmg := lvl * 0.75 * attSpeed
+			maxDmg := lvl * 1.25 * attSpeed
+			if minDmg < 1 {
+				minDmg = 1
+			}
+			if maxDmg < minDmg {
+				maxDmg = minDmg + 1
+			}
+			damage := uint32(minDmg + rand.Float64()*(maxDmg-minDmg))
+			if damage < 1 {
+				damage = 1
+			}
 			overkill := uint32(0)
 			if damage >= target.Sess.player.Health {
 				overkill = damage - target.Sess.player.Health

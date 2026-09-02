@@ -251,7 +251,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 48)
 	}
 	_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_PLAYER_HOMEBIND", guid, spawn.Map, spawn.Zone, spawn.X, spawn.Y, spawn.Z)
-	s.initializeCreatedPlayerStats(ctx, guid, class, startLevel)
+	s.initializeCreatedPlayerStats(ctx, guid, race, class, startLevel)
 
 	// Populate starter spells, skills, actions, equipment
 	s.createStarterSpells(ctx, guid, race, class)
@@ -274,15 +274,27 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 47)
 }
 
-func (s *session) initializeCreatedPlayerStats(ctx context.Context, guid uint64, class, level uint8) {
+func (s *session) initializeCreatedPlayerStats(ctx context.Context, guid uint64, race, class, level uint8) {
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
-	var health, mana int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT basehp, basemana FROM player_classlevelstats WHERE class = ? AND level = ?", class, level).Scan(&health, &mana); err != nil || health <= 0 {
-		return
+	var baseHealth, baseMana int64
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT basehp, basemana FROM player_classlevelstats WHERE class = ? AND level = ?", class, level).Scan(&baseHealth, &baseMana)
+	if baseHealth <= 0 {
+		baseHealth = int64(20 + int(level)*15)
 	}
-	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, power1 = ? WHERE guid = ?", health, mana, guid)
+	if baseMana <= 0 {
+		baseMana = int64(80 + int(level)*20)
+	}
+	var str, agi, sta, inte, spi int64
+	errStats := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT str, agi, sta, inte, spi FROM player_levelstats WHERE race = ? AND class = ? AND level = ?", race, class, level).Scan(&str, &agi, &sta, &inte, &spi)
+	if errStats != nil {
+		sta = int64(18 + int(level)*2)
+		inte = int64(20 + int(level)*2)
+	}
+	totalHealth := baseHealth + sta*10
+	totalMana := baseMana + inte*15
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, power1 = ? WHERE guid = ?", totalHealth, totalMana, guid)
 }
 
 func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
