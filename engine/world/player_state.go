@@ -717,7 +717,7 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		bag, slot, itemGUID, itemEntry, count int64
 	}
 	items := make([]inventoryItem, 0)
-	bagSlots := make(map[int64]uint64)
+	bagItems := make(map[int64]uint64)
 	for rows.Next() {
 		var item inventoryItem
 		if err := rows.Scan(&item.bag, &item.slot, &item.itemGUID, &item.itemEntry, &item.count); err != nil {
@@ -725,7 +725,7 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		}
 		items = append(items, item)
 		if item.bag == 0 && item.slot >= 19 && item.slot <= 22 {
-			bagSlots[item.slot-19] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
+			bagItems[item.itemGUID] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -736,7 +736,7 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		if item.bag == 0 {
 			continue
 		}
-		bagGUID, ok := bagSlots[item.bag-1]
+		bagGUID, ok := bagItems[item.bag]
 		if !ok || item.slot < 0 {
 			continue
 		}
@@ -768,7 +768,7 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		fullGUID := uint64(itemGUID) | (uint64(0x4000) << 48)
 		containedGUID := uint64(s.playerGUID)
 		if bag != 0 {
-			containedGUID = bagSlots[bag-1]
+			containedGUID = bagItems[bag]
 		}
 		block := buildItemCreateBlockForLocation(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID, containedGUID, containerSlots(itemEntry), contents[int64(fullGUID)])
 		updates.AddUpdateBlock(block)
