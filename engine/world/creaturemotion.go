@@ -10,16 +10,19 @@ import (
 )
 
 type playerPos struct {
-	Map    uint32
-	X      float32
-	Y      float32
-	Z      float32
-	GUID   uint64
-	Race   uint8
-	Level  uint8
-	IsGM   bool
-	IsDead bool
-	Sess   *session
+	Map             uint32
+	X               float32
+	Y               float32
+	Z               float32
+	GUID            uint64
+	Race            uint8
+	Class           uint8
+	Level           uint8
+	IsGM            bool
+	IsDead          bool
+	FactionTemplate uint32
+	Reputations     map[uint32]playerReputation
+	Sess            *session
 }
 
 // creatureMotion tracks live server-side creature movement state, the role
@@ -209,16 +212,19 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			isGM := (sess.player.ExtraFlags&playerExtraGMOn != 0) || (sess.player.PlayerFlags&playerFlagGM != 0)
 			isDead := sess.player.Health == 0
 			players = append(players, playerPos{
-				Map:    sess.player.Map,
-				X:      sess.player.X,
-				Y:      sess.player.Y,
-				Z:      sess.player.Z,
-				GUID:   sess.playerGUID,
-				Race:   sess.player.Race,
-				Level:  sess.player.Level,
-				IsGM:   isGM,
-				IsDead: isDead,
-				Sess:   sess,
+				Map:             sess.player.Map,
+				X:               sess.player.X,
+				Y:               sess.player.Y,
+				Z:               sess.player.Z,
+				GUID:            sess.playerGUID,
+				Race:            sess.player.Race,
+				Class:           sess.player.Class,
+				Level:           sess.player.Level,
+				IsGM:            isGM,
+				IsDead:          isDead,
+				FactionTemplate: s.raceFaction(sess.player.Race),
+				Reputations:     playerReputationMap(sess.player.Reputations),
+				Sess:            sess,
 			})
 		}
 	}
@@ -344,7 +350,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		dist := float32(math.Hypot(float64(p.X-motion.X), float64(p.Y-motion.Y)))
 		aggroDist := float32(15.0)
-		if isHostileFaction(motion.Faction, p.Race) && dist <= aggroDist {
+		if s.isHostileFaction(motion.Faction, p) && dist <= aggroDist {
 			motion.InCombat = true
 			motion.TargetGUID = p.GUID
 			motion.Moving = false
@@ -405,7 +411,51 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	motion.WaitUntil = motion.MoveEnds.Add(wait)
 }
 
-func isHostileFaction(creatureFaction uint32, playerRace uint8) bool {
+func playerReputationMap(values []playerReputation) map[uint32]playerReputation {
+	if len(values) == 0 {
+		return nil
+	}
+	reputations := make(map[uint32]playerReputation, len(values))
+	for _, value := range values {
+		reputations[value.FactionID] = value
+	}
+	return reputations
+}
+
+func (s *Server) isHostileFaction(creatureFaction uint32, player playerPos) bool {
+	if s.Data != nil && player.FactionTemplate != 0 {
+		creatureTemplate, creatureFound, creatureErr := s.Data.FactionTemplate(creatureFaction)
+		playerTemplate, playerFound, playerErr := s.Data.FactionTemplate(player.FactionTemplate)
+		if creatureErr == nil && playerErr == nil && creatureFound && playerFound {
+			if reputation, found, err := s.Data.Reputation(creatureTemplate.Faction, player.Race, player.Class); err == nil && found && reputation.ReputationList >= 0 {
+				standing := int64(reputation.BaseStanding)
+				if saved, ok := player.Reputations[creatureTemplate.Faction]; ok {
+					standing += int64(saved.Standing)
+					if saved.Flags&0x02 != 0 {
+						return true
+					}
+				}
+				return reputationRank(standing) <= 1
+			}
+			for _, enemy := range creatureTemplate.Enemies {
+				if enemy != 0 && enemy == playerTemplate.Faction {
+					return true
+				}
+			}
+			for _, friend := range creatureTemplate.Friends {
+				if friend != 0 && friend == playerTemplate.Faction {
+					return false
+				}
+			}
+			if creatureTemplate.FriendGroup&playerTemplate.FactionGroup != 0 || creatureTemplate.FactionGroup&playerTemplate.FriendGroup != 0 {
+				return false
+			}
+		}
+	}
+	return isHostileFactionFallback(creatureFaction, player.Race)
+}
+
+func isHostileFactionFallback(creatureFaction uint32, playerRace uint8) bool {
 	if creatureFaction == 0 || creatureFaction == 35 || creatureFaction == 7 || creatureFaction == 8 || creatureFaction == 114 || creatureFaction == 120 || creatureFaction == 534 {
 		return false
 	}

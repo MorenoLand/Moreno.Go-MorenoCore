@@ -40,7 +40,19 @@ type Class struct {
 type Reputation struct {
 	ID             uint32
 	ReputationList int32
+	BaseStanding   int32
 	DefaultFlags   uint8
+}
+
+type FactionTemplate struct {
+	ID           uint32
+	Faction      uint32
+	Flags        uint32
+	FactionGroup uint32
+	FriendGroup  uint32
+	EnemyGroup   uint32
+	Enemies      [4]uint32
+	Friends      [4]uint32
 }
 
 type SpellEffect struct {
@@ -186,16 +198,45 @@ func (s *Store) Reputation(id uint32, race, class uint8) (Reputation, bool, erro
 	for i := 0; i < 4; i++ {
 		raceMaskValue, raceErr := record.Uint32(2 + i)
 		classMaskValue, classErr := record.Uint32(6 + i)
+		base, baseErr := record.Int32(10 + i)
 		flags, flagsErr := record.Uint32(14 + i)
-		if raceErr != nil || classErr != nil || flagsErr != nil {
-			return Reputation{}, false, fmt.Errorf("read faction %d reputation masks: %w", id, firstDBCError(raceErr, classErr, flagsErr))
+		if raceErr != nil || classErr != nil || baseErr != nil || flagsErr != nil {
+			return Reputation{}, false, fmt.Errorf("read faction %d reputation masks: %w", id, firstDBCError(raceErr, classErr, baseErr, flagsErr))
 		}
 		if (raceMaskValue&raceMask != 0 || (raceMaskValue == 0 && classMaskValue != 0)) && (classMaskValue&classMask != 0 || classMaskValue == 0) {
+			rep.BaseStanding = base
 			rep.DefaultFlags = uint8(flags)
 			break
 		}
 	}
 	return rep, true, nil
+}
+
+func (s *Store) FactionTemplate(id uint32) (FactionTemplate, bool, error) {
+	file, err := s.File("FactionTemplate")
+	if err != nil {
+		return FactionTemplate{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return FactionTemplate{}, false, nil
+	}
+	template := FactionTemplate{ID: id}
+	values := []*uint32{&template.Faction, &template.Flags, &template.FactionGroup, &template.FriendGroup, &template.EnemyGroup}
+	for field, destination := range values {
+		if *destination, err = record.Uint32(field + 1); err != nil {
+			return FactionTemplate{}, false, err
+		}
+	}
+	for index := range template.Enemies {
+		if template.Enemies[index], err = record.Uint32(6 + index); err != nil {
+			return FactionTemplate{}, false, err
+		}
+		if template.Friends[index], err = record.Uint32(10 + index); err != nil {
+			return FactionTemplate{}, false, err
+		}
+	}
+	return template, true, nil
 }
 
 func firstDBCError(errors ...error) error {
