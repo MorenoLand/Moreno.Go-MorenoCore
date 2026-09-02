@@ -53,6 +53,7 @@ type Config struct {
 	DeathCorpseReclaimDelayPvE              bool
 	DeathCorpseReclaimDelayPvP              bool
 	NPCBots                                 NPCBotConfig
+	UnrecognizedKeys                        []string
 }
 
 type NPCBotConfig struct {
@@ -96,7 +97,7 @@ type NPCBotConfig struct {
 }
 
 func Default() Config {
-	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", AuthDatabaseFile: "auth.db", CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, RealmID: 1, LogsDir: "logs", Motd: "Welcome to a Trinity Core server.", LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, Expansion: 2, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, VisibilityDistanceContinents: 100, SoloLFGEnable: true, SoloLFGAnnounce: true, GMLoginState: 2, GMVisibleState: 2, MaxOverSpeedPings: 2, DeathCorpseReclaimDelayPvE: true, DeathCorpseReclaimDelayPvP: true, NPCBots: NPCBotConfig{Enable: true, MaxBots: 9, MaxBotsPerClass: 0, BaseFollowDistance: 25, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, DamagePhysicalMultiplier: 1, DamageSpellMultiplier: 1, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: true, EnableBG: true, EnableArena: true, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, MovementInterruptFood: false, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: true, BlademasterEnable: false, ObsidianDestroyerEnable: false, ArchmageEnable: false, DreadlordEnable: false, SpellBreakerEnable: false, DarkRangerEnable: false, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
+	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", AuthDatabaseFile: "auth.db", CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, RealmID: 1, LogsDir: "logs", Motd: "Welcome to a Trinity Core server.", LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, Expansion: 2, StartPlayerLevel: 1, StartPlayerMoney: 10000, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, VisibilityDistanceContinents: 100, SoloLFGEnable: true, SoloLFGAnnounce: true, GMLoginState: 2, GMVisibleState: 2, MaxOverSpeedPings: 2, DeathCorpseReclaimDelayPvE: true, DeathCorpseReclaimDelayPvP: true, NPCBots: NPCBotConfig{Enable: true, MaxBots: 9, MaxBotsPerClass: 0, BaseFollowDistance: 25, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, DamagePhysicalMultiplier: 1, DamageSpellMultiplier: 1, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: true, EnableBG: true, EnableArena: true, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, MovementInterruptFood: false, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: true, BlademasterEnable: false, ObsidianDestroyerEnable: false, ArchmageEnable: false, DreadlordEnable: false, SpellBreakerEnable: false, DarkRangerEnable: false, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
 }
 
 func Load(path string) (Config, error) {
@@ -200,9 +201,13 @@ func (c *Config) ApplyWorkDir(workDir string) {
 }
 
 func (c *Config) ResolvePaths() {
-	c.GameDataDir = resolvePath(c.GameDataDir, filepath.Join("bin", c.GameDataDir), filepath.Join("bin", "data"), filepath.Join("..", c.GameDataDir))
+	c.DataDir = resolvePath(c.DataDir, "bin", filepath.Join("..", "bin"), filepath.Join("..", "..", "bin"))
+	c.GameDataDir = resolvePath(c.GameDataDir, filepath.Join(c.DataDir, "data"), filepath.Join("bin", c.GameDataDir), filepath.Join("bin", "data"), filepath.Join("..", c.GameDataDir))
 	c.SchemaDir = resolvePath(c.SchemaDir, filepath.Join("bin", c.SchemaDir), filepath.Join("bin", "sql"), filepath.Join("..", c.SchemaDir))
-	c.LuaScriptPath = resolvePath(c.LuaScriptPath, filepath.Join("bin", c.LuaScriptPath), filepath.Join("bin", "lua_scripts"), filepath.Join("..", c.LuaScriptPath))
+	c.LuaScriptPath = resolvePath(c.LuaScriptPath, filepath.Join(c.DataDir, "lua_scripts"), filepath.Join("bin", c.LuaScriptPath), filepath.Join("bin", "lua_scripts"), filepath.Join("..", c.LuaScriptPath))
+	c.AuthDatabaseFile = c.DatabasePath(c.AuthDatabaseFile)
+	c.CharactersDatabaseFile = c.DatabasePath(c.CharactersDatabaseFile)
+	c.WorldDatabaseFile = c.DatabasePath(c.WorldDatabaseFile)
 }
 
 func resolvePath(path string, alternatives ...string) string {
@@ -421,6 +426,8 @@ func (c *Config) set(key, value string) error {
 		return setFloat64(&c.NPCBots.StatLimitBlock, key, value)
 	case "NpcBot.Stats.Limits.Crit":
 		return setFloat64(&c.NPCBots.StatLimitCrit, key, value)
+	default:
+		c.UnrecognizedKeys = append(c.UnrecognizedKeys, key)
 	}
 	return nil
 }
