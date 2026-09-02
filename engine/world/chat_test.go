@@ -119,3 +119,52 @@ func TestBroadcastGMChatIncludesChatTag(t *testing.T) {
 	}
 	<-done
 }
+
+func TestHandleChatIgnored(t *testing.T) {
+	serverConn1, clientConn1 := net.Pipe()
+	defer serverConn1.Close()
+	defer clientConn1.Close()
+	serverConn2, clientConn2 := net.Pipe()
+	defer serverConn2.Close()
+	defer clientConn2.Close()
+
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
+	sender := &session{server: server, conn: serverConn1, authed: true, playerLoaded: true, playerGUID: 101, player: &playerState{GUID: 101, Name: "Ignorer", Map: 0}}
+	target := &session{server: server, conn: serverConn2, authed: true, playerLoaded: true, playerGUID: 102, player: &playerState{GUID: 102, Name: "Spammer", Map: 0}}
+	server.sessions[sender] = struct{}{}
+	server.sessions[target] = struct{}{}
+
+	payload := protocol.NewBuffer(9)
+	payload.WriteU64(102) // target GUID
+	payload.WriteU8(0)    // unk
+
+	done := make(chan struct{})
+	go func() {
+		if !sender.handleChatIgnored(payload.Bytes()) {
+			t.Error("handleChatIgnored returned false")
+		}
+		close(done)
+	}()
+
+	opcode, msgPayload, err := readServerFrame(clientConn2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if opcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) {
+		t.Fatalf("unexpected opcode: %x", opcode)
+	}
+	r := protocol.NewReader(msgPayload)
+	msgType, err := r.ReadU8()
+	if err != nil || msgType != chatIgnored {
+		t.Fatalf("msgType=%d err=%v", msgType, err)
+	}
+	lang, err := r.ReadU32()
+	if err != nil || lang != languageUniversal {
+		t.Fatalf("lang=%d err=%v", lang, err)
+	}
+	senderGUID, err := r.ReadU64()
+	if err != nil || senderGUID != 101 {
+		t.Fatalf("senderGUID=%d err=%v", senderGUID, err)
+	}
+}

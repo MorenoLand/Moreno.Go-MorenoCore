@@ -109,6 +109,7 @@ type AreaTableEntry struct {
 	ParentAreaID uint32
 	AreaBit      uint32
 	Flags        uint32
+	Name         string
 }
 
 const (
@@ -493,11 +494,13 @@ func (s *Store) Area(id uint32) (AreaTableEntry, bool, error) {
 	if err != nil {
 		return AreaTableEntry{}, false, err
 	}
+	name, _ := record.String(11)
 	return AreaTableEntry{
 		ID:           id,
 		ContinentID:  continentID,
 		ParentAreaID: parentAreaID,
 		AreaBit:      areaBit,
 		Flags:        flags,
+		Name:         name,
 	}, true, nil
 }

@@ -12,6 +12,9 @@ const permissionSkipCheckOverSpeedPing uint32 = 23
 
 const permissionTwoSideInteractionChat uint32 = 25
 
+// permissionOpcodeWhois mirrors rbac::RBAC_PERM_OPCODE_WHOIS (RBAC.h:96).
+const permissionOpcodeWhois uint32 = 43
+
 func accountHasPermission(ctx context.Context, db *sql.DB, accountID, realmID uint32, security uint8, permissionID uint32) (bool, error) {
 	granted := make(map[uint32]struct{})
 	denied := make(map[uint32]struct{})

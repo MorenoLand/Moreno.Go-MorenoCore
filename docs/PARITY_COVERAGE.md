@@ -4,15 +4,15 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 163 / 34773 | — |
+| Server source files / lines | 1410 / 710273 | 165 / 35893 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 182 | 545 |
-| Client behavioral opcode handlers | 430 | 182 | 250 |
+| Client opcode registrations | 727 | 187 | 540 |
+| Client behavioral opcode handlers | 430 | 187 | 245 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 64 / 6202 | — |
+| Test source files / lines | 9 / 1390 | 65 / 6903 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -84,7 +84,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_CHAR_FACTION_CHANGE`
 - `CMSG_CHAR_RACE_CHANGE`
 - `CMSG_CHAR_RENAME`
-- `CMSG_CHAT_IGNORED`
 - `CMSG_COMPLAIN`
 - `CMSG_COMPLETE_MOVIE`
 - `CMSG_CONTROLLER_EJECT_PASSENGER`
@@ -137,13 +136,11 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_GUILD_REMOVE`
 - `CMSG_GUILD_SET_OFFICER_NOTE`
 - `CMSG_GUILD_SET_PUBLIC_NOTE`
-- `CMSG_INSPECT`
 - `CMSG_INSTANCE_LOCK_RESPONSE`
 - `CMSG_ITEM_NAME_QUERY`
 - `CMSG_ITEM_REFUND`
 - `CMSG_ITEM_REFUND_INFO`
 - `CMSG_ITEM_TEXT_QUERY`
-- `CMSG_KEEP_ALIVE`
 - `CMSG_LEARN_PREVIEW_TALENTS`
 - `CMSG_LEARN_PREVIEW_TALENTS_PET`
 - `CMSG_LEARN_TALENT`
@@ -238,8 +235,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_USE_ITEM`
 - `CMSG_VOICE_SESSION_ENABLE`
 - `CMSG_WARDEN_DATA`
-- `CMSG_WHO`
-- `CMSG_WHOIS`
 - `CMSG_WORLD_TELEPORT`
 - `CMSG_WRAP_ITEM`
 - `MSG_BATTLEGROUND_PLAYER_POSITIONS`
