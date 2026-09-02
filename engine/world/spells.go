@@ -438,7 +438,13 @@ func buildSpellCooldown(playerGUID uint64, spellID uint32, cooldownDurationMs ui
 }
 
 // handleFarSight processes CMSG_FAR_SIGHT (0x27A).
+// Reference: WorldSession::HandleFarSightOpcode (SpellHandler.cpp).
 func (s *session) handleFarSight(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
+		return true
+	}
+	op := payload[0]
+	s.debug("far sight opcode", "account", s.accountName, "op", op)
 	return true
 }
 
@@ -473,12 +479,23 @@ func (s *session) handleGetMirrorImageData(ctx context.Context, payload []byte) 
 // handleTotemDestroyed processes CMSG_TOTEM_DESTROYED (0x413).
 // Reference: WorldSession::HandleTotemDestroyed (SpellHandler.cpp:787).
 func (s *session) handleTotemDestroyed(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
+		return true
+	}
+	slotID := payload[0]
+	s.debug("totem destroyed", "account", s.accountName, "slot", slotID)
 	return true
 }
 
 // handleSpellClick processes CMSG_SPELLCLICK (0x410).
 // Reference: WorldSession::HandleSpellClick (SpellHandler.cpp:800).
 func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	targetGUID, _ := r.ReadU64()
+	s.debug("spell click", "account", s.accountName, "target", targetGUID)
 	return true
 }
 
@@ -576,23 +593,58 @@ func (s *MountState) PreferredFlightSpeed(canFly bool) int {
 }
 
 // handleRemoveGlyph processes CMSG_REMOVE_GLYPH (0x48A).
-// Reference: WorldSession::HandleRemoveGlyph (SpellHandler.cpp:840).
+// Reference: WorldSession::HandleRemoveGlyph (SpellHandler.cpp:840): read the
+// slot index, and when a glyph is socketed there clear it, persist the change,
+// and resend the talent panel so the client drops the glyph. The reference
+// also removes the glyph's granted aura; the Go server has no aura engine yet.
 func (s *session) handleRemoveGlyph(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	slot, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	if slot >= 6 {
+		return true
+	}
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		col := fmt.Sprintf("glyph%d", slot+1)
+		var current int64
+		_ = cdb.QueryRowContext(ctx, "SELECT "+col+" FROM character_glyphs WHERE guid = ?", s.playerGUID).Scan(&current)
+		if current == 0 {
+			return true
+		}
+		_, _ = cdb.ExecContext(ctx, fmt.Sprintf("UPDATE character_glyphs SET %s = 0 WHERE guid = ?", col), s.playerGUID)
+	}
+	_ = s.sendTalentsInfo(false)
 	return true
 }
 
 // handleUpdateMissileTrajectory processes CMSG_UPDATE_MISSILE_TRAJECTORY (0x462).
 // Reference: WorldSession::HandleUpdateMissileTrajectory (SpellHandler.cpp:860).
 func (s *session) handleUpdateMissileTrajectory(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	guid, _ := r.ReadU64()
+	spellID, _ := r.ReadU32()
+	s.debug("update missile trajectory", "account", s.accountName, "guid", guid, "spell", spellID)
 	return true
 }
 
 // handleUpdateProjectilePosition processes CMSG_UPDATE_PROJECTILE_POSITION (0x4BE).
 // Reference: WorldSession::HandleUpdateProjectilePosition (SpellHandler.cpp:875).
 func (s *session) handleUpdateProjectilePosition(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	guid, _ := r.ReadU64()
+	spellID, _ := r.ReadU32()
+	s.debug("update projectile position", "account", s.accountName, "guid", guid, "spell", spellID)
 	return true
 }
-
-
-
-

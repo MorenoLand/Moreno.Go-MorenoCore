@@ -131,6 +131,11 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if typeID == chatChannel && !s.server.isChannelMember(s, channel) {
 		return s.sendChannelNotify(channelNotMemberNotice, channel, nil) == nil
 	}
+	if typeID == chatChannel && s.server.isChannelMuted(s, channel) {
+		// Reference Channel::Say: muted members receive CHAT_MUTED_NOTICE and
+		// the message is not delivered.
+		return s.sendChannelNotify(channelMutedNotice, channel, nil) == nil
+	}
 	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channel)
 	s.debug("chat accepted", "account", s.accountName, "type", typeID, "gm_chat", s.gmChat)
 	return true
