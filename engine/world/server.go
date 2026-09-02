@@ -717,6 +717,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleCompleteCinematic(ctx) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_SET_FACTION_ATWAR):
+			if !state.authed || !state.handleSetFactionAtWar(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_STANDSTATECHANGE):
 			if !state.authed || !state.handleStandStateChange(ctx, payload) {
 				return
