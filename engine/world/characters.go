@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -1015,4 +1016,321 @@ func (s *session) createStarterActions(ctx context.Context, guid uint64, race, c
 			}
 		}
 	}
+}
+
+// handleCharRename processes CMSG_CHAR_RENAME (0x2C7).
+// Reference: WorldSession::HandleCharRenameOpcode (CharacterHandler.cpp:1111).
+func (s *session) handleCharRename(ctx context.Context, payload []byte) bool {
+	if len(payload) < 9 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	guid, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	newName, err := r.ReadCString()
+	if err != nil {
+		return false
+	}
+
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ? WHERE guid = ?", newName, guid)
+	}
+
+	buf := protocol.NewBuffer(1 + 8 + len(newName) + 1)
+	buf.WriteU8(0) // RESPONSE_SUCCESS
+	buf.WriteU64(guid)
+	buf.WriteCString(newName)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_RENAME), buf.Bytes(), true)
+	s.debug("character renamed", "guid", guid, "name", newName)
+	return true
+}
+
+// handleCharCustomize processes CMSG_CHAR_CUSTOMIZE (0x473).
+// Reference: WorldSession::HandleCharCustomize (CharacterHandler.cpp:1230).
+func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool {
+	if len(payload) < 15 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	guid, _ := r.ReadU64()
+	newName, _ := r.ReadCString()
+	gender, _ := r.ReadU8()
+	skin, _ := r.ReadU8()
+	face, _ := r.ReadU8()
+	hairStyle, _ := r.ReadU8()
+	hairColor, _ := r.ReadU8()
+	facialHair, _ := r.ReadU8()
+
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ? WHERE guid = ?",
+			newName, gender, skin, face, hairStyle, hairColor, facialHair, guid)
+	}
+
+	buf := protocol.NewBuffer(16 + len(newName))
+	buf.WriteU8(0) // RESPONSE_SUCCESS
+	buf.WriteU64(guid)
+	buf.WriteCString(newName)
+	buf.WriteU8(gender)
+	buf.WriteU8(skin)
+	buf.WriteU8(face)
+	buf.WriteU8(hairStyle)
+	buf.WriteU8(hairColor)
+	buf.WriteU8(facialHair)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_CUSTOMIZE), buf.Bytes(), true)
+	s.debug("character customized", "guid", guid, "name", newName)
+	return true
+}
+
+// handleCharRaceChange processes CMSG_CHAR_RACE_CHANGE (0x4F8).
+func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool {
+	if len(payload) < 16 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	guid, _ := r.ReadU64()
+	newName, _ := r.ReadCString()
+	gender, _ := r.ReadU8()
+	skin, _ := r.ReadU8()
+	face, _ := r.ReadU8()
+	hairStyle, _ := r.ReadU8()
+	hairColor, _ := r.ReadU8()
+	facialHair, _ := r.ReadU8()
+	race, _ := r.ReadU8()
+
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ? WHERE guid = ?",
+			newName, gender, skin, face, hairStyle, hairColor, facialHair, race, guid)
+	}
+
+	buf := protocol.NewBuffer(17 + len(newName))
+	buf.WriteU8(0) // RESPONSE_SUCCESS
+	buf.WriteU64(guid)
+	buf.WriteCString(newName)
+	buf.WriteU8(gender)
+	buf.WriteU8(skin)
+	buf.WriteU8(face)
+	buf.WriteU8(hairStyle)
+	buf.WriteU8(hairColor)
+	buf.WriteU8(facialHair)
+	buf.WriteU8(race)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+	return true
+}
+
+// handleCharFactionChange processes CMSG_CHAR_FACTION_CHANGE (0x4D9).
+func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) bool {
+	return s.handleCharRaceChange(ctx, payload)
+}
+
+// handleCompleteMovie processes CMSG_COMPLETE_MOVIE (0x465).
+// Reference: WorldSession::HandleCompleteMovie (MiscHandler.cpp:969).
+func (s *session) handleCompleteMovie(ctx context.Context, payload []byte) bool {
+	s.debug("movie completed", "account", s.accountName)
+	return true
+}
+
+// handleComplain processes CMSG_COMPLAIN (0x3C7).
+// Reference: WorldSession::HandleComplainOpcode (MiscHandler.cpp:1151).
+func (s *session) handleComplain(ctx context.Context, payload []byte) bool {
+	buf := protocol.NewBuffer(1)
+	buf.WriteU8(0) // complain result: 0 = complaint received
+	return s.write(uint16(protocol.OpcodeSMSG_COMPLAIN_RESULT), buf.Bytes(), true) == nil
+}
+
+const (
+	logoutDelay       = 20 * time.Second
+	playerFlagResting = uint32(0x00000020)
+)
+
+func (s *session) handleLogoutRequest(ctx context.Context) bool {
+	if !s.playerLoaded {
+		return true
+	}
+	instant := s.player != nil && s.player.PlayerFlags&playerFlagResting != 0
+	response := protocol.NewBuffer(5)
+	response.WriteU32(0)
+	if instant {
+		response.WriteU8(1)
+	} else {
+		response.WriteU8(0)
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE), response.Bytes(), true); err != nil {
+		return false
+	}
+	if instant {
+		if err := s.completeLogout(ctx); err != nil {
+			s.debug("player logout failed", "account", s.accountName, "error", err)
+		}
+		return true
+	}
+	s.logoutAt = time.Now().Add(logoutDelay)
+	s.debug("player logout pending", "account", s.accountName, "delay_seconds", int(logoutDelay/time.Second))
+	return true
+}
+
+func (s *session) handleLogoutCancel() bool {
+	if !s.playerLoaded {
+		return true
+	}
+	s.logoutAt = time.Time{}
+	s.debug("player logout cancelled", "account", s.accountName)
+	return s.write(uint16(protocol.OpcodeSMSG_LOGOUT_CANCEL_ACK), nil, true) == nil
+}
+
+// handlePlayerLogout mirrors WorldSession::HandlePlayerLogoutOpcode, whose body
+// is empty at the reference commit (MiscHandler.cpp:457): the client sends this
+// packet when its own countdown finishes, but logout completion is already
+// driven by the server-side pending-logout deadline, so the packet only needs
+// to be consumed.
+func (s *session) handlePlayerLogout() bool {
+	return true
+}
+
+func (s *session) completeLogout(ctx context.Context) error {
+	if !s.playerLoaded {
+		return nil
+	}
+	s.triggerLogout(ctx)
+	var firstErr error
+	if err := s.savePlayerPosition(ctx); err != nil {
+		firstErr = err
+	}
+	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_LOGOUT_COMPLETE), nil, true); err != nil {
+		return err
+	}
+	s.playerLoaded = false
+	s.player = nil
+	s.logoutAt = time.Time{}
+	s.debug("player logged out", "account", s.accountName, "guid", s.playerGUID)
+	return firstErr
+}
+
+func (s *session) triggerLogout(ctx context.Context) {
+	if !s.playerLoaded || s.logoutHook {
+		return
+	}
+	s.logoutHook = true
+	if s.server.Features != nil && s.server.Features.LFG != nil {
+		s.server.Features.LFG.Leave(s.playerGUID)
+	}
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogout, s.luaPlayer())
+}
+
+func (s *session) savePlayerPosition(ctx context.Context) error {
+	if !s.playerLoaded || s.player == nil {
+		return nil
+	}
+	_, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHARACTER_POSITION", s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map, s.player.Zone, s.player.GUID)
+	return err
+}
+
+func isReadTimeout(err error) bool {
+	var networkError net.Error
+	return errors.As(err, &networkError) && networkError.Timeout()
+}
+
+const (
+	globalAccountDataMask    uint32 = 0x15
+	characterAccountDataMask uint32 = 0xEA
+)
+
+func buildLoginVerifyWorld(state playerState) []byte {
+	packet := protocol.NewBuffer(20)
+	packet.WriteI32(int32(state.Map))
+	packet.WriteF32(state.X)
+	packet.WriteF32(state.Y)
+	packet.WriteF32(state.Z)
+	packet.WriteF32(state.Orientation)
+	return packet.Bytes()
+}
+
+func buildAccountDataTimes(now time.Time, mask uint32) []byte {
+	packet := protocol.NewBuffer(29)
+	packet.WriteU32(uint32(now.Unix()))
+	packet.WriteU8(1)
+	packet.WriteU32(mask)
+	for index := uint32(0); index < 8; index++ {
+		if mask&(1<<index) != 0 {
+			packet.WriteU32(0)
+		}
+	}
+	return packet.Bytes()
+}
+
+func buildRealmSplit(payload []byte) ([]byte, error) {
+	reader := protocol.NewReader(payload)
+	value, err := reader.ReadU32()
+	if err != nil {
+		return nil, err
+	}
+	packet := protocol.NewBuffer(17)
+	packet.WriteU32(value)
+	packet.WriteU32(0)
+	packet.WriteCString("01/01/01")
+	return packet.Bytes(), nil
+}
+
+func buildFeatureSystemStatus() []byte { return []byte{2, 0} }
+
+func buildMotd(message string) []byte {
+	lines := strings.Split(message, "@")
+	packet := protocol.NewBuffer(4 + len(message) + len(lines))
+	packet.WriteU32(uint32(len(lines)))
+	for _, line := range lines {
+		packet.WriteCString(line)
+	}
+	return packet.Bytes()
+}
+
+func buildLearnedDanceMoves() []byte {
+	packet := protocol.NewBuffer(8)
+	packet.WriteU32(0)
+	packet.WriteU32(0)
+	return packet.Bytes()
+}
+
+func buildInitWorldStates(state playerState) []byte {
+	worldStates := [][2]int32{{2264, 0}, {2263, 0}, {2262, 0}, {2261, 0}, {2260, 0}, {2259, 0}, {3191, 0}, {3901, 0}}
+	packet := protocol.NewBuffer(16 + len(worldStates)*8)
+	packet.WriteI32(int32(state.Map))
+	packet.WriteI32(int32(state.Zone))
+	packet.WriteI32(0)
+	packet.WriteU16(uint16(len(worldStates)))
+	for _, worldState := range worldStates {
+		packet.WriteI32(worldState[0])
+		packet.WriteI32(worldState[1])
+	}
+	return packet.Bytes()
+}
+
+func buildInstanceDifficulty() []byte {
+	packet := protocol.NewBuffer(8)
+	packet.WriteU32(0)
+	packet.WriteU32(0)
+	return packet.Bytes()
+}
+
+func buildTimeSyncRequest(counter uint32) []byte {
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(counter)
+	return packet.Bytes()
+}
+
+func buildTutorialFlags(tutorials [8]uint32) []byte {
+	packet := protocol.NewBuffer(32)
+	for _, tut := range tutorials {
+		packet.WriteU32(tut)
+	}
+	return packet.Bytes()
 }
