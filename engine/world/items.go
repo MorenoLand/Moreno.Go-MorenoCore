@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -423,22 +424,45 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 	return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
 }
 
+const (
+	equipErrOk           = 0
+	equipErrItemNotFound = 5
+	equipErrYouAreDead   = 17
+	equipErrNotInCombat  = 20
+)
+
+func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {
+	buf := protocol.NewBuffer(18)
+	buf.WriteU8(errCode)
+	if errCode != equipErrOk {
+		buf.WriteU64(itemGUID)
+		buf.WriteU64(0)
+		buf.WriteU8(0)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_INVENTORY_CHANGE_FAILURE), buf.Bytes(), true)
+}
+
 // handleUseItem processes CMSG_USE_ITEM (0x0AB).
 // Reference: WorldSession::HandleUseItemOpcode (SpellHandler.cpp:73).
 func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return false
 	}
+	// Player cannot use items while dead (SpellHandler.cpp:194)
+	if s.player.Health == 0 {
+		s.sendEquipError(equipErrYouAreDead, 0)
+		return true
+	}
 	r := protocol.NewReader(payload)
-	_, err := r.ReadU8() // bagIndex
+	bagIndex, err := r.ReadU8()
 	if err != nil {
 		return false
 	}
-	_, err = r.ReadU8() // slot
+	slot, err := r.ReadU8()
 	if err != nil {
 		return false
 	}
-	_, err = r.ReadU8() // castCount
+	castCount, err := r.ReadU8()
 	if err != nil {
 		return false
 	}
@@ -446,7 +470,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	_, err = r.ReadU64() // itemGUID
+	itemGUID, err := r.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -461,11 +485,67 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 
 	target, _ := protocol.ReadSpellTargetData(r)
 
-	if spellID != 0 && s.server != nil && s.server.Data != nil {
-		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
-			s.finishSpellCast(ctx, 1, spellID, spell, target)
+	// Validate item existence in specified bag and slot
+	bagKey, ok := s.inventoryBagKey(ctx, bagIndex)
+	if !ok {
+		s.sendEquipError(equipErrItemNotFound, itemGUID)
+		return true
+	}
+
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return false
+	}
+
+	var dbItemGUID int64
+	var itemEntry int64
+	var count int64
+	err = cdb.QueryRowContext(ctx, `SELECT ci.item, ii.itemEntry, ii.count
+		FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, bagKey, slot).Scan(&dbItemGUID, &itemEntry, &count)
+	if err != nil || count <= 0 {
+		s.sendEquipError(equipErrItemNotFound, itemGUID)
+		return true
+	}
+	rawItemGUID := uint64(dbItemGUID)
+	fullItemGUID := rawItemGUID | (uint64(0x4000) << 48)
+	if itemGUID != 0 && itemGUID != rawItemGUID && itemGUID != fullItemGUID {
+		s.sendEquipError(equipErrItemNotFound, itemGUID)
+		return true
+	}
+
+	// Check player spell cooldown
+	nowUnix := time.Now().Unix()
+	for _, cd := range s.player.Cooldowns {
+		if cd.Spell == spellID && cd.End > nowUnix {
+			return true
 		}
 	}
+
+	// Cast spell
+	if spellID != 0 && s.server != nil && s.server.Data != nil {
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+			s.finishSpellCast(ctx, castCount, spellID, spell, target)
+		}
+	}
+
+	// If consumable item (class == 0), decrement count or remove from inventory
+	var class int64
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT class FROM item_template WHERE entry = ?", itemEntry).Scan(&class)
+		if class == 0 { // ITEM_CLASS_CONSUMABLE
+			if count > 1 {
+				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", dbItemGUID)
+			} else {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, bagKey, slot)
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", dbItemGUID)
+			}
+			_ = s.sendInventoryItems(ctx)
+			s.sendPlayerUpdate()
+		}
+	}
+
 	return true
 }
 

@@ -82,24 +82,40 @@ func TestChannelAndCharServiceHandlers(t *testing.T) {
 		t.Fatalf("expected gender 1, got %d", gender)
 	}
 
-	// 4. Character Race / Faction Change
+	// 4. Character Race Change (Human 1 -> Dwarf 3, same team)
 	raceBuf := protocol.NewBuffer(25)
 	raceBuf.WriteU64(1)
-	raceBuf.WriteCString("FactionHero")
+	raceBuf.WriteCString("RaceHero")
 	raceBuf.WriteU8(1) // gender
 	raceBuf.WriteU8(2) // skin
 	raceBuf.WriteU8(3) // face
 	raceBuf.WriteU8(4) // hairStyle
 	raceBuf.WriteU8(5) // hairColor
 	raceBuf.WriteU8(6) // facialHair
-	raceBuf.WriteU8(2) // Orc
+	raceBuf.WriteU8(3) // Dwarf
 	if !sess.handleCharRaceChange(ctx, raceBuf.Bytes()) {
 		t.Fatal("handleCharRaceChange failed")
 	}
-	if !sess.handleCharFactionChange(ctx, raceBuf.Bytes()) {
+	var race int
+	_ = db.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = 1").Scan(&race)
+	if race != 3 {
+		t.Fatalf("expected race 3, got %d", race)
+	}
+
+	// 5. Character Faction Change (Dwarf 3 -> Orc 2, opposite team)
+	factionBuf := protocol.NewBuffer(25)
+	factionBuf.WriteU64(1)
+	factionBuf.WriteCString("FactionHero")
+	factionBuf.WriteU8(1) // gender
+	factionBuf.WriteU8(2) // skin
+	factionBuf.WriteU8(3) // face
+	factionBuf.WriteU8(4) // hairStyle
+	factionBuf.WriteU8(5) // hairColor
+	factionBuf.WriteU8(6) // facialHair
+	factionBuf.WriteU8(2) // Orc
+	if !sess.handleCharFactionChange(ctx, factionBuf.Bytes()) {
 		t.Fatal("handleCharFactionChange failed")
 	}
-	var race int
 	_ = db.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = 1").Scan(&race)
 	if race != 2 {
 		t.Fatalf("expected race 2, got %d", race)
