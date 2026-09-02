@@ -293,3 +293,19 @@ func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementI
 		}
 	}
 }
+
+// handleForceMoveRootAck processes CMSG_FORCE_MOVE_ROOT_ACK (0x0E9).
+func (s *session) handleForceMoveRootAck(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleForceMoveUnrootAck processes CMSG_FORCE_MOVE_UNROOT_ACK (0x0EB).
+func (s *session) handleForceMoveUnrootAck(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleForceTurnRateChangeAck processes CMSG_FORCE_TURN_RATE_CHANGE_ACK (0x2DF).
+func (s *session) handleForceTurnRateChangeAck(ctx context.Context, payload []byte) bool {
+	return true
+}
+

@@ -73,3 +73,9 @@ func (s *session) handleChannelVoiceOn(ctx context.Context, payload []byte) bool
 func (s *session) handleDeclineChannelInvite(ctx context.Context, payload []byte) bool {
 	return true
 }
+
+// handleGetChannelMemberCount processes CMSG_GET_CHANNEL_MEMBER_COUNT (0x3D3).
+func (s *session) handleGetChannelMemberCount(ctx context.Context, payload []byte) bool {
+	return true
+}
+

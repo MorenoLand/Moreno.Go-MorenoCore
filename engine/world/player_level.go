@@ -1,4 +1,4 @@
-﻿package world
+package world
 
 import (
 	"context"
@@ -35,3 +35,9 @@ func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bo
 	s.debug("level granted", "account", s.accountName, "level", s.player.Level)
 	return true
 }
+
+// handleGrantLevel processes CMSG_GRANT_LEVEL (0x41F).
+func (s *session) handleGrantLevel(ctx context.Context, payload []byte) bool {
+	return s.handleAcceptLevelGrant(ctx, payload)
+}
+

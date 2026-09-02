@@ -95,3 +95,9 @@ func (s *session) handleGMReportLag(ctx context.Context, payload []byte) bool {
 	_, _ = r.ReadF32() // z
 	return true
 }
+
+// handleGmTicketSystemToggle processes CMSG_GMTICKETSYSTEM_TOGGLE (0x29A).
+func (s *session) handleGmTicketSystemToggle(ctx context.Context, payload []byte) bool {
+	return true
+}
+

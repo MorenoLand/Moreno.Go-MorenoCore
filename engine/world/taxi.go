@@ -428,3 +428,9 @@ func objectFloat32Field(object *scripting.Object, name string) (float32, bool) {
 		return 0, false
 	}
 }
+
+// handleEnableTaxi processes CMSG_ENABLETAXI (0x493).
+func (s *session) handleEnableTaxi(ctx context.Context, payload []byte) bool {
+	return s.handleTaxiNodeStatusQuery(ctx, payload)
+}
+
