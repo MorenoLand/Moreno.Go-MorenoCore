@@ -610,7 +610,18 @@ func (s *session) sendPlayerMoneyUpdate() {
 }
 
 func buildItemCreateBlock(fullGUID uint64, itemEntry, count uint32, ownerGUID uint64) []byte {
-	values := make([]uint32, 68)
+	return buildItemCreateBlockForLocation(fullGUID, itemEntry, count, ownerGUID, ownerGUID, 0, nil)
+}
+
+func buildItemCreateBlockWithContents(fullGUID uint64, itemEntry, count uint32, ownerGUID uint64, containerSlots uint32, contents map[uint32]uint64) []byte {
+	return buildItemCreateBlockForLocation(fullGUID, itemEntry, count, ownerGUID, ownerGUID, containerSlots, contents)
+}
+
+func buildItemCreateBlockForLocation(fullGUID uint64, itemEntry, count uint32, ownerGUID, containedGUID uint64, containerSlots uint32, contents map[uint32]uint64) []byte {
+	if containerSlots > 36 {
+		containerSlots = 36
+	}
+	values := make([]uint32, 68+containerSlots*2)
 	values[0] = uint32(fullGUID)
 	values[1] = uint32(fullGUID >> 32)
 	values[2] = 0x03 // TYPEID_ITEM
@@ -618,11 +629,21 @@ func buildItemCreateBlock(fullGUID uint64, itemEntry, count uint32, ownerGUID ui
 	values[4] = math.Float32bits(1.0)
 	values[6] = uint32(ownerGUID)
 	values[7] = uint32(ownerGUID >> 32)
-	values[8] = uint32(ownerGUID)
-	values[9] = uint32(ownerGUID >> 32)
+	values[8] = uint32(containedGUID)
+	values[9] = uint32(containedGUID >> 32)
 	values[14] = count
 	values[16] = 100 // Durability
 	values[17] = 100 // MaxDurability
+	if containerSlots > 0 {
+		values[64] = containerSlots
+		for slot, itemGUID := range contents {
+			if slot >= containerSlots {
+				continue
+			}
+			values[66+slot*2] = uint32(itemGUID)
+			values[67+slot*2] = uint32(itemGUID >> 32)
+		}
+	}
 
 	mask := protocol.NewUpdateMask(len(values))
 	for idx, val := range values {
@@ -683,24 +704,73 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 	rows, err := cdb.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count
 		FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ?`, s.playerGUID)
+		WHERE ci.guid = ? ORDER BY ci.bag, ci.slot`, s.playerGUID)
 	if err != nil {
-		return nil
+		if missingTable(err) || isMissingColumn(err) {
+			return nil
+		}
+		return err
 	}
 	defer rows.Close()
 
-	updates := protocol.NewUpdateData()
-	fields := make(map[int]uint32)
+	type inventoryItem struct {
+		bag, slot, itemGUID, itemEntry, count int64
+	}
+	items := make([]inventoryItem, 0)
+	bagSlots := make(map[int64]uint64)
 	for rows.Next() {
-		var bag, slot, itemGUID, itemEntry, count int64
-		if err := rows.Scan(&bag, &slot, &itemGUID, &itemEntry, &count); err != nil {
+		var item inventoryItem
+		if err := rows.Scan(&item.bag, &item.slot, &item.itemGUID, &item.itemEntry, &item.count); err != nil {
 			continue
 		}
+		items = append(items, item)
+		if item.bag == 0 && item.slot >= 19 && item.slot <= 22 {
+			bagSlots[item.slot-19] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	contents := make(map[int64]map[uint32]uint64)
+	for _, item := range items {
+		if item.bag == 0 {
+			continue
+		}
+		bagGUID, ok := bagSlots[item.bag-1]
+		if !ok || item.slot < 0 {
+			continue
+		}
+		if contents[int64(bagGUID)] == nil {
+			contents[int64(bagGUID)] = make(map[uint32]uint64)
+		}
+		contents[int64(bagGUID)][uint32(item.slot)] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
+	}
+	containerSlots := func(entry int64) uint32 {
+		if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+			return 0
+		}
+		var slots int64
+		if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ContainerSlots, 0) FROM item_template WHERE entry = ?", entry).Scan(&slots) != nil || slots <= 0 {
+			return 0
+		}
+		if slots > 36 {
+			slots = 36
+		}
+		return uint32(slots)
+	}
+	updates := protocol.NewUpdateData()
+	fields := make(map[int]uint32)
+	for _, item := range items {
+		bag, slot, itemGUID, itemEntry, count := item.bag, item.slot, item.itemGUID, item.itemEntry, item.count
 		if count <= 0 {
 			count = 1
 		}
 		fullGUID := uint64(itemGUID) | (uint64(0x4000) << 48)
-		block := buildItemCreateBlock(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID)
+		containedGUID := uint64(s.playerGUID)
+		if bag != 0 {
+			containedGUID = bagSlots[bag-1]
+		}
+		block := buildItemCreateBlockForLocation(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID, containedGUID, containerSlots(itemEntry), contents[int64(fullGUID)])
 		updates.AddUpdateBlock(block)
 
 		if bag == 0 {

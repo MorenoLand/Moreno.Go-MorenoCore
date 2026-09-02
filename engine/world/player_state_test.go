@@ -31,6 +31,49 @@ func TestBuildInitialReputations(t *testing.T) {
 	}
 }
 
+func TestBuildBagCreateBlockIncludesContentsAndContainer(t *testing.T) {
+	bagGUID := uint64(0x4000000000000019)
+	itemGUID := uint64(0x4000000000000020)
+	block := buildItemCreateBlockForLocation(bagGUID, 1725, 1, 26, 26, 4, map[uint32]uint64{0: itemGUID})
+	reader := protocol.NewReader(block)
+	if value, err := reader.ReadU8(); err != nil || value != protocol.UpdateCreateObject2 {
+		t.Fatalf("update type=%d err=%v", value, err)
+	}
+	if value, err := reader.ReadPackedGUID(); err != nil || value != bagGUID {
+		t.Fatalf("bag guid=%x err=%v", value, err)
+	}
+	if value, err := reader.ReadU8(); err != nil || value != 1 {
+		t.Fatalf("object type=%d err=%v", value, err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		t.Fatal(err)
+	}
+	maskBlocks, err := reader.ReadU8()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mask := make([]uint32, maskBlocks)
+	for index := range mask {
+		if mask[index], err = reader.ReadU32(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	values := make(map[int]uint32)
+	for index := 0; index < 76; index++ {
+		if mask[index/32]&(1<<uint(index%32)) == 0 {
+			continue
+		}
+		value, readErr := reader.ReadU32()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		values[index] = value
+	}
+	if values[8] != 26 || values[9] != 0 || values[64] != 4 || values[66] != uint32(itemGUID) || values[67] != uint32(itemGUID>>32) {
+		t.Fatalf("bag fields=%x/%x/%d/%x/%x", values[8], values[9], values[64], values[66], values[67])
+	}
+}
+
 func TestBuildPlayerUpdateKeepsMovementAndUpdateMaskAligned(t *testing.T) {
 	server := &Server{}
 	packet, err := server.buildPlayerUpdate(playerState{GUID: 26, Level: 21, Map: 0, X: 1, Y: 2, Z: 3, Orientation: 4})
