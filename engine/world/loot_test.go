@@ -19,7 +19,7 @@ func TestLootingMoneyAndItems(t *testing.T) {
 	for _, stmt := range []string{
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
-		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, played_time INTEGER, text TEXT)",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
 		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER)",
 		"CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER, map INTEGER, position_x REAL, position_y REAL, position_z REAL, curhealth INTEGER)",
 		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, minGold INTEGER, maxGold INTEGER)",
@@ -80,5 +80,27 @@ func TestLootingMoneyAndItems(t *testing.T) {
 	}
 	if len(srv.creatureLoot) != 0 {
 		t.Fatal("expected creature loot state to be cleared")
+	}
+}
+
+func TestLootItemPushResultMatchesReferenceFlags(t *testing.T) {
+	reader := protocol.NewReader(buildLootItemPushResult(26, 0, 23, 7001, 2, 5))
+	if value, err := reader.ReadU64(); err != nil || value != 26 {
+		t.Fatalf("player=%d err=%v", value, err)
+	}
+	for index, expected := range []uint32{0, 0, 1} {
+		value, err := reader.ReadU32()
+		if err != nil || value != expected {
+			t.Fatalf("flag %d=%d err=%v", index, value, err)
+		}
+	}
+	if value, err := reader.ReadU8(); err != nil || value != 0 {
+		t.Fatalf("bag=%d err=%v", value, err)
+	}
+	if value, err := reader.ReadU32(); err != nil || value != 23 {
+		t.Fatalf("slot=%d err=%v", value, err)
+	}
+	if value, err := reader.ReadU32(); err != nil || value != 7001 {
+		t.Fatalf("entry=%d err=%v", value, err)
 	}
 }

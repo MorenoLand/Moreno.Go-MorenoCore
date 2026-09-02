@@ -227,6 +227,8 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 					state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 				}
+				state.logoutAt = time.Time{}
+				continue
 			}
 			return
 		}
@@ -689,6 +691,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_PLAYER_LOGIN):
 			if !state.authed || !state.handlePlayerLogin(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_NEXT_CINEMATIC_CAMERA):
+			if !state.authed || !state.handleNextCinematicCamera() {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_COMPLETE_CINEMATIC):
+			if !state.authed || !state.handleCompleteCinematic(ctx) {
 				return
 			}
 		case uint32(protocol.OpcodeMSG_MOVE_WORLDPORT_ACK):
