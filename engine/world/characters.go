@@ -249,6 +249,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CHARACTER", args...); err != nil {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 48)
 	}
+	_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_PLAYER_HOMEBIND", guid, spawn.Map, spawn.Zone, spawn.X, spawn.Y, spawn.Z)
 	s.initializeCreatedPlayerStats(ctx, guid, class, startLevel)
 
 	// Populate starter spells, skills, actions, equipment

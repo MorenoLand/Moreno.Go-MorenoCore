@@ -14,43 +14,44 @@ import (
 )
 
 const (
-	playerValuesCount                 = 1326
-	objectFieldType                   = 2
-	objectFieldEntry                  = 3
-	objectFieldScale                  = 4
-	unitFieldHealth                   = 24
-	unitFieldLevel                    = 54
-	unitFieldFaction                  = 55
-	unitFieldFlags                    = 59
-	unitFieldAttackTime               = 62
-	unitFieldAttackTimeOffhand        = 63
-	unitFieldBoundingRadius           = 65
-	unitFieldCombatReach              = 66
-	unitFieldDisplayID                = 67
-	unitFieldNativeDisplayID          = 68
-	unitFieldPlayerFlags              = 150
-	unitFieldPlayerBytes              = 153
-	unitFieldPlayerBytes2             = 154
-	unitFieldPlayerBytes3             = 155
-	unitFieldGuildID                  = 151
-	unitFieldGuildRank                = 152
-	unitFieldGuildTimestamp           = 157
-	unitFieldXP                       = 634
-	unitFieldNextLevelXP              = 635
-	unitFieldCoinage                  = 1170
-	unitFieldMaxLevel                 = 1279
-	unitFieldKnownCurrencies          = 632
-	unitFieldWatchedFaction           = 1230
-	unitFieldAmmoID                   = 1198
-	playerQuestLogStart               = 158 // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
-	playerQuestLogSlots               = 25
-	playerSkillInfoStart              = 636
-	playerMaxSkills                   = 128
-	playerVisibleItemStart            = 283
-	playerVisibleItemCount            = 19
-	unitFieldMaxHealth                = 32
-	unitFieldMaxPower1                = 33
-	unitFlagPlayerControlled   uint32 = 0x00000008
+	playerValuesCount                  = 1326
+	objectFieldType                    = 2
+	objectFieldEntry                   = 3
+	objectFieldScale                   = 4
+	unitFieldHealth                    = 24
+	unitFieldLevel                     = 54
+	unitFieldFaction                   = 55
+	unitFieldFlags                     = 59
+	unitFieldAttackTime                = 62
+	unitFieldAttackTimeOffhand         = 63
+	unitFieldBoundingRadius            = 65
+	unitFieldCombatReach               = 66
+	unitFieldDisplayID                 = 67
+	unitFieldNativeDisplayID           = 68
+	unitFieldPlayerFlags               = 150
+	unitFieldPlayerBytes               = 153
+	unitFieldPlayerBytes2              = 154
+	unitFieldPlayerBytes3              = 155
+	unitFieldGuildID                   = 151
+	unitFieldGuildRank                 = 152
+	unitFieldGuildTimestamp            = 157
+	unitFieldXP                        = 634
+	unitFieldNextLevelXP               = 635
+	unitFieldCoinage                   = 1170
+	unitFieldMaxLevel                  = 1279
+	unitFieldKnownCurrencies           = 632
+	unitFieldWatchedFaction            = 1230
+	unitFieldAmmoID                    = 1198
+	unitFieldPlayerSelfResSpell        = 1199 // PLAYER_SELF_RES_SPELL = UNIT_END + 0x041B
+	playerQuestLogStart                = 158  // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
+	playerQuestLogSlots                = 25
+	playerSkillInfoStart               = 636
+	playerMaxSkills                    = 128
+	playerVisibleItemStart             = 283
+	playerVisibleItemCount             = 19
+	unitFieldMaxHealth                 = 32
+	unitFieldMaxPower1                 = 33
+	unitFlagPlayerControlled    uint32 = 0x00000008
 )
 
 // questCompleteStateFlag sets the per-slot complete bit the client reads
@@ -124,6 +125,12 @@ type playerState struct {
 	MountDisplayID   uint32
 	StandState       uint8
 	PlayerFieldBytes uint32
+	SelfResSpell     uint32
+	HomebindMap      uint32
+	HomebindZone     uint32
+	HomebindX        float32
+	HomebindY        float32
+	HomebindZ        float32
 	Reputations      []playerReputation
 }
 
@@ -163,6 +170,24 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	} else {
 		state.ExtraFlags &= ^playerExtraGMOn
 		state.PlayerFlags &= ^playerFlagGM
+	}
+	var homeMap, homeZone int64
+	var homeX, homeY, homeZ float32
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, zoneId, posX, posY, posZ FROM character_homebind WHERE guid = ?", guid).Scan(&homeMap, &homeZone, &homeX, &homeY, &homeZ); err == nil {
+			state.HomebindMap = uint32(homeMap)
+			state.HomebindZone = uint32(homeZone)
+			state.HomebindX = homeX
+			state.HomebindY = homeY
+			state.HomebindZ = homeZ
+		}
+	}
+	if state.HomebindMap == 0 && state.HomebindX == 0 && state.HomebindY == 0 && state.HomebindZ == 0 {
+		state.HomebindMap = state.Map
+		state.HomebindZone = state.Zone
+		state.HomebindX = state.X
+		state.HomebindY = state.Y
+		state.HomebindZ = state.Z
 	}
 	s.player = &state
 
@@ -464,6 +489,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	}
 	values[unitFieldPlayerFlags] = state.PlayerFlags
 	values[unitFieldPlayerFieldBytes] = state.PlayerFieldBytes
+	values[unitFieldPlayerSelfResSpell] = state.SelfResSpell
 	values[unitFieldPlayerBytes] = uint32(state.Skin) | uint32(state.Face)<<8 | uint32(state.HairStyle)<<16 | uint32(state.HairColor)<<24
 	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.SheathState)<<8
 	values[unitFieldGuildID] = state.GuildID

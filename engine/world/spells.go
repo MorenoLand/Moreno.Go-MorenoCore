@@ -148,6 +148,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		case 6: // Apply Aura
 			s.auras[spellID] = struct{}{}
 			s.sendPlayerUpdate()
+		case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
+			s.applySelfResurrectEffect(spell)
 		}
 	}
 }

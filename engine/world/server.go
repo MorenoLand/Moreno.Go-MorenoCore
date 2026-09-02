@@ -113,6 +113,7 @@ type session struct {
 	deathExpireTime    int64
 	deathTimer         time.Time
 	resurrection       *resurrectionData
+	inFlight           bool
 }
 
 type account struct {
@@ -815,6 +816,22 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_RESURRECT_RESPONSE):
 			if !state.authed || !state.handleResurrectResponse(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SELF_RES):
+			if !state.authed || !state.handleSelfRes(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_HEARTH_AND_RESURRECT):
+			if !state.authed || !state.handleHearthAndResurrect(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AREA_SPIRIT_HEALER_QUERY):
+			if !state.authed || !state.handleAreaSpiritHealerQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AREA_SPIRIT_HEALER_QUEUE):
+			if !state.authed || !state.handleAreaSpiritHealerQueue(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
