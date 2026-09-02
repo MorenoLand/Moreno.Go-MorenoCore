@@ -926,6 +926,38 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleGameObjectReportUse(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_GMTICKET_SYSTEMSTATUS):
+			if !state.authed || !state.handleGMTicketSystemStatus(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GMTICKET_GETTICKET):
+			if !state.authed || !state.handleGMTicketGetTicket(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GMTICKET_CREATE):
+			if !state.authed || !state.handleGMTicketCreate(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GMTICKET_UPDATETEXT):
+			if !state.authed || !state.handleGMTicketUpdate(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GMTICKET_DELETETICKET):
+			if !state.authed || !state.handleGMTicketDelete(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GMRESPONSE_RESOLVE):
+			if !state.authed || !state.handleGMResponseResolve(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GMSURVEY_SUBMIT):
+			if !state.authed || !state.handleGMSurveySubmit(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GM_REPORT_LAG):
+			if !state.authed || !state.handleGMReportLag(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
 			if !state.authed || !state.handleTutorialFlag(ctx, payload) {
 				return
