@@ -151,10 +151,10 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if !raceAllowed || s.server.Config.CharacterCreatingDisabledRaceMask&(uint32(1)<<(race-1)) != 0 || !classAllowed || s.server.Config.CharacterCreatingDisabledClassMask&(uint32(1)<<(class-1)) != 0 {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateDisabled)
 	}
-	if raceRequiredExpansion > s.server.Config.Expansion {
+	if raceRequiredExpansion > uint32(s.accountExpansion) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateExpansion)
 	}
-	if classRequiredExpansion > s.server.Config.Expansion {
+	if classRequiredExpansion > uint32(s.accountExpansion) {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), charCreateExpansionClass)
 	}
 	if class == 6 {
