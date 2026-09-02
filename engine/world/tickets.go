@@ -148,20 +148,52 @@ func (s *session) handleGMResponseResolve(ctx context.Context, payload []byte) b
 // handleGMSurveySubmit processes CMSG_GMSURVEY_SUBMIT (0x32A).
 // Reference: WorldSession::HandleGMSurveySubmit (TicketHandler.cpp:194).
 func (s *session) handleGMSurveySubmit(ctx context.Context, payload []byte) bool {
+	if len(payload) < 4 {
+		return true
+	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU32() // mainSurvey
+	mainSurvey, _ := r.ReadU32()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		now := time.Now().Unix()
+		res, err := cdb.ExecContext(ctx, "INSERT INTO gm_survey (guid, mainSurvey, comment, createTime) VALUES (?, ?, '', ?)", s.playerGUID, mainSurvey, now)
+		if err == nil {
+			surveyID, _ := res.LastInsertId()
+			for i := 0; i < 10 && r.Remaining() >= 5; i++ {
+				qID, _ := r.ReadU32()
+				ans, _ := r.ReadU8()
+				comm, _ := r.ReadCString()
+				if qID > 0 {
+					_, _ = cdb.ExecContext(ctx, "INSERT INTO gm_subsurvey (surveyId, questionId, answer, answerComment) VALUES (?, ?, ?, ?)", surveyID, qID, ans, comm)
+				}
+			}
+		}
+	}
+	s.debug("gm survey submit", "account", s.accountName, "mainSurvey", mainSurvey)
 	return true
 }
 
 // handleGMReportLag processes CMSG_GM_REPORT_LAG (0x502).
 // Reference: WorldSession::HandleReportLag (TicketHandler.cpp:248).
 func (s *session) handleGMReportLag(ctx context.Context, payload []byte) bool {
+	if len(payload) < 20 {
+		return true
+	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU32() // lagType
-	_, _ = r.ReadU32() // mapId
-	_, _ = r.ReadF32() // x
-	_, _ = r.ReadF32() // y
-	_, _ = r.ReadF32() // z
+	lagType, _ := r.ReadU32()
+	mapID, _ := r.ReadU32()
+	x, _ := r.ReadF32()
+	y, _ := r.ReadF32()
+	z, _ := r.ReadF32()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		now := time.Now().Unix()
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO lag_reports (guid, lagType, mapId, posX, posY, posZ, latency, createTime) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+			s.playerGUID, lagType, mapID, x, y, z, s.latency, now)
+	}
+	s.debug("gm report lag", "account", s.accountName, "lagType", lagType, "map", mapID)
 	return true
 }
 
