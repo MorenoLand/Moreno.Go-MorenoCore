@@ -515,3 +515,170 @@ func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool 
 	s.spawnCorpseBones(ctx)
 	return true
 }
+
+const (
+	spellEffectResurrectNew = 113 // SPELL_EFFECT_RESURRECT_NEW (SharedDefines.h:924)
+	npcFlagSpiritHealer     = 0x00004000
+	npcFlagSpiritGuide      = 0x00008000
+	npcFlagSpiritService    = npcFlagSpiritHealer | npcFlagSpiritGuide
+)
+
+// handleSelfRes mirrors WorldSession::HandleSelfResOpcode (SpellHandler.cpp:602):
+// an empty opcode that casts the spell stored in PLAYER_SELF_RES_SPELL and
+// clears the field. The stored spell's resurrect effect registers a resurrect
+// request from the player to the player, which the client answers through
+// CMSG_RESURRECT_RESPONSE, exactly like the reference EffectResurrectNew chain.
+// The SPELL_AURA_PREVENT_RESURRECTION guard has no aura system yet.
+func (s *session) handleSelfRes(ctx context.Context) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	spellID := s.player.SelfResSpell
+	if spellID == 0 {
+		return true
+	}
+	s.player.SelfResSpell = 0
+	s.sendPlayerUpdate()
+	if s.server.Data == nil {
+		return true
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found {
+		s.debug("self resurrect spell lookup failed", "account", s.accountName, "spell", spellID, "found", found, "error", err)
+		return true
+	}
+	s.finishSpellCast(ctx, 0, spellID, spell, protocol.SpellTargetData{})
+	return true
+}
+
+// applySelfResurrectEffect mirrors Spell::EffectResurrectNew (SpellEffects.cpp:246)
+// for the self-cast case: a dead player gets a resurrect request from itself
+// carrying the effect damage as health and MiscValue as mana.
+func (s *session) applySelfResurrectEffect(spell wotlk.Spell) {
+	if s.player == nil || s.player.Health > 0 {
+		return
+	}
+	if s.resurrection != nil {
+		return // already have one active request
+	}
+	for _, effect := range spell.Effects {
+		if effect.Effect != spellEffectResurrectNew {
+			continue
+		}
+		health := uint32(1)
+		if effect.BasePoints >= 0 {
+			health = uint32(effect.BasePoints + 1) // damage as computed by CalcValue
+		}
+		mana := uint32(0)
+		if effect.MiscValue > 0 {
+			mana = uint32(effect.MiscValue)
+		}
+		s.setResurrectRequestData(s.playerGUID, s.player.Map, s.player.X, s.player.Y, s.player.Z, health, mana)
+		s.sendResurrectRequest(s.playerGUID, "", false, false)
+		return
+	}
+}
+
+// creatureIsSpiritService resolves the npcflag of a spawned creature and
+// mirrors Unit::IsSpiritService (UNIT_NPC_FLAG_SPIRITHEALER | SPIRITGUIDE).
+func (s *session) creatureIsSpiritService(ctx context.Context, guid uint64) bool {
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil || guid == 0 {
+		return false
+	}
+	low := uint32(guid & 0x00FFFFFF)
+	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	var npcFlag uint32
+	var err error
+	if entry != 0 {
+		err = s.server.WorldStore.DB.QueryRowContext(ctx,
+			"SELECT COALESCE(NULLIF(c.npcflag, 0), t.npcflag, 0) FROM creature_template t LEFT JOIN creature c ON c.guid = ? WHERE t.entry = ?", low, entry).Scan(&npcFlag)
+	} else {
+		err = s.server.WorldStore.DB.QueryRowContext(ctx,
+			"SELECT COALESCE(NULLIF(c.npcflag, 0), t.npcflag, 0) FROM creature c JOIN creature_template t ON t.entry = c.id WHERE c.guid = ? OR c.guid = ?", low, guid).Scan(&npcFlag)
+	}
+	if err != nil {
+		return false
+	}
+	return npcFlag&npcFlagSpiritService != 0
+}
+
+// sendAreaSpiritHealerTime mirrors BattlegroundMgr::SendAreaSpiritHealerQueryOpcode:
+// send the time remaining until next spirit healer resurrection pulse.
+func (s *session) sendAreaSpiritHealerTime(guid uint64, timeLeft uint32) {
+	packet := protocol.NewBuffer(12)
+	packet.WriteU64(guid)
+	packet.WriteU32(timeLeft)
+	_ = s.write(uint16(protocol.OpcodeSMSG_AREA_SPIRIT_HEALER_TIME), packet.Bytes(), true)
+}
+
+// handleAreaSpiritHealerQuery mirrors WorldSession::HandleAreaSpiritHealerQueryOpcode:
+// the creature must exist and be a spirit service; the actual timer answer is
+// sent by the battleground or battlefield managers, which have no Go systems,
+// so outside those contexts the reference also sends nothing.
+func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byte) bool {
+	reader := protocol.NewReader(payload)
+	guid, err := reader.ReadU64()
+	if err != nil {
+		return false
+	}
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if !s.creatureIsSpiritService(ctx, guid) {
+		return true
+	}
+	return true
+}
+
+// handleAreaSpiritHealerQueue mirrors WorldSession::HandleAreaSpiritHealerQueueOpcode:
+// validate the spirit service creature; the resurrect queue only exists inside
+// battlegrounds and battlefields, which have no Go systems yet.
+func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byte) bool {
+	reader := protocol.NewReader(payload)
+	guid, err := reader.ReadU64()
+	if err != nil {
+		return false
+	}
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if !s.creatureIsSpiritService(ctx, guid) {
+		return true
+	}
+	return true
+}
+
+// handleHearthAndResurrect mirrors WorldSession::HandleHearthAndResurrect (MiscHandler.cpp:1505):
+// if flying, ignore. Battlefield ask-to-leave has no Go battlefield system yet.
+// If the player's area has AREA_FLAG_WINTERGRASP_2, repop the player (creating a corpse if needed),
+// resurrect with 100% health and powers, and teleport to the homebind location.
+func (s *session) handleHearthAndResurrect(ctx context.Context) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if s.isInFlight() {
+		return true
+	}
+	canHearthAndRes := false
+	if s.server.Data != nil && s.player.Zone != 0 {
+		area, found, err := s.server.Data.Area(s.player.Zone)
+		if err == nil && found && area.Flags&wotlk.AreaFlagWintergrasp2 != 0 {
+			canHearthAndRes = true
+		}
+	}
+	if !canHearthAndRes {
+		return true
+	}
+	s.buildPlayerRepop(ctx)
+	s.resurrectPlayer(ctx, 1.0)
+	destMap := s.player.HomebindMap
+	destX := s.player.HomebindX
+	destY := s.player.HomebindY
+	destZ := s.player.HomebindZ
+	if destMap == 0 && destX == 0 && destY == 0 && destZ == 0 {
+		destMap = s.player.Map
+		destX, destY, destZ = s.player.X, s.player.Y, s.player.Z
+	}
+	s.teleportTo(destMap, destX, destY, destZ, s.player.Orientation)
+	return true
+}

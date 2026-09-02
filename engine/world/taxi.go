@@ -14,15 +14,15 @@ import (
 
 const (
 	unitNPCFlagFlightmaster uint32 = 0x00002000
-	playerExtraTaxiCheat     uint32 = 0x00000008
+	playerExtraTaxiCheat    uint32 = 0x00000008
 	taxiMaskSize                   = 8
 )
 
 // TrinityCore Player.h extra flags and transient PLAYER_FLAGS bits.
 const (
-	playerExtraGMOn          uint32 = 0x00000001
-	playerExtraGMInvisible   uint32 = 0x00000010
-	playerExtraGMChat        uint32 = 0x00000020
+	playerExtraGMOn            uint32 = 0x00000001
+	playerExtraGMInvisible     uint32 = 0x00000010
+	playerExtraGMChat          uint32 = 0x00000020
 	playerFlagAFK              uint32 = 0x00000002
 	playerFlagDND              uint32 = 0x00000004
 	playerFlagGM               uint32 = 0x00000008
@@ -355,13 +355,20 @@ func (s *session) startTaxiFlight(pathID, mountDisplay uint32, takeoff bool) {
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "UPDATE characters SET position_x = ?, position_y = ?, position_z = ? WHERE guid = ?", last.X, last.Y, last.Z, s.playerGUID)
 	}
+	s.inFlight = true
 	// Dismount when the flight window elapses.
 	time.AfterFunc(time.Duration(duration)*time.Millisecond, func() {
+		s.inFlight = false
 		if s.currentPlayer() != nil {
 			s.player.MountDisplayID = 0
 			s.sendPlayerMountUpdate()
 		}
 	})
+}
+
+// isInFlight mirrors Unit::IsInFlight (UNIT_STATE_IN_FLIGHT).
+func (s *session) isInFlight() bool {
+	return s.inFlight
 }
 
 // initTaxiNodesForLevel mirrors PlayerTaxi::InitTaxiNodesForLevel for the

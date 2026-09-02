@@ -101,6 +101,20 @@ type WorldSafeLoc struct {
 	Z     float32
 }
 
+// AreaTableEntry mirrors AreaTableEntry (DBCStructure.h): fields ID (u32),
+// ContinentID/map (u32), ParentAreaID/zone (u32), AreaBit (u32), and Flags (u32).
+type AreaTableEntry struct {
+	ID           uint32
+	ContinentID  uint32
+	ParentAreaID uint32
+	AreaBit      uint32
+	Flags        uint32
+}
+
+const (
+	AreaFlagWintergrasp2 uint32 = 0x08000000 // AREA_FLAG_WINTERGRASP_2 (DBCEnums.h:274)
+)
+
 func NewStore(dir string) *Store {
 	return &Store{Dir: dir, files: make(map[string]*dbc.File)}
 }
@@ -451,4 +465,39 @@ func (s *Store) WorldSafeLoc(id uint32) (WorldSafeLoc, bool, error) {
 		return WorldSafeLoc{}, false, err
 	}
 	return WorldSafeLoc{ID: id, MapID: mapID, X: x, Y: y, Z: z}, true, nil
+}
+
+// Area loads one AreaTable.dbc record by id. Record layout is "niiiixxxxxissssssssssssssssxiiiiixxx".
+func (s *Store) Area(id uint32) (AreaTableEntry, bool, error) {
+	file, err := s.File("AreaTable")
+	if err != nil {
+		return AreaTableEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return AreaTableEntry{}, false, nil
+	}
+	continentID, err := record.Uint32(1)
+	if err != nil {
+		return AreaTableEntry{}, false, err
+	}
+	parentAreaID, err := record.Uint32(2)
+	if err != nil {
+		return AreaTableEntry{}, false, err
+	}
+	areaBit, err := record.Uint32(3)
+	if err != nil {
+		return AreaTableEntry{}, false, err
+	}
+	flags, err := record.Uint32(4)
+	if err != nil {
+		return AreaTableEntry{}, false, err
+	}
+	return AreaTableEntry{
+		ID:           id,
+		ContinentID:  continentID,
+		ParentAreaID: parentAreaID,
+		AreaBit:      areaBit,
+		Flags:        flags,
+	}, true, nil
 }

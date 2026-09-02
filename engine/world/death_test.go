@@ -31,6 +31,9 @@ func newDeathTestSession(t *testing.T, player *playerState) (*session, net.Conn,
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, death_expire_time INTEGER NOT NULL DEFAULT 0)",
 		"CREATE TABLE corpse (guid INTEGER NOT NULL, posX REAL NOT NULL, posY REAL NOT NULL, posZ REAL NOT NULL, orientation REAL NOT NULL, mapId INTEGER NOT NULL, displayId INTEGER NOT NULL DEFAULT 0, itemCache TEXT NOT NULL, bytes1 INTEGER NOT NULL DEFAULT 0, bytes2 INTEGER NOT NULL DEFAULT 0, guildId INTEGER NOT NULL DEFAULT 0, flags INTEGER NOT NULL DEFAULT 0, dynFlags INTEGER NOT NULL DEFAULT 0, time INTEGER NOT NULL DEFAULT 0, corpseType INTEGER NOT NULL DEFAULT 0, instanceId INTEGER NOT NULL DEFAULT 0, phaseMask INTEGER NOT NULL DEFAULT 1)",
 		"CREATE TABLE graveyard_zone (ID INTEGER NOT NULL, GhostZone INTEGER NOT NULL, Faction INTEGER NOT NULL)",
+		"CREATE TABLE IF NOT EXISTS creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL DEFAULT 0, map INTEGER NOT NULL DEFAULT 0, zoneId INTEGER NOT NULL DEFAULT 0, areaId INTEGER NOT NULL DEFAULT 0, position_x REAL NOT NULL DEFAULT 0, position_y REAL NOT NULL DEFAULT 0, position_z REAL NOT NULL DEFAULT 0, orientation REAL NOT NULL DEFAULT 0, curhealth INTEGER NOT NULL DEFAULT 1, curmana INTEGER NOT NULL DEFAULT 0, npcflag INTEGER NOT NULL DEFAULT 0, unit_flags INTEGER NOT NULL DEFAULT 0)",
+		"CREATE TABLE IF NOT EXISTS creature_template (entry INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', npcflag INTEGER NOT NULL DEFAULT 0, unit_flags INTEGER NOT NULL DEFAULT 0)",
+		"CREATE TABLE IF NOT EXISTS character_homebind (guid INTEGER PRIMARY KEY, mapId INTEGER NOT NULL DEFAULT 0, zoneId INTEGER NOT NULL DEFAULT 0, posX REAL NOT NULL DEFAULT 0, posY REAL NOT NULL DEFAULT 0, posZ REAL NOT NULL DEFAULT 0)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -68,6 +71,56 @@ func writeWorldSafeLocsDBC(t *testing.T, dir string, records [][5]uint32) {
 	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
 	binary.LittleEndian.PutUint32(header[16:20], 1) // string block size
 	if err := os.WriteFile(filepath.Join(dir, "WorldSafeLocs.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeSpellDBC writes a minimal Spell.dbc containing one spell with the given effect.
+func writeSpellDBC(t *testing.T, dir string, id, effect uint32, basePoints, miscValue int32) {
+	t.Helper()
+	const fieldCount = 234
+	record := make([]uint32, fieldCount)
+	record[0] = id
+	record[71] = effect
+	record[80] = uint32(basePoints)
+	record[110] = uint32(miscValue)
+	recordBytes := make([]byte, fieldCount*4)
+	for i, val := range record {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:(i+1)*4], val)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dir, "Spell.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeAreaTableDBC writes a minimal AreaTable.dbc with given records.
+func writeAreaTableDBC(t *testing.T, dir string, records [][5]uint32) {
+	t.Helper()
+	const fieldCount = 36
+	recordBytes := make([]byte, 0, len(records)*fieldCount*4)
+	for _, record := range records {
+		for _, value := range record {
+			var encoded [4]byte
+			binary.LittleEndian.PutUint32(encoded[:], value)
+			recordBytes = append(recordBytes, encoded[:]...)
+		}
+		for i := 5; i < fieldCount; i++ {
+			recordBytes = append(recordBytes, 0, 0, 0, 0)
+		}
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], uint32(len(records)))
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dir, "AreaTable.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -474,5 +527,197 @@ func TestSendResurrectRequestPacketLayout(t *testing.T) {
 	ignoreTimer, err2 := reader.ReadU8()
 	if err != nil || err2 != nil || sickness != 1 || ignoreTimer != 0 {
 		t.Fatalf("flags=%d/%d err=%v/%v", sickness, ignoreTimer, err, err2)
+	}
+}
+
+func TestHandleSelfResFlow(t *testing.T) {
+	dbcDir := t.TempDir()
+	writeSpellDBC(t, dbcDir, 20608, spellEffectResurrectNew, 199, 150)
+	ghost := &playerState{
+		GUID:         9,
+		Health:       0,
+		MaxHealth:    500,
+		PlayerFlags:  playerFlagGhost,
+		SelfResSpell: 20608,
+		Map:          1,
+		X:            10.0,
+		Y:            20.0,
+		Z:            30.0,
+	}
+	state, clientConn, server := newDeathTestSession(t, ghost)
+	server.Data = wotlk.NewStore(dbcDir)
+	drainServerFrames(t, clientConn)
+
+	if !state.handleSelfRes(context.Background()) {
+		t.Fatal("handleSelfRes failed")
+	}
+	if ghost.SelfResSpell != 0 {
+		t.Fatalf("SelfResSpell not cleared: %d", ghost.SelfResSpell)
+	}
+	if state.resurrection == nil {
+		t.Fatal("resurrection request data was not created")
+	}
+	if state.resurrection.GUID != 9 || state.resurrection.Health != 200 || state.resurrection.Mana != 150 {
+		t.Fatalf("unexpected resurrect data: %+v", state.resurrection)
+	}
+
+	// Calling again with SelfResSpell=0 is a no-op
+	if !state.handleSelfRes(context.Background()) {
+		t.Fatal("handleSelfRes with 0 spell failed")
+	}
+
+	// Alive player calling handleSelfRes clears the field but does not create a resurrect request
+	alive := &playerState{GUID: 10, Health: 100, SelfResSpell: 20608}
+	state2, clientConn2, server2 := newDeathTestSession(t, alive)
+	server2.Data = wotlk.NewStore(dbcDir)
+	drainServerFrames(t, clientConn2)
+	if !state2.handleSelfRes(context.Background()) {
+		t.Fatal("alive handleSelfRes failed")
+	}
+	if state2.resurrection != nil {
+		t.Fatal("alive player should not receive resurrect request")
+	}
+	if alive.SelfResSpell != 0 {
+		t.Fatalf("alive player SelfResSpell not cleared: %d", alive.SelfResSpell)
+	}
+}
+
+func TestAreaSpiritHealerQueryAndQueue(t *testing.T) {
+	player := &playerState{GUID: 9, Health: 1, PlayerFlags: playerFlagGhost}
+	state, clientConn, server := newDeathTestSession(t, player)
+	drainServerFrames(t, clientConn)
+
+	// Insert a spirit healer creature and a regular non-spirit creature
+	if _, err := server.WorldStore.DB.Exec("INSERT INTO creature_template (entry, name, npcflag) VALUES (1234, 'Spirit Healer', 16384), (5678, 'Vendor', 128)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.WorldStore.DB.Exec("INSERT INTO creature (guid, id, npcflag) VALUES (55, 1234, 0), (56, 5678, 0)"); err != nil {
+		t.Fatal(err)
+	}
+
+	spiritGUID := uint64(55) | (uint64(1234) << 24) | (uint64(0xF130) << 48)
+	vendorGUID := uint64(56) | (uint64(5678) << 24) | (uint64(0xF130) << 48)
+
+	queryPayload := protocol.NewBuffer(8)
+	queryPayload.WriteU64(spiritGUID)
+
+	// Valid query
+	if !state.handleAreaSpiritHealerQuery(context.Background(), queryPayload.Bytes()) {
+		t.Fatal("valid spirit healer query failed")
+	}
+	// Truncated query payload
+	if state.handleAreaSpiritHealerQuery(context.Background(), queryPayload.Bytes()[:4]) {
+		t.Fatal("truncated query payload should fail")
+	}
+	// Non-spirit creature query
+	vendorPayload := protocol.NewBuffer(8)
+	vendorPayload.WriteU64(vendorGUID)
+	if !state.handleAreaSpiritHealerQuery(context.Background(), vendorPayload.Bytes()) {
+		t.Fatal("non-spirit creature query should succeed without error")
+	}
+
+	// Valid queue
+	if !state.handleAreaSpiritHealerQueue(context.Background(), queryPayload.Bytes()) {
+		t.Fatal("valid spirit healer queue failed")
+	}
+	// Truncated queue payload
+	if state.handleAreaSpiritHealerQueue(context.Background(), queryPayload.Bytes()[:4]) {
+		t.Fatal("truncated queue payload should fail")
+	}
+	// Non-spirit creature queue
+	if !state.handleAreaSpiritHealerQueue(context.Background(), vendorPayload.Bytes()) {
+		t.Fatal("non-spirit creature queue should succeed without error")
+	}
+}
+
+func TestSendAreaSpiritHealerTimePacketLayout(t *testing.T) {
+	player := &playerState{GUID: 9, Health: 1, PlayerFlags: playerFlagGhost}
+	state, clientConn, _ := newDeathTestSession(t, player)
+	result := make(chan bool, 1)
+	go func() { result <- true; state.sendAreaSpiritHealerTime(77, 15000) }()
+	if err := clientConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-result
+	if opcode != uint16(protocol.OpcodeSMSG_AREA_SPIRIT_HEALER_TIME) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	if len(payload) != 12 {
+		t.Fatalf("expected 12 bytes, got %d", len(payload))
+	}
+	reader := protocol.NewReader(payload)
+	guid, err := reader.ReadU64()
+	if err != nil || guid != 77 {
+		t.Fatalf("guid=%d err=%v", guid, err)
+	}
+	timeLeft, err := reader.ReadU32()
+	if err != nil || timeLeft != 15000 {
+		t.Fatalf("timeLeft=%d err=%v", timeLeft, err)
+	}
+}
+
+func TestHandleHearthAndResurrect(t *testing.T) {
+	dbcDir := t.TempDir()
+	writeAreaTableDBC(t, dbcDir, [][5]uint32{{4197, 571, 0, 0, wotlk.AreaFlagWintergrasp2}})
+	ghost := &playerState{
+		GUID:         9,
+		Health:       0,
+		MaxHealth:    1000,
+		PlayerFlags:  playerFlagGhost,
+		Zone:         4197,
+		Map:          571,
+		X:            10.0,
+		Y:            20.0,
+		Z:            30.0,
+		HomebindMap:  0,
+		HomebindZone: 12,
+		HomebindX:    100.5,
+		HomebindY:    200.5,
+		HomebindZ:    30.5,
+	}
+	state, clientConn, server := newDeathTestSession(t, ghost)
+	server.Data = wotlk.NewStore(dbcDir)
+	drainServerFrames(t, clientConn)
+
+	if !state.handleHearthAndResurrect(context.Background()) {
+		t.Fatal("handleHearthAndResurrect failed")
+	}
+	if ghost.PlayerFlags&playerFlagGhost != 0 {
+		t.Fatal("ghost flag not cleared")
+	}
+	if ghost.Health != 1000 {
+		t.Fatalf("health not restored to max: %d", ghost.Health)
+	}
+	if ghost.Map != 0 || ghost.X != 100.5 || ghost.Y != 200.5 || ghost.Z != 30.5 {
+		t.Fatalf("player not teleported to homebind: %+v", ghost)
+	}
+
+	// Flying player should be ignored
+	ghost2 := &playerState{GUID: 10, Health: 0, PlayerFlags: playerFlagGhost, Zone: 4197}
+	state2, clientConn2, server2 := newDeathTestSession(t, ghost2)
+	server2.Data = wotlk.NewStore(dbcDir)
+	state2.inFlight = true
+	drainServerFrames(t, clientConn2)
+	if !state2.handleHearthAndResurrect(context.Background()) {
+		t.Fatal("inFlight handleHearthAndResurrect failed")
+	}
+	if ghost2.PlayerFlags&playerFlagGhost == 0 || ghost2.Health != 0 {
+		t.Fatal("inFlight player was resurrected")
+	}
+
+	// Non-Wintergrasp area should be ignored
+	ghost3 := &playerState{GUID: 11, Health: 0, PlayerFlags: playerFlagGhost, Zone: 12}
+	state3, clientConn3, server3 := newDeathTestSession(t, ghost3)
+	server3.Data = wotlk.NewStore(dbcDir)
+	drainServerFrames(t, clientConn3)
+	if !state3.handleHearthAndResurrect(context.Background()) {
+		t.Fatal("non-wintergrasp handleHearthAndResurrect failed")
+	}
+	if ghost3.PlayerFlags&playerFlagGhost == 0 || ghost3.Health != 0 {
+		t.Fatal("non-wintergrasp player was resurrected")
 	}
 }

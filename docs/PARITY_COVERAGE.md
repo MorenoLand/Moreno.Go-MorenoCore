@@ -4,10 +4,10 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 163 / 34503 | — |
+| Server source files / lines | 1410 / 710273 | 163 / 34773 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 178 | 549 |
-| Client behavioral opcode handlers | 430 | 178 | 254 |
+| Client opcode registrations | 727 | 182 | 545 |
+| Client behavioral opcode handlers | 430 | 182 | 250 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
@@ -19,8 +19,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_ACCEPT_LEVEL_GRANT`
 - `CMSG_ALTER_APPEARANCE`
 - `CMSG_AREATRIGGER`
-- `CMSG_AREA_SPIRIT_HEALER_QUERY`
-- `CMSG_AREA_SPIRIT_HEALER_QUEUE`
 - `CMSG_ARENA_TEAM_ACCEPT`
 - `CMSG_ARENA_TEAM_DECLINE`
 - `CMSG_ARENA_TEAM_DISBAND`
@@ -139,7 +137,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_GUILD_REMOVE`
 - `CMSG_GUILD_SET_OFFICER_NOTE`
 - `CMSG_GUILD_SET_PUBLIC_NOTE`
-- `CMSG_HEARTH_AND_RESURRECT`
 - `CMSG_INSPECT`
 - `CMSG_INSTANCE_LOCK_RESPONSE`
 - `CMSG_ITEM_NAME_QUERY`
@@ -212,7 +209,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_RESET_INSTANCES`
 - `CMSG_SEARCH_LFG_JOIN`
 - `CMSG_SEARCH_LFG_LEAVE`
-- `CMSG_SELF_RES`
 - `CMSG_SET_ACTIVE_VOICE_CHANNEL`
 - `CMSG_SET_AMMO`
 - `CMSG_SET_CHANNEL_WATCH`
