@@ -41,6 +41,7 @@ const (
 	unitFieldMaxLevel                  = 1279
 	unitFieldKnownCurrencies           = 632
 	unitFieldWatchedFaction            = 1230
+	unitFieldChosenTitle               = 1195
 	unitFieldAmmoID                    = 1198
 	unitFieldPlayerSelfResSpell        = 1199 // PLAYER_SELF_RES_SPELL = UNIT_END + 0x041B
 	playerQuestLogStart                = 158  // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
@@ -154,6 +155,7 @@ type playerState struct {
 	KnownCurrency    uint32
 	WatchedFaction   uint32
 	AmmoID           uint32
+	ChosenTitle      uint32
 	ActionBars       uint32
 	Skills           []playerSkill
 	Spells           []learnedSpell
@@ -542,6 +544,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldMaxLevel] = 80
 	values[unitFieldKnownCurrencies] = state.KnownCurrency
 	values[unitFieldWatchedFaction] = state.WatchedFaction
+	values[unitFieldChosenTitle] = state.ChosenTitle
 	values[unitFieldAmmoID] = state.AmmoID
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		entry := state.QuestLog[slot]
@@ -956,3 +959,82 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 	}
 	return nil
 }
+
+// handleShowingCloak processes CMSG_SHOWING_CLOAK (0x2BA).
+// Reference: WorldSession::HandleShowingCloakOpcode (CharacterHandler.cpp:1103).
+func (s *session) handleShowingCloak(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	show := true
+	if len(payload) > 0 {
+		show = payload[0] != 0
+	}
+	const playerFlagsHideCloak = 0x800
+	if show {
+		s.player.PlayerFlags &^= playerFlagsHideCloak
+	} else {
+		s.player.PlayerFlags |= playerFlagsHideCloak
+	}
+	s.sendPlayerUpdate()
+	return true
+}
+
+// handleShowingHelm processes CMSG_SHOWING_HELM (0x2B9).
+// Reference: WorldSession::HandleShowingHelmOpcode (CharacterHandler.cpp:1096).
+func (s *session) handleShowingHelm(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	show := true
+	if len(payload) > 0 {
+		show = payload[0] != 0
+	}
+	const playerFlagsHideHelm = 0x400
+	if show {
+		s.player.PlayerFlags &^= playerFlagsHideHelm
+	} else {
+		s.player.PlayerFlags |= playerFlagsHideHelm
+	}
+	s.sendPlayerUpdate()
+	return true
+}
+
+// handleSetTitle processes CMSG_SET_TITLE (0x374).
+// Reference: WorldSession::HandleSetTitleOpcode (MiscHandler.cpp:1236).
+func (s *session) handleSetTitle(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	title, err := r.ReadI32()
+	if err != nil || title <= 0 {
+		s.player.ChosenTitle = 0
+	} else {
+		s.player.ChosenTitle = uint32(title)
+	}
+	s.sendPlayerUpdate()
+	return true
+}
+
+// handleTogglePvP processes CMSG_TOGGLE_PVP (0x253).
+// Reference: WorldSession::HandleTogglePvP (MiscHandler.cpp:485).
+func (s *session) handleTogglePvP(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	const (
+		playerFlagsInPvP    = 0x02
+		playerFlagsPvPTimer = 0x04
+	)
+	if s.player.PlayerFlags&playerFlagsInPvP != 0 {
+		s.player.PlayerFlags &^= playerFlagsInPvP
+		s.player.PlayerFlags |= playerFlagsPvPTimer
+	} else {
+		s.player.PlayerFlags |= playerFlagsInPvP
+		s.player.PlayerFlags &^= playerFlagsPvPTimer
+	}
+	s.sendPlayerUpdate()
+	return true
+}
+

@@ -446,3 +446,38 @@ func (s *session) handleGetMirrorImageData(ctx context.Context, payload []byte) 
 	return true
 }
 
+// handleTotemDestroyed processes CMSG_TOTEM_DESTROYED (0x413).
+// Reference: WorldSession::HandleTotemDestroyed (SpellHandler.cpp:787).
+func (s *session) handleTotemDestroyed(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleSpellClick processes CMSG_SPELLCLICK (0x410).
+// Reference: WorldSession::HandleSpellClick (SpellHandler.cpp:800).
+func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleTalentWipeConfirm processes MSG_TALENT_WIPE_CONFIRM (0x2AA).
+// Reference: WorldSession::HandleTalentWipeConfirmOpcode (SpellHandler.cpp:732).
+func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	wipeGUID, _ := r.ReadU64()
+
+	// Clear player talents
+	s.player.Talents = make(map[uint32]uint8)
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ?", s.playerGUID)
+	}
+
+	buf := protocol.NewBuffer(12)
+	buf.WriteU64(wipeGUID)
+	buf.WriteU32(0) // free or cost
+	_ = s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), buf.Bytes(), true)
+	return true
+}
+
+

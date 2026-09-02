@@ -309,3 +309,88 @@ func (s *session) handleForceTurnRateChangeAck(ctx context.Context, payload []by
 	return true
 }
 
+func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *session) {
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for target := range s.sessions {
+		if !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != source.player.Map {
+			continue
+		}
+		_ = target.write(opcode, payload, true)
+	}
+}
+
+// handleMoveFeatherFallAck processes CMSG_MOVE_FEATHER_FALL_ACK (0x2CF).
+func (s *session) handleMoveFeatherFallAck(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMoveHoverAck processes CMSG_MOVE_HOVER_ACK (0x0F6).
+func (s *session) handleMoveHoverAck(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMoveWaterWalkAck processes CMSG_MOVE_WATER_WALK_ACK (0x2D0).
+func (s *session) handleMoveWaterWalkAck(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMoveKnockBackAck processes CMSG_MOVE_KNOCK_BACK_ACK (0x0F0).
+func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMoveNotActiveMover processes CMSG_MOVE_NOT_ACTIVE_MOVER (0x2D1).
+func (s *session) handleMoveNotActiveMover(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMoveFallReset processes CMSG_MOVE_FALL_RESET (0x0CA).
+func (s *session) handleMoveFallReset(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMoveSplineDone processes CMSG_MOVE_SPLINE_DONE (0x2C9).
+func (s *session) handleMoveSplineDone(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMoveChngTransport processes CMSG_MOVE_CHNG_TRANSPORT (0x38D).
+func (s *session) handleMoveChngTransport(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMoveSetFly processes CMSG_MOVE_SET_FLY (0x0D6).
+func (s *session) handleMoveSetFly(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMoveTimeSkipped processes CMSG_MOVE_TIME_SKIPPED (0x2CE).
+func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	buf := protocol.NewBuffer(len(payload) + 8)
+	buf.WritePackedGUID(s.playerGUID)
+	buf.Write(payload)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s)
+	return true
+}
+
+// handleSummonResponse processes CMSG_SUMMON_RESPONSE (0x1AC).
+func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleMountSpecialAnim processes CMSG_MOUNTSPECIAL_ANIM (0x171).
+func (s *session) handleMountSpecialAnim(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	buf := protocol.NewBuffer(8)
+	buf.WritePackedGUID(s.playerGUID)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_MOUNTSPECIAL_ANIM), buf.Bytes(), s)
+	return true
+}
+
+

@@ -170,3 +170,85 @@ func (s *session) freeInventorySlot(ctx context.Context, bagKey int64) (uint8, b
 	}
 	return 0, false
 }
+
+// handleOpenItem processes CMSG_OPEN_ITEM (0x0AC).
+// Reference: WorldSession::HandleOpenItemOpcode (SpellHandler.cpp:183).
+func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleReadItem processes CMSG_READ_ITEM (0x0AD).
+// Reference: WorldSession::HandleReadItem (ItemHandler.cpp:340).
+func (s *session) handleReadItem(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
+		return true
+	}
+	bag := payload[0]
+	slot := payload[1]
+	itemGUID, _, _, err := s.inventoryItemAt(ctx, bag, slot)
+	if err != nil || itemGUID == 0 {
+		return true
+	}
+	buf := protocol.NewBuffer(8)
+	buf.WriteU64(uint64(itemGUID))
+	_ = s.write(uint16(protocol.OpcodeSMSG_READ_ITEM_OK), buf.Bytes(), true)
+	return true
+}
+
+// handlePageTextQuery processes CMSG_PAGE_TEXT_QUERY (0x05A).
+// Reference: WorldSession::HandleQueryPageText (QueryHandler.cpp:277).
+func (s *session) handlePageTextQuery(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	pageID, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+
+	var text string
+	var nextPageID uint32
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT Text, NextPageID FROM page_text WHERE ID = ? LIMIT 1", pageID).Scan(&text, &nextPageID)
+	}
+
+	buf := protocol.NewBuffer(32 + len(text))
+	buf.WriteU32(pageID)
+	buf.WriteCString(text)
+	buf.WriteU32(nextPageID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_PAGE_TEXT_QUERY_RESPONSE), buf.Bytes(), true)
+	return true
+}
+
+// handleWrapItem processes CMSG_WRAP_ITEM (0x1D3).
+// Reference: WorldSession::HandleWrapItemOpcode (ItemHandler.cpp:802).
+func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleRepairItem processes CMSG_REPAIR_ITEM (0x1F8 / 0x2A8).
+// Reference: WorldSession::HandleRepairItemOpcode (NPCHandler.cpp:717).
+func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleSocketGems processes CMSG_SOCKET_GEMS (0x464).
+// Reference: WorldSession::HandleSocketOpcode (ItemHandler.cpp:920).
+func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleSetAmmo processes CMSG_SET_AMMO (0x268).
+// Reference: WorldSession::HandleSetAmmoOpcode (ItemHandler.cpp:772).
+func (s *session) handleSetAmmo(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	itemEntry, _ := r.ReadU32()
+	s.player.AmmoID = itemEntry
+	s.sendPlayerUpdate()
+	return true
+}
+
