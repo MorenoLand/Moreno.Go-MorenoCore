@@ -1,0 +1,216 @@
+﻿package world
+
+import (
+	"context"
+	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+)
+
+// handleBattlemasterHello processes CMSG_BATTLEMASTER_HELLO (0x2D7).
+// Reference: WorldSession::HandleBattlemasterHelloOpcode (BattleGroundHandler.cpp:41).
+func (s *session) handleBattlemasterHello(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	bmGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+
+	return s.sendBattlefieldList(bmGUID, 0, 1) // default to Warsong Gulch or first BG
+}
+
+// handleBattlefieldList processes CMSG_BATTLEFIELD_LIST (0x23C).
+// Reference: WorldSession::HandleBattlefieldListOpcode (BattleGroundHandler.cpp:338).
+func (s *session) handleBattlefieldList(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	bgTypeID, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	fromWhere, _ := r.ReadU8()
+
+	return s.sendBattlefieldList(0, fromWhere, bgTypeID)
+}
+
+func (s *session) sendBattlefieldList(bmGUID uint64, fromWhere uint8, bgTypeID uint32) bool {
+	buf := protocol.NewBuffer(64)
+	buf.WriteU64(bmGUID)
+	buf.WriteU8(fromWhere)
+	buf.WriteU32(bgTypeID)
+	buf.WriteU8(0) // unk
+	buf.WriteU8(0) // unk
+	buf.WriteU8(0) // hasWin
+	buf.WriteU32(0) // winHonor
+	buf.WriteU32(0) // winArena
+	buf.WriteU32(0) // lossHonor
+	buf.WriteU8(0) // isRandom
+	buf.WriteU32(0) // count of active instances
+	return s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_LIST), buf.Bytes(), true) == nil
+}
+
+// handleBattlemasterJoin processes CMSG_BATTLEMASTER_JOIN (0x2EE).
+// Reference: WorldSession::HandleBattlemasterJoinOpcode (BattleGroundHandler.cpp:74).
+func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 17 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU64() // guid
+	bgTypeID, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	instanceID, _ := r.ReadU32()
+	joinAsGroup, _ := r.ReadU8()
+	_ = joinAsGroup
+
+	// Find free queue slot
+	slot := -1
+	for i := 0; i < len(s.bgQueues); i++ {
+		if !s.bgQueues[i].Active {
+			slot = i
+			break
+		}
+	}
+	if slot == -1 {
+		return true // Queues full
+	}
+
+	s.bgQueues[slot] = bgQueueEntry{
+		Active:     true,
+		BgTypeID:   bgTypeID,
+		InstanceID: instanceID,
+		JoinTime:   time.Now(),
+		Status:     1, // STATUS_WAIT_QUEUE
+	}
+
+	s.sendBattlefieldStatus(uint8(slot))
+	s.debug("queued for battleground", "account", s.accountName, "bg", bgTypeID, "slot", slot)
+	return true
+}
+
+// handleBattlemasterJoinArena processes CMSG_BATTLEMASTER_JOIN_ARENA (0x358).
+// Reference: WorldSession::HandleBattlemasterJoinArena (BattleGroundHandler.cpp:166).
+func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU64() // guid
+	arenaType, _ := r.ReadU8()
+	_ = arenaType
+
+	slot := -1
+	for i := 0; i < len(s.bgQueues); i++ {
+		if !s.bgQueues[i].Active {
+			slot = i
+			break
+		}
+	}
+	if slot == -1 {
+		return true
+	}
+
+	s.bgQueues[slot] = bgQueueEntry{
+		Active:     true,
+		BgTypeID:   4, // BATTLEGROUND_AA (All Arenas)
+		InstanceID: 0,
+		JoinTime:   time.Now(),
+		Status:     1,
+	}
+
+	s.sendBattlefieldStatus(uint8(slot))
+	s.debug("queued for arena", "account", s.accountName, "slot", slot)
+	return true
+}
+
+// handleBattlefieldPort processes CMSG_BATTLEFIELD_PORT (0x2D5).
+// Reference: WorldSession::HandleBattleFieldPortOpcode (BattleGroundHandler.cpp:357).
+func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 9 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU8()  // type
+	_, _ = r.ReadU8()  // unk2
+	bgTypeID, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	_, _ = r.ReadU16() // unk
+	action, _ := r.ReadU8()
+
+	if action == 0 {
+		// Leave queue
+		for i := 0; i < len(s.bgQueues); i++ {
+			if s.bgQueues[i].Active && s.bgQueues[i].BgTypeID == bgTypeID {
+				s.bgQueues[i] = bgQueueEntry{}
+				s.sendBattlefieldStatus(uint8(i))
+				break
+			}
+		}
+	}
+
+	return true
+}
+
+// handleBattlefieldStatus processes CMSG_BATTLEFIELD_STATUS (0x2D3).
+// Reference: WorldSession::HandleBattlefieldStatusOpcode (BattleGroundHandler.cpp:546).
+func (s *session) handleBattlefieldStatus(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return false
+	}
+	for slot := uint8(0); slot < uint8(len(s.bgQueues)); slot++ {
+		s.sendBattlefieldStatus(slot)
+	}
+	return true
+}
+
+func (s *session) sendBattlefieldStatus(slot uint8) {
+	if int(slot) >= len(s.bgQueues) {
+		return
+	}
+	entry := s.bgQueues[slot]
+	if !entry.Active || entry.Status == 0 {
+		buf := protocol.NewBuffer(12)
+		buf.WriteU32(uint32(slot))
+		buf.WriteU64(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_STATUS), buf.Bytes(), true)
+		return
+	}
+
+	buf := protocol.NewBuffer(40)
+	buf.WriteU32(uint32(slot))
+	buf.WriteU8(0) // arenatype
+	buf.WriteU8(0) // isArena
+	buf.WriteU32(entry.BgTypeID)
+	buf.WriteU16(0x1F90)
+	buf.WriteU8(10) // minLevel
+	buf.WriteU8(80) // maxLevel
+	buf.WriteU32(entry.InstanceID)
+	buf.WriteU8(0) // isRated
+	buf.WriteU32(entry.Status) // STATUS_WAIT_QUEUE = 1
+	switch entry.Status {
+	case 1: // wait queue
+		buf.WriteU32(120000) // average wait time ms
+		timeInQueue := uint32(time.Since(entry.JoinTime).Milliseconds())
+		buf.WriteU32(timeInQueue)
+	case 2: // wait join
+		buf.WriteU32(0) // map id
+		buf.WriteU64(0)
+		buf.WriteU32(120000) // time to remove
+	case 3: // in progress
+		buf.WriteU32(0) // map id
+		buf.WriteU64(0)
+		buf.WriteU32(0)
+		buf.WriteU32(0)
+		buf.WriteU8(0)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_STATUS), buf.Bytes(), true)
+}

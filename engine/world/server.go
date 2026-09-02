@@ -116,6 +116,15 @@ type session struct {
 	inFlight           bool
 	buyback            []buybackEntry
 	arenaTeamInvited   uint32
+	bgQueues           [2]bgQueueEntry
+}
+
+type bgQueueEntry struct {
+	Active     bool
+	BgTypeID   uint32
+	InstanceID uint32
+	JoinTime   time.Time
+	Status     uint32
 }
 
 type buybackEntry struct {
@@ -1048,6 +1057,30 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_ARENA_TEAM_LEADER):
 			if !state.authed || !state.handleArenaTeamLeader(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BATTLEMASTER_HELLO):
+			if !state.authed || !state.handleBattlemasterHello(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BATTLEFIELD_LIST):
+			if !state.authed || !state.handleBattlefieldList(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BATTLEMASTER_JOIN):
+			if !state.authed || !state.handleBattlemasterJoin(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BATTLEMASTER_JOIN_ARENA):
+			if !state.authed || !state.handleBattlemasterJoinArena(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BATTLEFIELD_PORT):
+			if !state.authed || !state.handleBattlefieldPort(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BATTLEFIELD_STATUS):
+			if !state.authed || !state.handleBattlefieldStatus(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):

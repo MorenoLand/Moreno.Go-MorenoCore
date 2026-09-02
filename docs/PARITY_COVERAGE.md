@@ -4,27 +4,21 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 183 / 39745 | — |
+| Server source files / lines | 1410 / 710273 | 185 / 40070 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 234 | 493 |
-| Client behavioral opcode handlers | 430 | 234 | 198 |
+| Client opcode registrations | 727 | 240 | 487 |
+| Client behavioral opcode handlers | 430 | 240 | 192 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 72 / 8668 | — |
+| Test source files / lines | 9 / 1390 | 73 / 8744 | — |
 
 ## Missing behavioral client opcode handlers
 
-- `CMSG_BATTLEFIELD_LIST`
 - `CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE`
 - `CMSG_BATTLEFIELD_MGR_EXIT_REQUEST`
 - `CMSG_BATTLEFIELD_MGR_QUEUE_INVITE_RESPONSE`
-- `CMSG_BATTLEFIELD_PORT`
-- `CMSG_BATTLEFIELD_STATUS`
-- `CMSG_BATTLEMASTER_HELLO`
-- `CMSG_BATTLEMASTER_JOIN`
-- `CMSG_BATTLEMASTER_JOIN_ARENA`
 - `CMSG_CALENDAR_ADD_EVENT`
 - `CMSG_CALENDAR_ARENA_TEAM`
 - `CMSG_CALENDAR_COMPLAIN`
