@@ -97,6 +97,15 @@ func TestCreatureSpeedMultipliersUseReferenceBaseSpeeds(t *testing.T) {
 	}
 }
 
+func TestCreatureCombatFlags(t *testing.T) {
+	if !creatureCombatDisabled(0x00000100, 0) || !creatureCombatDisabled(0, 0x00002000) {
+		t.Fatal("expected noncombat creature flags to disable combat")
+	}
+	if creatureCombatDisabled(0, 0) {
+		t.Fatal("ordinary creature flags must remain attackable")
+	}
+}
+
 func sqrt64(v float64) float64 {
 	if v <= 0 {
 		return 0

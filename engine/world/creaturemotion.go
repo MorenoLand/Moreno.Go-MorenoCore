@@ -43,8 +43,11 @@ type creatureMotion struct {
 	MoveType uint32  // 1 random, 2 waypoint
 	Wander   float64
 
-	Faction uint32
-	Level   uint32
+	Faction    uint32
+	Level      uint32
+	UnitFlags  uint32
+	FlagsExtra uint32
+	AttackTime uint32
 
 	Health    uint32
 	MaxHealth uint32
@@ -240,7 +243,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	}
 	query := `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, c.MovementType, c.wander_distance,
 		COALESCE(NULLIF(t.speed_walk, 0), 1.0), COALESCE(NULLIF(t.speed_run, 0), 1.14286),
-		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(c.curhealth, 100)
+		COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), COALESCE(NULLIF(t.BaseAttackTime, 0), 2000), COALESCE(c.curhealth, 100)
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
 		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ? AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)`
@@ -251,9 +254,9 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			continue
 		}
 		for rows.Next() {
-			var guid, entry, moveType, faction, level, curHealth int64
+			var guid, entry, moveType, faction, level, unitFlags, flagsExtra, attackTime, curHealth int64
 			var x, y, z, wander, walkSpeed, runSpeed float64
-			if err := rows.Scan(&guid, &entry, &x, &y, &z, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &curHealth); err != nil {
+			if err := rows.Scan(&guid, &entry, &x, &y, &z, &moveType, &wander, &walkSpeed, &runSpeed, &faction, &level, &unitFlags, &flagsExtra, &attackTime, &curHealth); err != nil {
 				continue
 			}
 			if _, dup := seenCreatures[uint32(guid)]; dup {
@@ -267,6 +270,9 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			motion := s.motionFor(ctx, uint32(guid), uint32(entry), p.Map, float32(x), float32(y), float32(z), uint32(moveType), wander, walkVelocity)
 			motion.Faction = uint32(faction)
 			motion.Level = uint32(level)
+			motion.UnitFlags = uint32(unitFlags)
+			motion.FlagsExtra = uint32(flagsExtra)
+			motion.AttackTime = uint32(attackTime)
 			motion.RunSpeed = creatureRunVelocity(runSpeed)
 			if motion.MaxHealth == 0 {
 				health := uint32(curHealth)
@@ -327,7 +333,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		// In melee range (<= 3.0 yards): attack player
 		motion.Moving = false
-		if now.Sub(motion.LastAttack) >= 2*time.Second {
+		attackTime := time.Duration(motion.AttackTime) * time.Millisecond
+		if attackTime <= 0 {
+			attackTime = 2 * time.Second
+		}
+		if now.Sub(motion.LastAttack) >= attackTime {
 			damage := uint32(10 + int(motion.Level)*2)
 			overkill := uint32(0)
 			if damage >= target.Sess.player.Health {
@@ -345,7 +355,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 
 	// 2. Check for nearby hostile aggro
 	for _, p := range players {
-		if p.Map != motion.Map || p.IsGM || p.IsDead {
+		if p.Map != motion.Map || p.IsGM || p.IsDead || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
 			continue
 		}
 		dist := float32(math.Hypot(float64(p.X-motion.X), float64(p.Y-motion.Y)))
@@ -409,6 +419,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.WaitUntil = motion.MoveEnds.Add(wait)
+}
+
+func creatureCombatDisabled(unitFlags, flagsExtra uint32) bool {
+	return unitFlags&(0x00000080|0x00000100|0x00010000|0x02000000|0x80000000) != 0 || flagsExtra&(0x00000002|0x00002000|0x00000080) != 0
 }
 
 func playerReputationMap(values []playerReputation) map[uint32]playerReputation {
