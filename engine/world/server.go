@@ -2033,20 +2033,25 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionTwoSideInteractionChat, "error", err)
 	}
 	s.accountExpansion = account.Expansion
+	if s.server.Config.Expansion > 0 && s.accountExpansion > uint8(s.server.Config.Expansion) {
+		s.accountExpansion = uint8(s.server.Config.Expansion)
+	}
 	if s.accountExpansion == 0 && s.server.Config.Expansion > 0 {
 		s.accountExpansion = uint8(s.server.Config.Expansion)
+	}
+	if s.accountExpansion == 0 {
+		s.accountExpansion = 2 // default to WotLK
 	}
 	s.debug("world authentication accepted", "account", accountName, "build", build, "expansion", s.accountExpansion, "gm_chat", s.gmChat, "two_side_chat", s.twoSideChat, "remote", remoteAddress(s.conn))
 	s.loadTutorials(ctx)
 
-	authBuf := protocol.NewBuffer(12)
+	// SMSG_AUTH_RESPONSE: 11-byte short form for AUTH_OK (TrinityCore AuthHandler.cpp)
+	authBuf := protocol.NewBuffer(11)
 	authBuf.WriteU8(authOK)
 	authBuf.WriteU32(0)                 // BillingTimeRemaining
 	authBuf.WriteU8(0)                  // BillingPlanFlags
 	authBuf.WriteU32(0)                 // BillingTimeRested
 	authBuf.WriteU8(s.accountExpansion) // 0 Vanilla, 1 TBC, 2 WotLK
-	authBuf.WriteU32(0)                 // Queue position
-	authBuf.WriteU8(0)                  // Free character migration bool
 	return s.write(opcodeAuthResponse, authBuf.Bytes(), true) == nil
 }
 
