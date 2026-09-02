@@ -693,12 +693,24 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handlePlayerLogin(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_OPENING_CINEMATIC):
+			if !state.authed || !state.handleOpeningCinematic() {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_NEXT_CINEMATIC_CAMERA):
 			if !state.authed || !state.handleNextCinematicCamera() {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_COMPLETE_CINEMATIC):
 			if !state.authed || !state.handleCompleteCinematic(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_STANDSTATECHANGE):
+			if !state.authed || !state.handleStandStateChange(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_EMOTE):
+			if !state.authed || !state.handleEmote(payload) {
 				return
 			}
 		case uint32(protocol.OpcodeMSG_MOVE_WORLDPORT_ACK):

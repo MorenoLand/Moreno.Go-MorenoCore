@@ -122,6 +122,7 @@ type playerState struct {
 	TaxiMask       [taxiMaskSize]uint32
 	QuestLog       [playerQuestLogSlots]questLogEntry
 	MountDisplayID uint32
+	StandState     uint8
 	Reputations    []playerReputation
 }
 
@@ -440,6 +441,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[objectFieldScale] = math.Float32bits(1)
 	values[unitFieldHealth] = state.Health
 	values[unitFieldLevel] = uint32(state.Level)
+	values[unitFieldBytes1] = uint32(state.StandState)
 	values[unitFieldFaction] = s.raceFaction(state.Race)
 	values[unitFieldFlags] = unitFlagPlayerControlled
 	values[unitFieldAttackTime] = 2000
