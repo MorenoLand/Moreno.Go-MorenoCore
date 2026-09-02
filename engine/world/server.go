@@ -114,6 +114,13 @@ type session struct {
 	deathTimer         time.Time
 	resurrection       *resurrectionData
 	inFlight           bool
+	buyback            []buybackEntry
+}
+
+type buybackEntry struct {
+	ItemEntry uint32
+	Count     uint32
+	Price     uint32
 }
 
 type account struct {
@@ -980,6 +987,30 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_ALTER_APPEARANCE):
 			if !state.authed || !state.handleAlterAppearance(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BINDER_ACTIVATE):
+			if !state.authed || !state.handleBinderActivate(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BUYBACK_ITEM):
+			if !state.authed || !state.handleBuybackItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BUY_STABLE_SLOT):
+			if !state.authed || !state.handleBuyStableSlot(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BUG):
+			if !state.authed || !state.handleBug(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUCTION_LIST_PENDING_SALES):
+			if !state.authed || !state.handleAuctionListPendingSales(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ACCEPT_LEVEL_GRANT):
+			if !state.authed || !state.handleAcceptLevelGrant(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
