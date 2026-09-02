@@ -337,6 +337,8 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET has_items = 0 WHERE id = ?", mailID)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, 2, 0), true) // MAIL_ITEM_TAKEN = 2, MAIL_OK = 0
+	_ = s.sendItemCreate(uint64(attachID), uint32(itemEntry), 1, 0, freeSlot)
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("mail item collected", "account", s.accountName, "mail_id", mailID, "item", itemEntry, "slot", freeSlot)
 	return true

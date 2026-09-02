@@ -134,3 +134,58 @@ func TestVendorListEncodesUnlimitedStockAsZero(t *testing.T) {
 	}
 }
 
+func TestBuyItemSendsItemCreate(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER)",
+		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
+		"INSERT INTO characters VALUES (1, 1000, '')",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 10, 100, 1)",
+		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 0)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{AuthStore: store, CharactersStore: store, WorldStore: store}
+	sess := &session{conn: serverConn, server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Money: 1000}}
+
+	// Buy item
+	vendorGUID := creatureWorldGUID(1, 101)
+	buyBuf := protocol.NewBuffer(20)
+	buyBuf.WriteU64(vendorGUID)
+	buyBuf.WriteU32(5001) // itemEntry
+	buyBuf.WriteU32(1)    // slot
+	buyBuf.WriteU32(1)    // count
+
+	go func() {
+		sess.handleBuyItem(context.Background(), buyBuf.Bytes())
+	}()
+
+	// 1. Read SMSG_BUY_ITEM
+	op1, _, err := readServerFrame(clientConn, nil)
+	if err != nil || op1 != uint16(protocol.OpcodeSMSG_BUY_ITEM) {
+		t.Fatalf("expected SMSG_BUY_ITEM, got op=%x err=%v", op1, err)
+	}
+
+	// 2. Read SMSG_UPDATE_OBJECT (item create block)
+	op2, _, err := readServerFrame(clientConn, nil)
+	if err != nil || (op2 != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && op2 != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT)) {
+		t.Fatalf("expected update object for item creation, got op=%x err=%v", op2, err)
+	}
+}
+
+
