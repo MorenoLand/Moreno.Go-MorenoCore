@@ -152,6 +152,7 @@ type playerState struct {
 	Powers           [7]uint32
 	MaxPowers        [7]uint32
 	Cinematic        uint32
+	Movie            uint32
 	KnownCurrency    uint32
 	WatchedFaction   uint32
 	AmmoID           uint32

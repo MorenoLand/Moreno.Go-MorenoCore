@@ -911,6 +911,22 @@ func (s *session) handleGroupChangeSubGroup(ctx context.Context, payload []byte)
 // handleResetInstances processes CMSG_RESET_INSTANCES (0x31D).
 // Reference: WorldSession::HandleResetInstancesOpcode (MiscHandler.cpp:1255).
 func (s *session) handleResetInstances(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if s.groupID != 0 && s.server != nil {
+		grp := s.server.findGroupByID(s.groupID)
+		if grp != nil && grp.LeaderGUID != s.playerGUID {
+			buf := protocol.NewBuffer(8)
+			buf.WriteU32(2) // RESET_FAILED_NOT_LEADER
+			buf.WriteU32(0) // mapid
+			_ = s.write(uint16(protocol.OpcodeSMSG_RESET_FAILED_NOTIFY), buf.Bytes(), true)
+			return true
+		}
+	}
+	buf := protocol.NewBuffer(4)
+	buf.WriteU32(0) // success for map 0 / all
+	_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), buf.Bytes(), true)
 	return true
 }
 
@@ -953,18 +969,71 @@ func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) b
 // handleInstanceLockResponse processes CMSG_INSTANCE_LOCK_RESPONSE (0x13F).
 // Reference: WorldSession::HandleInstanceLockResponse (MiscHandler.cpp:1449).
 func (s *session) handleInstanceLockResponse(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
+		return true
+	}
+	accept := payload[0]
+	if accept == 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		var homeMap, homeZone uint32
+		var homeX, homeY, homeZ float32
+		if err := cdb.QueryRowContext(ctx, "SELECT mapId, zoneId, posX, posY, posZ FROM character_homebind WHERE guid = ?", s.playerGUID).Scan(&homeMap, &homeZone, &homeX, &homeY, &homeZ); err == nil {
+			s.player.Map = homeMap
+			s.player.Zone = homeZone
+			s.player.X = homeX
+			s.player.Y = homeY
+			s.player.Z = homeZ
+			s.sendPlayerUpdate()
+		}
+	}
 	return true
 }
 
 // handleSetSavedInstanceExtend processes CMSG_SET_SAVED_INSTANCE_EXTEND (0x292).
 // Reference: WorldSession::HandleSetSavedInstanceExtend (MiscHandler.cpp:1455).
 func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 6 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	mapID, _ := r.ReadU32()
+	difficulty, _ := r.ReadU8()
+	extend, _ := r.ReadU8()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_instance SET extended = ? WHERE guid = ? AND instance IN (SELECT id FROM instance WHERE map = ? AND difficulty = ?)", extend, s.playerGUID, mapID, difficulty)
+	}
 	return true
 }
 
 // handleRequestPartyMemberStats processes CMSG_REQUEST_PARTY_MEMBER_STATS (0x27F).
 // Reference: WorldSession::HandleRequestPartyMemberStatsOpcode (GroupHandler.cpp:320).
 func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	targetGUID, _ := r.ReadU64()
+
+	if s.server != nil {
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess != nil && targetSess.player != nil {
+			buf := protocol.NewBuffer(64)
+			buf.WritePackedGUID(targetGUID)
+			buf.WriteU32(0x00000001) // PMSP_STATUS (online)
+			buf.WriteU8(1)          // online
+			buf.WriteU32(targetSess.player.Health)
+			buf.WriteU32(targetSess.player.MaxHealth)
+			buf.WriteU8(0) // power type (mana = 0)
+			buf.WriteU16(uint16(targetSess.player.Powers[0]))
+			buf.WriteU16(uint16(targetSess.player.MaxPowers[0]))
+			buf.WriteU8(targetSess.player.Level)
+			buf.WriteU16(uint16(targetSess.player.Zone))
+			buf.WriteU16(0)
+			_ = s.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), buf.Bytes(), true)
+		}
+	}
 	return true
 }
 

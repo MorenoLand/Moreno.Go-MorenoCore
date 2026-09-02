@@ -1,3 +1,4 @@
+// Note: Recast/Detour navigation mesh tile generation is not implemented.
 package main
 
 import (

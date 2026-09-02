@@ -476,7 +476,12 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	return true
 }
 
+// handleNextCinematicCamera processes CMSG_NEXT_CINEMATIC_CAMERA (0x0FB).
+// Reference: WorldSession::HandleNextCinematicCamera (MiscHandler.cpp:905).
 func (s *session) handleNextCinematicCamera() bool {
+	if s.player != nil && s.player.Cinematic == 0 {
+		s.player.Cinematic = 1
+	}
 	return true
 }
 
@@ -1281,6 +1286,9 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 // handleCompleteMovie processes CMSG_COMPLETE_MOVIE (0x465).
 // Reference: WorldSession::HandleCompleteMovie (MiscHandler.cpp:969).
 func (s *session) handleCompleteMovie(ctx context.Context, payload []byte) bool {
+	if s.player != nil {
+		s.player.Movie = 0
+	}
 	s.debug("movie completed", "account", s.accountName)
 	return true
 }

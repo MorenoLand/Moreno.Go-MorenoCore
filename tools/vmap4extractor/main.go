@@ -1,3 +1,4 @@
+// Note: WMO/M2 collision geometry extraction is not implemented; currently performs raw model file extraction.
 package main
 
 import (

@@ -1,3 +1,4 @@
+// Note: Map tile geometry extraction (ADT/liquid) is not implemented; currently performs DBC extraction only.
 package main
 
 import (
