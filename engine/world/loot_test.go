@@ -21,9 +21,11 @@ func TestLootingMoneyAndItems(t *testing.T) {
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, played_time INTEGER, text TEXT)",
 		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER)",
+		"CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER, map INTEGER, position_x REAL, position_y REAL, position_z REAL, curhealth INTEGER)",
 		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, minGold INTEGER, maxGold INTEGER)",
 		"CREATE TABLE creature_loot_template (Entry INTEGER, Item INTEGER, Chance REAL, QuestRequired INTEGER, LootMode INTEGER, GroupId INTEGER, MinCount INTEGER, MaxCount INTEGER)",
 		"INSERT INTO characters VALUES (1, 100, '')",
+		"INSERT INTO creature VALUES (1, 303, 0, 0, 0, 0, 0)",
 		"INSERT INTO creature_template VALUES (303, 50, 50)",
 		"INSERT INTO item_template VALUES (7001, 200)",
 		"INSERT INTO creature_loot_template VALUES (303, 7001, 100.0, 0, 1, 0, 1, 1)",
@@ -75,5 +77,8 @@ func TestLootingMoneyAndItems(t *testing.T) {
 	}
 	if sess.activeLoot != nil {
 		t.Fatal("expected activeLoot to be cleared")
+	}
+	if len(srv.creatureLoot) != 0 {
+		t.Fatal("expected creature loot state to be cleared")
 	}
 }

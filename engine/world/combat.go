@@ -190,8 +190,10 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	}
 	target.GUID = creatureWorldGUID(uint32(low), uint32(entry))
 	target.Map = uint32(mapID)
-	if curHealth.Valid && curHealth.Int64 > 0 {
-		target.Health = uint32(curHealth.Int64)
+	if curHealth.Valid {
+		if curHealth.Int64 > 0 {
+			target.Health = uint32(curHealth.Int64)
+		}
 	} else {
 		var tplHealth sql.NullInt64
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(maxlevel*30, 0), 100) FROM creature_template WHERE entry = ?", entry).Scan(&tplHealth)

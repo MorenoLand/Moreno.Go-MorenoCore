@@ -16,6 +16,7 @@ type lootItem struct {
 
 type activeLootState struct {
 	TargetGUID uint64
+	MapID      uint32
 	LootType   uint8
 	Money      uint32
 	Items      map[uint8]lootItem
@@ -34,11 +35,28 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	if wdb == nil {
 		return true
 	}
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok || target.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
+		return s.sendLootError(targetGUID, 4) == nil
+	}
+	if target.Health != 0 {
+		return s.sendLootError(targetGUID, 0) == nil
+	}
 	creatureEntry := uint32((targetGUID >> 24) & 0xFFFFFF)
-	loot := &activeLootState{
-		TargetGUID: targetGUID,
-		LootType:   1, // LOOT_CORPSE
-		Items:      make(map[uint8]lootItem),
+	s.server.lootMu.Lock()
+	if s.server.creatureLoot == nil {
+		s.server.creatureLoot = make(map[uint64]*activeLootState)
+	}
+	loot := s.server.creatureLoot[targetGUID]
+	newLoot := loot == nil
+	if newLoot {
+		loot = &activeLootState{TargetGUID: targetGUID, MapID: target.Map, LootType: 1, Items: make(map[uint8]lootItem)}
+		s.server.creatureLoot[targetGUID] = loot
+	}
+	s.server.lootMu.Unlock()
+	if !newLoot {
+		s.activeLoot = loot
+		return s.sendLootResponse(loot) == nil
 	}
 	// Query min/max gold from creature_template
 	var minGold, maxGold int64
@@ -88,9 +106,12 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		}
 	}
 	s.activeLoot = loot
-	// Send SMSG_LOOT_RESPONSE (0x160)
+	return s.sendLootResponse(loot) == nil
+}
+
+func (s *session) sendLootResponse(loot *activeLootState) error {
 	packet := protocol.NewBuffer(8 + 1 + 4 + 1 + len(loot.Items)*22)
-	packet.WriteU64(targetGUID)
+	packet.WriteU64(loot.TargetGUID)
 	packet.WriteU8(loot.LootType)
 	packet.WriteU32(loot.Money)
 	packet.WriteU8(uint8(len(loot.Items)))
@@ -103,9 +124,31 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		packet.WriteU32(0) // RandomSuffix
 		packet.WriteU8(0)  // LootSlotType (Normal)
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_RESPONSE), packet.Bytes(), true)
-	s.debug("loot response sent", "account", s.accountName, "target", targetGUID, "money", loot.Money, "items", len(loot.Items))
-	return true
+	if err := s.write(uint16(protocol.OpcodeSMSG_LOOT_RESPONSE), packet.Bytes(), true); err != nil {
+		return err
+	}
+	s.debug("loot response sent", "account", s.accountName, "target", loot.TargetGUID, "money", loot.Money, "items", len(loot.Items))
+	return nil
+}
+
+func (s *session) sendLootError(guid uint64, code uint8) error {
+	packet := protocol.NewBuffer(10)
+	packet.WriteU64(guid)
+	packet.WriteU8(0)
+	packet.WriteU8(code)
+	return s.write(uint16(protocol.OpcodeSMSG_LOOT_RESPONSE), packet.Bytes(), true)
+}
+
+func (s *session) clearCreatureLoot(loot *activeLootState) {
+	if loot == nil {
+		return
+	}
+	s.server.lootMu.Lock()
+	if current := s.server.creatureLoot[loot.TargetGUID]; current == loot {
+		delete(s.server.creatureLoot, loot.TargetGUID)
+	}
+	s.server.lootMu.Unlock()
+	s.server.broadcastCreatureValuesUpdate(loot.MapID, loot.TargetGUID, map[int]uint32{unitFieldDynamicFlags: 0})
 }
 
 func (s *session) handleLootMoney(ctx context.Context) bool {
@@ -136,6 +179,10 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	it, ok := s.activeLoot.Items[lootSlot]
 	if !ok {
 		return true
+	}
+	target, validTarget := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
+	if !validTarget || target.Map != s.player.Map || target.Health != 0 || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
+		return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
@@ -168,8 +215,21 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	if nextGUID <= 0 {
 		nextGUID = 1
 	}
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, played_time, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 0, 0, '')", nextGUID, it.ItemEntry, s.playerGUID, it.Count)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
+	tx, err := cdb.BeginTx(ctx, nil)
+	if err != nil {
+		return true
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, played_time, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 0, 0, '')", nextGUID, it.ItemEntry, s.playerGUID, it.Count); err != nil {
+		_ = tx.Rollback()
+		return true
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID); err != nil {
+		_ = tx.Rollback()
+		return true
+	}
+	if err = tx.Commit(); err != nil {
+		return true
+	}
 	delete(s.activeLoot.Items, lootSlot)
 	removed := protocol.NewBuffer(1)
 	removed.WriteU8(lootSlot)
@@ -188,7 +248,14 @@ func (s *session) handleLootRelease(payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	if s.activeLoot == nil || s.activeLoot.TargetGUID != targetGUID {
+		return true
+	}
+	loot := s.activeLoot
 	s.activeLoot = nil
+	if loot.Money == 0 && len(loot.Items) == 0 {
+		s.clearCreatureLoot(loot)
+	}
 	release := protocol.NewBuffer(9)
 	release.WriteU64(targetGUID)
 	release.WriteU8(1)

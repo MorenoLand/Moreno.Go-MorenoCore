@@ -186,6 +186,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	}
 
 	// Mark the corpse lootable for everyone in range (dynamic flags update).
+	_, _ = s.server.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", guid)
 	s.server.broadcastCreatureValuesUpdate(s.player.Map, target.GUID, map[int]uint32{
 		unitFieldHealth:       0,
 		unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
@@ -287,6 +288,9 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 				motion.InCombat, motion.TargetGUID, motion.Moving = false, 0, false
 			}
 			s.motionMu.Unlock()
+			s.lootMu.Lock()
+			delete(s.creatureLoot, rawGUID)
+			s.lootMu.Unlock()
 			s.broadcastCreatureValuesUpdate(respawn.Map, rawGUID, map[int]uint32{unitFieldHealth: respawn.Health, unitFieldDynamicFlags: 0})
 		}
 	}
