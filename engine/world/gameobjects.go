@@ -65,7 +65,7 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 	goArgs := make([]any, 0, 4)
 	goEventClause := gameEventSpawnClause("geg.eventEntry", s.activeEventList(ctx), &goArgs)
 	query = strings.Replace(query, "AND (geg.eventEntry IS NULL OR geg.eventEntry = 0)", "AND "+goEventClause, 1)
-	queryArgs := append([]any{state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM}, goArgs...)
+	queryArgs := append([]any{state.Map, float64(state.X) - distance, float64(state.X) + distance, float64(state.Y) - distance, float64(state.Y) + distance, isGM}, goArgs...)
 	rows, err := s.WorldStore.DB.QueryContext(ctx, query, queryArgs...)
 	if err != nil {
 		fallbackQuery := `SELECT g.guid, g.id, g.map, g.position_x, g.position_y, g.position_z, g.orientation, g.rotation0, g.rotation1, g.rotation2, g.rotation3, g.state, g.animprogress, t.type, t.displayId, t.size, COALESCE(ta.flags, 0), COALESCE(ta.faction, 0), COALESCE(ta.artkit0, 0), COALESCE(ga.parent_rotation0, 0), COALESCE(ga.parent_rotation1, 0), COALESCE(ga.parent_rotation2, 0), COALESCE(ga.parent_rotation3, 1)
@@ -196,4 +196,34 @@ func packGameObjectRotation(x, y, z, w float32) uint64 {
 	packedY := (int64(int32(float64(y)*float64(packYZ))) * wSign) & packYZMask
 	packedZ := (int64(int32(float64(z)*float64(packYZ))) * wSign) & packYZMask
 	return uint64(packedZ | packedY<<21 | packedX<<42)
+}
+
+// handleGameObjectUse processes CMSG_GAMEOBJ_USE (0x0B1).
+// Reference: WorldSession::HandleGameObjectUseOpcode (SpellHandler.cpp:300).
+func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return false
+	}
+	r := protocol.NewReader(payload)
+	guid, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	_ = guid
+	return true
+}
+
+// handleGameObjectReportUse processes CMSG_GAMEOBJ_REPORT_USE (0x481).
+// Reference: WorldSession::HandleGameobjectReportUse (SpellHandler.cpp:318).
+func (s *session) handleGameObjectReportUse(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return false
+	}
+	r := protocol.NewReader(payload)
+	guid, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	_ = guid
+	return true
 }

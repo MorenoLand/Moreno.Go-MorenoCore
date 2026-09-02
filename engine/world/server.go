@@ -906,6 +906,26 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleUseItem(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_EQUIPMENT_SET_SAVE):
+			if !state.authed || !state.handleEquipmentSetSave(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_EQUIPMENT_SET_USE):
+			if !state.authed || !state.handleEquipmentSetUse(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_DELETEEQUIPMENT_SET):
+			if !state.authed || !state.handleEquipmentSetDelete(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GAMEOBJ_USE):
+			if !state.authed || !state.handleGameObjectUse(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GAMEOBJ_REPORT_USE):
+			if !state.authed || !state.handleGameObjectReportUse(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
 			if !state.authed || !state.handleTutorialFlag(ctx, payload) {
 				return
