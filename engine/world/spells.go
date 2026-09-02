@@ -310,6 +310,12 @@ func (s *session) handleCancelCast(payload []byte) bool {
 	return true
 }
 
+func (s *session) handleCancelChanneling(payload []byte) bool {
+	reader := protocol.NewReader(payload)
+	_, err := reader.ReadU32()
+	return err == nil || len(payload) == 0
+}
+
 func (s *session) handleCancelAura(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	spellID, err := reader.ReadU32()

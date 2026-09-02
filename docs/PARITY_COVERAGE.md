@@ -4,10 +4,10 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 157 / 32454 | — |
+| Server source files / lines | 1410 / 710273 | 157 / 32533 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 166 | 561 |
-| Client behavioral opcode handlers | 430 | 166 | 266 |
+| Client opcode registrations | 727 | 168 | 559 |
+| Client behavioral opcode handlers | 430 | 168 | 264 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
@@ -66,7 +66,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_CALENDAR_REMOVE_EVENT`
 - `CMSG_CALENDAR_UPDATE_EVENT`
 - `CMSG_CANCEL_AUTO_REPEAT_SPELL`
-- `CMSG_CANCEL_CHANNELLING`
 - `CMSG_CANCEL_GROWTH_AURA`
 - `CMSG_CANCEL_MOUNT_AURA`
 - `CMSG_CANCEL_TEMP_ENCHANTMENT`
@@ -243,7 +242,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_STABLE_REVIVE_PET`
 - `CMSG_STABLE_SWAP_PET`
 - `CMSG_SUMMON_RESPONSE`
-- `CMSG_TEXT_EMOTE`
 - `CMSG_TOGGLE_PVP`
 - `CMSG_TOTEM_DESTROYED`
 - `CMSG_TURN_IN_PETITION`
