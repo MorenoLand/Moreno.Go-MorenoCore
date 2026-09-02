@@ -328,6 +328,74 @@ func (s *session) handleCancelAura(payload []byte) bool {
 	return true
 }
 
+// handleCancelMountAura processes CMSG_CANCEL_MOUNT_AURA (0x375).
+// Reference: WorldSession::HandleCancelMountAuraOpcode (SpellHandler.cpp:544).
+func (s *session) handleCancelMountAura(payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if s.player.MountDisplayID != 0 {
+		s.player.MountDisplayID = 0
+		s.sendPlayerUpdate()
+	}
+	return true
+}
+
+// handleCancelGrowthAura processes CMSG_CANCEL_GROWTH_AURA (0x29B).
+// Reference: WorldSession::HandleCancelGrowthAuraOpcode (SpellHandler.cpp:535).
+func (s *session) handleCancelGrowthAura(payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if s.scale != 1.0 {
+		s.scale = 1.0
+		s.sendPlayerUpdate()
+	}
+	return true
+}
+
+// handleCancelAutoRepeatSpell processes CMSG_CANCEL_AUTO_REPEAT_SPELL (0x26D).
+// Reference: WorldSession::HandleCancelAutoRepeatSpellOpcode (SpellHandler.cpp:553) and CombatPackets.h:115.
+func (s *session) handleCancelAutoRepeatSpell(payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	buf := protocol.NewBuffer(9)
+	buf.WritePackedGUID(s.playerGUID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+	return true
+}
+
+// handleCancelTempEnchantment processes CMSG_CANCEL_TEMP_ENCHANTMENT (0x379).
+// Reference: WorldSession::HandleCancelTempEnchantmentOpcode (ItemHandler.cpp:1145).
+func (s *session) handleCancelTempEnchantment(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	slot, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	_ = slot
+	s.sendPlayerUpdate()
+	return true
+}
+
+// handleCorpseMapPositionQuery processes CMSG_CORPSE_MAP_POSITION_QUERY (0x4B6).
+// Reference: WorldSession::HandleCorpseMapPositionQuery (QueryHandler.cpp:317).
+func (s *session) handleCorpseMapPositionQuery(payload []byte) bool {
+	r := protocol.NewReader(payload)
+	_, _ = r.ReadU32() // unk
+
+	buf := protocol.NewBuffer(16)
+	buf.WriteF32(0)
+	buf.WriteF32(0)
+	buf.WriteF32(0)
+	buf.WriteF32(0)
+	return s.write(uint16(protocol.OpcodeSMSG_CORPSE_MAP_POSITION_QUERY_RESPONSE), buf.Bytes(), true) == nil
+}
+
 func buildCastFailed(castID uint8, spellID uint32, result uint8) []byte {
 	buf := protocol.NewBuffer(6)
 	buf.WriteU8(castID)
