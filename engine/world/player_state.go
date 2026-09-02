@@ -599,6 +599,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldGuildID] = state.GuildID
 	values[unitFieldGuildRank] = uint32(state.GuildRank)
 	values[unitFieldXP] = state.XP
+	if state.Level > 0 && int(state.Level) < len(xpCurve) {
+		values[unitFieldNextLevelXP] = xpCurve[state.Level]
+	}
 	values[unitFieldCoinage] = state.Money
 	values[unitFieldMaxLevel] = 80
 	values[unitFieldKnownCurrencies] = state.KnownCurrency
@@ -994,13 +997,20 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 
 		if bag == 0 {
 			if slot >= 23 && slot <= 38 {
-				packField := 364 + int(slot-23)*2
+				// PLAYER_FIELD_PACK_SLOT_1 = UNIT_END + 0xDE = 148 + 222 = 370
+				packField := 370 + int(slot-23)*2
 				fields[packField] = uint32(fullGUID)
 				fields[packField+1] = uint32(fullGUID >> 32)
 			} else if slot < 23 {
-				invField := 318 + int(slot)*2
+				// PLAYER_FIELD_INV_SLOT_HEAD = UNIT_END + 0xB0 = 148 + 176 = 324
+				invField := 324 + int(slot)*2
 				fields[invField] = uint32(fullGUID)
 				fields[invField+1] = uint32(fullGUID >> 32)
+			} else if slot >= 39 && slot <= 66 {
+				// PLAYER_FIELD_BANK_SLOT_1 = UNIT_END + 0xFE = 148 + 254 = 402
+				bankField := 402 + int(slot-39)*2
+				fields[bankField] = uint32(fullGUID)
+				fields[bankField+1] = uint32(fullGUID >> 32)
 			}
 		}
 	}

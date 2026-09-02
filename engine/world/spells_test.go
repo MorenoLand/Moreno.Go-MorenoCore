@@ -262,3 +262,60 @@ func TestMissileSpellTravelDelay(t *testing.T) {
 		t.Fatalf("expected target health < 100 after projectile arrival, got %d", healthLate)
 	}
 }
+
+func TestCalculateSpellPowerCost_ManaCostPct(t *testing.T) {
+	s := &session{
+		player: &playerState{
+			Powers:    [7]uint32{1000, 0, 0, 100, 0, 0, 0},
+			MaxPowers: [7]uint32{1000, 0, 0, 100, 0, 0, 0},
+		},
+	}
+	// Demon Armor Rank 1: PowerType = 0 (Mana), ManaCost = 0, ManaCostPct = 12%
+	spell := wotlk.Spell{
+		ID:          687,
+		PowerType:   0,
+		ManaCost:    0,
+		ManaCostPct: 12,
+	}
+	cost := s.calculateSpellPowerCost(spell)
+	// 12% of 1000 base mana = 120 mana
+	if cost != 120 {
+		t.Errorf("expected cost 120, got %d", cost)
+	}
+
+	// Flat cost spell: ManaCost = 50, ManaCostPct = 0
+	flatSpell := wotlk.Spell{
+		ID:        123,
+		PowerType: 0,
+		ManaCost:  50,
+	}
+	if s.calculateSpellPowerCost(flatSpell) != 50 {
+		t.Errorf("expected flat cost 50, got %d", s.calculateSpellPowerCost(flatSpell))
+	}
+}
+
+func TestIsSelfCastOnly(t *testing.T) {
+	// Demon Armor (all active effects target TARGET_UNIT_CASTER = 1)
+	selfSpell := wotlk.Spell{
+		ID: 687,
+		Effects: [3]wotlk.SpellEffect{
+			{Effect: 6, ImplicitTargetA: 1}, // SPELL_EFFECT_APPLY_AURA on CASTER
+			{Effect: 0},
+			{Effect: 0},
+		},
+	}
+	if !isSelfCastOnly(selfSpell) {
+		t.Error("expected selfSpell to be identified as self-cast only")
+	}
+
+	// Shadow Bolt (targets enemy: ImplicitTargetA = 6)
+	enemySpell := wotlk.Spell{
+		ID: 686,
+		Effects: [3]wotlk.SpellEffect{
+			{Effect: 2, ImplicitTargetA: 6}, // TARGET_UNIT_TARGET_ENEMY = 6
+		},
+	}
+	if isSelfCastOnly(enemySpell) {
+		t.Error("expected enemySpell to NOT be identified as self-cast only")
+	}
+}

@@ -119,8 +119,9 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
 		return true
 	}
-	srcSlot := payload[0]
-	dstSlot := payload[1]
+	// TrinityCore ItemHandler.cpp:75: recvData >> dstslot >> srcslot
+	dstSlot := payload[0]
+	srcSlot := payload[1]
 	if srcSlot == dstSlot {
 		return true
 	}
@@ -143,6 +144,7 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 		_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET slot = ? WHERE guid = ? AND item = ?", srcSlot, s.playerGUID, dstItemGUID)
 	}
 	s.syncEquipmentCache(ctx)
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("inventory items swapped", "account", s.accountName, "src", srcSlot, "dst", dstSlot)
 	return true
@@ -178,6 +180,7 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 		_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", srcBag, srcSlot, s.playerGUID, dstItemGUID)
 	}
 	s.syncEquipmentCache(ctx)
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("items swapped across bags", "account", s.accountName, "srcBag", srcBag, "srcSlot", srcSlot, "dstBag", dstBag, "dstSlot", dstSlot)
 	return true

@@ -117,6 +117,8 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 			RunSpeed: creatureBaseRunSpeed,
 			MoveType: moveType,
 			Wander:   wander,
+			Health:   100,
+			MaxHealth: 100,
 		}
 		if walkSpeed <= 0 {
 			motion.Speed = creatureBaseWalkSpeed

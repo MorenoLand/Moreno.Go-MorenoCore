@@ -23,6 +23,9 @@ type combatTarget struct {
 }
 
 func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarget, bool) {
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
 	s.server.motionMu.Lock()
 	if s.server.creatureMotion != nil {
 		if motion := s.server.creatureMotion[guid]; motion != nil {
