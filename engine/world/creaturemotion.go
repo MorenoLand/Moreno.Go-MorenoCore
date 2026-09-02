@@ -423,7 +423,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 }
 
 func creatureCombatDisabled(unitFlags, flagsExtra uint32) bool {
-	return unitFlags&(0x00000080|0x00000100|0x00010000|0x02000000|0x80000000) != 0 || flagsExtra&(0x00000002|0x00002000|0x00000080) != 0
+	// UNIT_FLAG_NON_ATTACKABLE (0x00000002) or UNIT_FLAG_NOT_SELECTABLE (0x02000000)
+	// CREATURE_FLAG_EXTRA_TRIGGER (0x00000080) or CREATURE_FLAG_EXTRA_NO_COMBAT (0x00002000)
+	return unitFlags&(0x00000002|0x02000000) != 0 || flagsExtra&(0x00000080|0x00002000) != 0
 }
 
 func playerReputationMap(values []playerReputation) map[uint32]playerReputation {
