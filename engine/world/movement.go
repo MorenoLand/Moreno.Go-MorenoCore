@@ -326,9 +326,23 @@ func (s *session) handleForceMoveUnrootAck(ctx context.Context, payload []byte) 
 	return true
 }
 
+func (s *session) handleMovementAck(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	b := protocol.NewReader(payload)
+	_, _ = b.ReadPackedGUID()
+	_, _ = b.ReadU32() // ack index
+	info, err := readMovementInfo(b)
+	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
+		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+	}
+	return true
+}
+
 // handleForceTurnRateChangeAck processes CMSG_FORCE_TURN_RATE_CHANGE_ACK (0x2DF).
 func (s *session) handleForceTurnRateChangeAck(ctx context.Context, payload []byte) bool {
-	return true
+	return s.handleMovementAck(ctx, payload)
 }
 
 func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *session) {
@@ -344,32 +358,32 @@ func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *sessio
 
 // handleMoveFeatherFallAck processes CMSG_MOVE_FEATHER_FALL_ACK (0x2CF).
 func (s *session) handleMoveFeatherFallAck(ctx context.Context, payload []byte) bool {
-	return true
+	return s.handleMovementAck(ctx, payload)
 }
 
 // handleMoveHoverAck processes CMSG_MOVE_HOVER_ACK (0x0F6).
 func (s *session) handleMoveHoverAck(ctx context.Context, payload []byte) bool {
-	return true
+	return s.handleMovementAck(ctx, payload)
 }
 
 // handleMoveWaterWalkAck processes CMSG_MOVE_WATER_WALK_ACK (0x2D0).
 func (s *session) handleMoveWaterWalkAck(ctx context.Context, payload []byte) bool {
-	return true
+	return s.handleMovementAck(ctx, payload)
 }
 
 // handleMoveKnockBackAck processes CMSG_MOVE_KNOCK_BACK_ACK (0x0F0).
 func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bool {
-	return true
+	return s.handleMovementAck(ctx, payload)
 }
 
 // handleMoveNotActiveMover processes CMSG_MOVE_NOT_ACTIVE_MOVER (0x2D1).
 func (s *session) handleMoveNotActiveMover(ctx context.Context, payload []byte) bool {
-	return true
+	return s.handleMovementAck(ctx, payload)
 }
 
 // handleMoveFallReset processes CMSG_MOVE_FALL_RESET (0x0CA).
 func (s *session) handleMoveFallReset(ctx context.Context, payload []byte) bool {
-	return true
+	return s.handleMovementAck(ctx, payload)
 }
 
 // handleMoveSplineDone processes CMSG_MOVE_SPLINE_DONE (0x2C9).
@@ -451,24 +465,50 @@ func (s *session) handleMountSpecialAnim(ctx context.Context, payload []byte) bo
 // handleChangeSeatsOnControlledVehicle processes CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE (0x49B).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:52).
 func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payload []byte) bool {
+	if len(payload) < 9 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	vehGUID, _ := r.ReadU64()
+	seat, _ := r.ReadU8()
+	s.debug("change seats on vehicle", "account", s.accountName, "vehicle", vehGUID, "seat", seat)
 	return true
 }
 
 // handleControllerEjectPassenger processes CMSG_CONTROLLER_EJECT_PASSENGER (0x4A9).
 // Reference: WorldSession::HandleEjectPassenger (VehicleHandler.cpp:151).
 func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []byte) bool {
+	if len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	passGUID, _ := r.ReadU64()
+	s.debug("controller eject passenger", "account", s.accountName, "passenger", passGUID)
 	return true
 }
 
 // handleDismissControlledVehicle processes CMSG_DISMISS_CONTROLLED_VEHICLE (0x46D).
 // Reference: WorldSession::HandleDismissControlledVehicle (VehicleHandler.cpp:27).
 func (s *session) handleDismissControlledVehicle(ctx context.Context, payload []byte) bool {
+	if len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	vehGUID, _ := r.ReadU64()
+	s.debug("dismiss controlled vehicle", "account", s.accountName, "vehicle", vehGUID)
 	return true
 }
 
 // handlePlayerVehicleEnter processes CMSG_PLAYER_VEHICLE_ENTER (0x46E).
 // Reference: WorldSession::HandleEnterPlayerVehicle (VehicleHandler.cpp:129).
 func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) bool {
+	if len(payload) < 9 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	vehGUID, _ := r.ReadU64()
+	seat, _ := r.ReadU8()
+	s.debug("player vehicle enter", "account", s.accountName, "vehicle", vehGUID, "seat", seat)
 	return true
 }
 
@@ -485,17 +525,24 @@ func (s *session) handleRequestVehicleExit(ctx context.Context, payload []byte) 
 // handleRequestVehicleNextSeat processes CMSG_REQUEST_VEHICLE_NEXT_SEAT (0x470).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:77).
 func (s *session) handleRequestVehicleNextSeat(ctx context.Context, payload []byte) bool {
+	s.debug("request vehicle next seat", "account", s.accountName)
 	return true
 }
 
 // handleRequestVehiclePrevSeat processes CMSG_REQUEST_VEHICLE_PREV_SEAT (0x471).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:74).
 func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []byte) bool {
+	s.debug("request vehicle prev seat", "account", s.accountName)
 	return true
 }
 
 // handleRequestVehicleSwitchSeat processes CMSG_REQUEST_VEHICLE_SWITCH_SEAT (0x472).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:108).
 func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []byte) bool {
+	if len(payload) < 1 {
+		return true
+	}
+	seat := payload[0]
+	s.debug("request vehicle switch seat", "account", s.accountName, "seat", seat)
 	return true
 }
