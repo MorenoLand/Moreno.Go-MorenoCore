@@ -271,11 +271,11 @@ func (s *session) handleLfdPartyLockInfoRequest(ctx context.Context, payload []b
 }
 
 // handleLfdPlayerLockInfoRequest processes CMSG_LFD_PLAYER_LOCK_INFO_REQUEST (0x36E).
-// Reference: WorldSession::HandleLfdPlayerLockInfoRequestOpcode (LFGHandler.cpp:88).
+// Reference: WorldSession::HandleLfgPlayerLockInfoRequestOpcode (LFGHandler.cpp:154).
 func (s *session) handleLfdPlayerLockInfoRequest(ctx context.Context, payload []byte) bool {
-	buf := protocol.NewBuffer(8)
-	buf.WriteU32(0) // dungeon count
-	buf.WriteU32(0) // lock count
+	buf := protocol.NewBuffer(5)
+	buf.WriteU8(0)  // Random Dungeon count (uint8, LFGHandler.cpp:173)
+	buf.WriteU32(0) // Locked Dungeon count (uint32, LFGHandler.cpp:33)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LFG_PLAYER_INFO), buf.Bytes(), true)
 	return true
 }

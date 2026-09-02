@@ -2,9 +2,13 @@ package world
 
 import (
 	"context"
+	"database/sql"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -103,4 +107,123 @@ func TestCalendarAndBattlefieldMgrHandlers(t *testing.T) {
 		t.Fatal("handleCalendarComplain failed")
 	}
 }
+
+func TestCalendarEventCRUDWithDatabase(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		`CREATE TABLE calendar_events (
+			id INTEGER PRIMARY KEY,
+			creator INTEGER NOT NULL DEFAULT 0,
+			title TEXT NOT NULL DEFAULT '',
+			description TEXT NOT NULL DEFAULT '',
+			type INTEGER NOT NULL DEFAULT 4,
+			dungeon INTEGER NOT NULL DEFAULT -1,
+			eventtime INTEGER NOT NULL DEFAULT 0,
+			flags INTEGER NOT NULL DEFAULT 0,
+			time2 INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE calendar_invites (
+			id INTEGER PRIMARY KEY,
+			event INTEGER NOT NULL DEFAULT 0,
+			invitee INTEGER NOT NULL DEFAULT 0,
+			sender INTEGER NOT NULL DEFAULT 0,
+			status INTEGER NOT NULL DEFAULT 0,
+			statustime INTEGER NOT NULL DEFAULT 0,
+			rank INTEGER NOT NULL DEFAULT 0,
+			text TEXT NOT NULL DEFAULT ''
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: store, Config: config.Default()}
+	sess := &session{server: srv, conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Name: "Hero"}}
+	ctx := context.Background()
+
+	// Drain frames in background
+	go func() {
+		for {
+			if _, _, err := readServerFrame(clientConn, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	// 1. Add event
+	addBuf := protocol.NewBuffer(64)
+	addBuf.WriteCString("ICC Raid")
+	addBuf.WriteCString("Bring flasks")
+	addBuf.WriteU8(1)  // eventType
+	addBuf.WriteU8(0)  // repeatable
+	addBuf.WriteU32(25) // maxInvites
+	addBuf.WriteI32(631) // dungeonID
+	addBuf.WriteU32(uint32(time.Now().Unix())) // eventPackedTime
+	addBuf.WriteU32(0) // unkPackedTime
+	addBuf.WriteU32(0) // flags
+
+	if !sess.handleCalendarAddEvent(ctx, addBuf.Bytes()) {
+		t.Fatal("handleCalendarAddEvent failed")
+	}
+
+	// Verify event inserted into DB
+	var title string
+	err = db.QueryRow("SELECT title FROM calendar_events WHERE id = 1").Scan(&title)
+	if err != nil || title != "ICC Raid" {
+		t.Fatalf("expected 'ICC Raid' in calendar_events, got '%s' err=%v", title, err)
+	}
+
+	// 2. Query calendar
+	if !sess.handleCalendarGetCalendar(ctx, nil) {
+		t.Fatal("handleCalendarGetCalendar failed")
+	}
+
+	// 3. Update event
+	updBuf := protocol.NewBuffer(64)
+	updBuf.WriteU64(1) // eventID
+	updBuf.WriteCString("ICC 25H Raid")
+	updBuf.WriteCString("Updated notes")
+	updBuf.WriteU8(1)
+	updBuf.WriteU8(0)
+	updBuf.WriteU32(25)
+	updBuf.WriteI32(631)
+	updBuf.WriteU32(uint32(time.Now().Unix()))
+	updBuf.WriteU32(0)
+	updBuf.WriteU32(0)
+
+	if !sess.handleCalendarUpdateEvent(ctx, updBuf.Bytes()) {
+		t.Fatal("handleCalendarUpdateEvent failed")
+	}
+
+	_ = db.QueryRow("SELECT title FROM calendar_events WHERE id = 1").Scan(&title)
+	if title != "ICC 25H Raid" {
+		t.Fatalf("expected 'ICC 25H Raid', got '%s'", title)
+	}
+
+	// 4. Remove event
+	remBuf := protocol.NewBuffer(8)
+	remBuf.WriteU64(1)
+	if !sess.handleCalendarRemoveEvent(ctx, remBuf.Bytes()) {
+		t.Fatal("handleCalendarRemoveEvent failed")
+	}
+
+	var count int
+	_ = db.QueryRow("SELECT COUNT(*) FROM calendar_events WHERE id = 1").Scan(&count)
+	if count != 0 {
+		t.Fatalf("expected event deleted, count=%d", count)
+	}
+}
+
 

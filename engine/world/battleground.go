@@ -297,12 +297,20 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 }
 
 // handleBattlegroundPlayerPositions processes MSG_BATTLEGROUND_PLAYER_POSITIONS (0x2E9).
-// Reference: WorldSession::HandleBattlegroundPlayerPositionsOpcode (BattlegroundHandler.cpp:115).
+// Reference: WorldSession::HandleBattlegroundPlayerPositionsOpcode (BattlegroundHandler.cpp:262).
 func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload []byte) bool {
-	buf := protocol.NewBuffer(8)
-	buf.WriteU32(0) // count 1
-	buf.WriteU32(0) // count 2
-	_ = s.write(uint16(protocol.OpcodeMSG_BATTLEGROUND_PLAYER_POSITIONS), buf.Bytes(), true)
+	if !s.playerLoaded || s.player == nil {
+		return false
+	}
+	// Reference BattlegroundHandler.cpp:266-268:
+	// Only respond if player is inside a battleground instance/map
+	switch s.player.Map {
+	case 30, 489, 529, 566, 607, 628:
+		buf := protocol.NewBuffer(8)
+		buf.WriteU32(0) // numPlayerPositions
+		buf.WriteU32(0) // flagCarrierCount
+		_ = s.write(uint16(protocol.OpcodeMSG_BATTLEGROUND_PLAYER_POSITIONS), buf.Bytes(), true)
+	}
 	return true
 }
 

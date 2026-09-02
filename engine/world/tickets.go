@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -9,6 +10,7 @@ import (
 const (
 	gmTicketQueueStatusEnabled    uint32 = 1
 	gmTicketStatusDefault         uint32 = 10
+	gmTicketStatusHasText         uint32 = 6
 	gmTicketResponseCreateSuccess uint32 = 1
 	gmTicketResponseUpdateSuccess uint32 = 1
 	gmTicketResponseDeleted       uint32 = 9
@@ -25,6 +27,33 @@ func (s *session) handleGMTicketSystemStatus(ctx context.Context, payload []byte
 // handleGMTicketGetTicket processes CMSG_GMTICKET_GETTICKET (0x211).
 // Reference: WorldSession::HandleGMTicketGetTicketOpcode (TicketHandler.cpp:170) and TicketMgr::SendTicket (TicketMgr.cpp:446).
 func (s *session) handleGMTicketGetTicket(ctx context.Context, payload []byte) bool {
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && s.player != nil {
+		var ticketID uint32
+		var message string
+		var needMoreHelp uint8
+		var lastModifiedTime int64
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT id, description, needMoreHelp, lastModifiedTime FROM gm_ticket WHERE playerGuid = ? AND closedBy = 0 LIMIT 1",
+			s.playerGUID).Scan(&ticketID, &message, &needMoreHelp, &lastModifiedTime)
+		if err == nil && ticketID > 0 {
+			age := float32(time.Now().Unix() - lastModifiedTime)
+			if age < 0 {
+				age = 0
+			}
+			buf := protocol.NewBuffer(32 + len(message))
+			buf.WriteU32(gmTicketStatusHasText)
+			buf.WriteU32(ticketID)
+			buf.WriteCString(message)
+			buf.WriteU8(needMoreHelp)
+			buf.WriteF32(age)
+			buf.WriteF32(0) // oldest ticket age
+			buf.WriteF32(0) // last change age
+			buf.WriteU8(0)  // escalated
+			buf.WriteU8(0)  // viewed
+			return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_GETTICKET), buf.Bytes(), true) == nil
+		}
+	}
+
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(gmTicketStatusDefault)
 	return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_GETTICKET), buf.Bytes(), true) == nil
@@ -34,11 +63,32 @@ func (s *session) handleGMTicketGetTicket(ctx context.Context, payload []byte) b
 // Reference: WorldSession::HandleGMTicketCreateOpcode (TicketHandler.cpp:34).
 func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU32()     // mapId
-	_, _ = r.ReadF32()     // x
-	_, _ = r.ReadF32()     // y
-	_, _ = r.ReadF32()     // z
-	_, _ = r.ReadCString() // message
+	mapId, _ := r.ReadU32()
+	x, _ := r.ReadF32()
+	y, _ := r.ReadF32()
+	z, _ := r.ReadF32()
+	message, _ := r.ReadCString()
+	needResponse, _ := r.ReadU32()
+	needMoreHelpBool, _ := r.ReadU8()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil && s.player != nil {
+		cdb := s.server.CharactersStore.DB
+		var nextID uint32 = 1
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM gm_ticket").Scan(&nextID)
+		now := time.Now().Unix()
+		playerName := s.player.Name
+		if playerName == "" {
+			playerName = s.accountName
+		}
+		needMoreHelp := 0
+		if needMoreHelpBool != 0 {
+			needMoreHelp = 1
+		}
+		_, _ = cdb.ExecContext(ctx,
+			`INSERT INTO gm_ticket (id, type, playerGuid, name, description, createTime, mapId, posX, posY, posZ, lastModifiedTime, closedBy, assignedTo, comment, response, completed, escalated, viewed, needMoreHelp, resolvedBy)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, '', '', 0, 0, 0, ?, 0)`,
+			nextID, needResponse, s.playerGUID, playerName, message, now, mapId, x, y, z, now, needMoreHelp)
+	}
 
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(gmTicketResponseCreateSuccess)
@@ -49,7 +99,14 @@ func (s *session) handleGMTicketCreate(ctx context.Context, payload []byte) bool
 // Reference: WorldSession::HandleGMTicketUpdateOpcode (TicketHandler.cpp:130).
 func (s *session) handleGMTicketUpdate(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadCString() // message
+	message, _ := r.ReadCString()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		now := time.Now().Unix()
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			"UPDATE gm_ticket SET description = ?, lastModifiedTime = ? WHERE playerGuid = ? AND closedBy = 0",
+			message, now, s.playerGUID)
+	}
 
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(gmTicketResponseUpdateSuccess)
@@ -59,6 +116,12 @@ func (s *session) handleGMTicketUpdate(ctx context.Context, payload []byte) bool
 // handleGMTicketDelete processes CMSG_GMTICKET_DELETETICKET (0x217).
 // Reference: WorldSession::HandleGMTicketDeleteOpcode (TicketHandler.cpp:155).
 func (s *session) handleGMTicketDelete(ctx context.Context, payload []byte) bool {
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			"UPDATE gm_ticket SET closedBy = ? WHERE playerGuid = ? AND closedBy = 0",
+			s.playerGUID, s.playerGUID)
+	}
+
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(gmTicketResponseDeleted)
 	return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_DELETETICKET), buf.Bytes(), true) == nil
@@ -67,6 +130,12 @@ func (s *session) handleGMTicketDelete(ctx context.Context, payload []byte) bool
 // handleGMResponseResolve processes CMSG_GMRESPONSE_RESOLVE (0x4F0).
 // Reference: WorldSession::HandleGMResponseResolve (TicketHandler.cpp:272).
 func (s *session) handleGMResponseResolve(ctx context.Context, payload []byte) bool {
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			"UPDATE gm_ticket SET closedBy = ?, completed = 1 WHERE playerGuid = ? AND closedBy = 0",
+			s.playerGUID, s.playerGUID)
+	}
+
 	bufStatus := protocol.NewBuffer(1)
 	bufStatus.WriteU8(0) // getSurvey = 0
 	_ = s.write(uint16(protocol.OpcodeSMSG_GMRESPONSE_STATUS_UPDATE), bufStatus.Bytes(), true)

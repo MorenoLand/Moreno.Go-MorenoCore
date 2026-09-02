@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -107,11 +108,18 @@ func (s *session) handlePetNameQuery(ctx context.Context, payload []byte) bool {
 	petNumber, _ := r.ReadU32()
 	_, _ = r.ReadU64() // petGUID
 
-	buf := protocol.NewBuffer(32)
+	petName := "Pet"
+	var saveTime uint32
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx,
+			"SELECT name, savetime FROM character_pet WHERE id = ? LIMIT 1", petNumber).Scan(&petName, &saveTime)
+	}
+
+	buf := protocol.NewBuffer(32 + len(petName))
 	buf.WriteU32(petNumber)
-	buf.WriteCString("Pet")
-	buf.WriteU32(0) // timestamp
-	buf.WriteU8(0)  // declined
+	buf.WriteCString(petName)
+	buf.WriteU32(saveTime) // timestamp
+	buf.WriteU8(0)         // declined
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_NAME_QUERY_RESPONSE), buf.Bytes(), true)
 	return true
 }
@@ -119,6 +127,22 @@ func (s *session) handlePetNameQuery(ctx context.Context, payload []byte) bool {
 // handlePetRename processes CMSG_PET_RENAME (0x177).
 // Reference: WorldSession::HandlePetRenameOpcode (PetHandler.cpp:284).
 func (s *session) handlePetRename(ctx context.Context, payload []byte) bool {
+	if len(payload) < 9 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petGUID, _ := r.ReadU64()
+	newName, _ := r.ReadCString()
+	if newName == "" {
+		return true
+	}
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		petNumber := uint32(petGUID & 0xFFFFFF)
+		now := time.Now().Unix()
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			"UPDATE character_pet SET name = ?, renamed = 1, savetime = ? WHERE id = ? AND owner = ?",
+			newName, now, petNumber, s.playerGUID)
+	}
 	return true
 }
 

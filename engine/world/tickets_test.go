@@ -2,10 +2,12 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"net"
 	"testing"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -217,4 +219,146 @@ func TestGMSurveyAndReportLag(t *testing.T) {
 		t.Fatal("handleGMReportLag failed")
 	}
 }
+
+func TestGMTicketCRUDWithDatabase(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		`CREATE TABLE gm_ticket (
+			id INTEGER PRIMARY KEY,
+			type INTEGER NOT NULL DEFAULT 0,
+			playerGuid INTEGER NOT NULL DEFAULT 0,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL,
+			createTime INTEGER NOT NULL DEFAULT 0,
+			mapId INTEGER NOT NULL DEFAULT 0,
+			posX REAL NOT NULL DEFAULT 0,
+			posY REAL NOT NULL DEFAULT 0,
+			posZ REAL NOT NULL DEFAULT 0,
+			lastModifiedTime INTEGER NOT NULL DEFAULT 0,
+			closedBy INTEGER NOT NULL DEFAULT 0,
+			assignedTo INTEGER NOT NULL DEFAULT 0,
+			comment TEXT NOT NULL DEFAULT '',
+			response TEXT NOT NULL DEFAULT '',
+			completed INTEGER NOT NULL DEFAULT 0,
+			escalated INTEGER NOT NULL DEFAULT 0,
+			viewed INTEGER NOT NULL DEFAULT 0,
+			needMoreHelp INTEGER NOT NULL DEFAULT 0,
+			resolvedBy INTEGER NOT NULL DEFAULT 0
+		)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: store}
+	sess := &session{server: srv, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Name: "Hero"}}
+	ctx := context.Background()
+
+	// 1. Initial check - no ticket, status = 10
+	go func() {
+		sess.handleGMTicketGetTicket(ctx, nil)
+	}()
+	op, data, err := readServerFrame(clientConn, nil)
+	if err != nil || op != uint16(protocol.OpcodeSMSG_GMTICKET_GETTICKET) {
+		t.Fatalf("expected SMSG_GMTICKET_GETTICKET, got op=%x err=%v", op, err)
+	}
+	r := protocol.NewReader(data)
+	st, _ := r.ReadU32()
+	if st != 10 {
+		t.Fatalf("expected status 10, got %d", st)
+	}
+
+	// 2. Create ticket
+	cBuf := protocol.NewBuffer(64)
+	cBuf.WriteU32(0) // mapId
+	cBuf.WriteF32(0)
+	cBuf.WriteF32(0)
+	cBuf.WriteF32(0)
+	cBuf.WriteCString("Stuck in rock")
+	cBuf.WriteU32(1) // needResponse
+	cBuf.WriteU8(0)  // needMoreHelp
+	go func() {
+		sess.handleGMTicketCreate(ctx, cBuf.Bytes())
+	}()
+	op, _, err = readServerFrame(clientConn, nil)
+	if err != nil || op != uint16(protocol.OpcodeSMSG_GMTICKET_CREATE) {
+		t.Fatalf("expected SMSG_GMTICKET_CREATE, got op=%x err=%v", op, err)
+	}
+
+	// 3. GetTicket now returns status 6 with "Stuck in rock"
+	go func() {
+		sess.handleGMTicketGetTicket(ctx, nil)
+	}()
+	op, data, err = readServerFrame(clientConn, nil)
+	if err != nil || op != uint16(protocol.OpcodeSMSG_GMTICKET_GETTICKET) {
+		t.Fatalf("expected SMSG_GMTICKET_GETTICKET, got op=%x err=%v", op, err)
+	}
+	r = protocol.NewReader(data)
+	st, _ = r.ReadU32()
+	if st != 6 {
+		t.Fatalf("expected status 6 (has text), got %d", st)
+	}
+	tid, _ := r.ReadU32()
+	if tid != 1 {
+		t.Fatalf("expected ticket id 1, got %d", tid)
+	}
+	msg, _ := r.ReadCString()
+	if msg != "Stuck in rock" {
+		t.Fatalf("expected message 'Stuck in rock', got '%s'", msg)
+	}
+
+	// 4. Update ticket
+	uBuf := protocol.NewBuffer(64)
+	uBuf.WriteCString("Still stuck in rock")
+	go func() {
+		sess.handleGMTicketUpdate(ctx, uBuf.Bytes())
+	}()
+	op, _, err = readServerFrame(clientConn, nil)
+	if err != nil || op != uint16(protocol.OpcodeSMSG_GMTICKET_UPDATETEXT) {
+		t.Fatalf("expected SMSG_GMTICKET_UPDATETEXT, got op=%x err=%v", op, err)
+	}
+
+	// Verify updated
+	var dbDesc string
+	_ = db.QueryRow("SELECT description FROM gm_ticket WHERE id = 1").Scan(&dbDesc)
+	if dbDesc != "Still stuck in rock" {
+		t.Fatalf("expected updated desc in DB, got '%s'", dbDesc)
+	}
+
+	// 5. Delete ticket
+	go func() {
+		sess.handleGMTicketDelete(ctx, nil)
+	}()
+	op, _, err = readServerFrame(clientConn, nil)
+	if err != nil || op != uint16(protocol.OpcodeSMSG_GMTICKET_DELETETICKET) {
+		t.Fatalf("expected SMSG_GMTICKET_DELETETICKET, got op=%x err=%v", op, err)
+	}
+
+	// 6. GetTicket now returns status 10
+	go func() {
+		sess.handleGMTicketGetTicket(ctx, nil)
+	}()
+	op, data, err = readServerFrame(clientConn, nil)
+	if err != nil || op != uint16(protocol.OpcodeSMSG_GMTICKET_GETTICKET) {
+		t.Fatalf("expected SMSG_GMTICKET_GETTICKET, got op=%x err=%v", op, err)
+	}
+	r = protocol.NewReader(data)
+	st, _ = r.ReadU32()
+	if st != 10 {
+		t.Fatalf("expected status 10 after delete, got %d", st)
+	}
+}
+
 
