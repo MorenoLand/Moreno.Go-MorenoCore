@@ -95,6 +95,16 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	}
 	packet := buildQuestGiverDetails(data, guid, 0)
 	s.debug("quest details response", "account", s.accountName, "quest", questID)
+
+	// In TrinityCore Player.cpp:14836, if quest is AutoAccept, add it upon viewing details
+	var specialFlags int64
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+	if specialFlags&4 != 0 || data.Flags&0x00080000 != 0 {
+		if canTake, _ := s.canTakeQuest(ctx, questID); canTake {
+			s.addQuestToPlayer(ctx, questID)
+		}
+	}
+
 	return s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), packet, true) == nil
 }
 
@@ -115,7 +125,12 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	}
 	if !s.questgiverStartsQuest(ctx, guid, questID) {
 		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "guid", guid, "reason", "questgiver does not start quest")
-		return true
+		return s.sendGossipComplete()
+	}
+	// If player is already on this quest, close gossip and return success
+	status, _ := s.characterQuestStatus(ctx, questID)
+	if status == questStatusIncomplete {
+		return s.sendGossipComplete()
 	}
 	// TrinityCore re-validates CanTakeQuest on accept before AddQuest.
 	canTake, err := s.canTakeQuest(ctx, questID)
@@ -123,9 +138,20 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 		s.debug("quest accept rejected", "account", s.accountName, "quest", questID, "reason", "canTakeQuest failed", "error", err)
 		return s.sendGossipComplete()
 	}
-	query := "INSERT OR IGNORE INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)"
+	s.addQuestToPlayer(ctx, questID)
+	s.debug("quest accepted", "account", s.accountName, "quest", questID)
+	return s.sendGossipComplete()
+}
+
+func (s *session) addQuestToPlayer(ctx context.Context, questID uint32) bool {
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	query := `INSERT INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)
+		ON CONFLICT(guid, quest) DO UPDATE SET status = excluded.status`
 	if s.server.CharactersStore.Backend != database.BackendSQLite {
-		query = "INSERT IGNORE INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)"
+		query = `INSERT INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)
+			ON DUPLICATE KEY UPDATE status = VALUES(status)`
 	}
 	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, query, s.playerGUID, questID, questStatusIncomplete); err != nil {
 		if missingTable(err) {
@@ -135,15 +161,20 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 		return false
 	}
 	// Player::AddQuest claims a free log slot and updates PLAYER_QUEST_LOG
-	// so the client shows the quest immediately; the field change rides a
-	// values update, not an object re-create.
 	if s.player != nil {
+		targetSlot := -1
 		for slot := 0; slot < playerQuestLogSlots; slot++ {
-			if s.player.QuestLog[slot].QuestID == 0 {
-				s.player.QuestLog[slot] = questLogEntry{QuestID: questID}
-				s.sendPlayerQuestLogUpdate(slot)
+			if s.player.QuestLog[slot].QuestID == questID {
+				targetSlot = slot
 				break
 			}
+			if targetSlot == -1 && s.player.QuestLog[slot].QuestID == 0 {
+				targetSlot = slot
+			}
+		}
+		if targetSlot != -1 {
+			s.player.QuestLog[targetSlot] = questLogEntry{QuestID: questID}
+			s.sendPlayerQuestLogUpdate(targetSlot)
 		}
 	}
 
@@ -152,9 +183,7 @@ func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byt
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT StartItem FROM quest_template WHERE ID = ?", questID).Scan(&startItem); err == nil && startItem > 0 {
 		s.grantQuestStartItem(ctx, uint32(startItem))
 	}
-
-	s.debug("quest accepted", "account", s.accountName, "quest", questID)
-	return s.sendGossipComplete()
+	return true
 }
 
 func (s *session) grantQuestStartItem(ctx context.Context, itemEntry uint32) {
