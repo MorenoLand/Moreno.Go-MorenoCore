@@ -150,3 +150,45 @@ func TestExecuteCommands(t *testing.T) {
 	}
 }
 
+func TestWorldTeleportRBACGate(t *testing.T) {
+	player := &playerState{
+		GUID:        99,
+		Map:         0,
+		X:           100,
+		Y:           200,
+		Z:           300,
+		Orientation: 1.0,
+		ExtraFlags:  0,
+	}
+	state := &session{
+		playerLoaded: true,
+		playerGUID:   99,
+		player:       player,
+		security:     0,
+	}
+	ctx := context.Background()
+
+	// Forge CMSG_WORLD_TELEPORT packet: time(4), map(4), x(4), y(4), z(4), o(4)
+	buf := protocol.NewBuffer(24)
+	buf.WriteU32(12345) // time
+	buf.WriteU32(1)     // map
+	buf.WriteF32(500)   // x
+	buf.WriteF32(600)   // y
+	buf.WriteF32(700)   // z
+	buf.WriteF32(2.5)   // o
+
+	// 1. Non-GM player attempt: must be blocked
+	state.handleWorldTeleport(ctx, buf.Bytes())
+	if player.Map != 0 || player.X != 100 {
+		t.Fatalf("unauthorized CMSG_WORLD_TELEPORT succeeded: map=%d x=%f", player.Map, player.X)
+	}
+
+	// 2. GM player attempt: must succeed
+	state.security = 1
+	state.handleWorldTeleport(ctx, buf.Bytes())
+	if player.Map != 1 || player.X != 500 || player.Y != 600 || player.Z != 700 {
+		t.Fatalf("authorized CMSG_WORLD_TELEPORT failed: map=%d x=%f y=%f z=%f", player.Map, player.X, player.Y, player.Z)
+	}
+}
+
+

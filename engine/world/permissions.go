@@ -12,6 +12,9 @@ const permissionSkipCheckOverSpeedPing uint32 = 23
 
 const permissionTwoSideInteractionChat uint32 = 25
 
+// permissionOpcodeWorldTeleport mirrors rbac::RBAC_PERM_OPCODE_WORLD_TELEPORT (RBAC.h:95).
+const permissionOpcodeWorldTeleport uint32 = 42
+
 // permissionOpcodeWhois mirrors rbac::RBAC_PERM_OPCODE_WHOIS (RBAC.h:96).
 const permissionOpcodeWhois uint32 = 43
 

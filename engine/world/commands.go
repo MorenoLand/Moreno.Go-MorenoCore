@@ -61,7 +61,7 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_NEW_WORLD), packet.Bytes(), true)
 	}
 
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
 			mapID, x, y, z, orientation, s.playerGUID)
 	}
@@ -948,11 +948,24 @@ func (s *session) handleSetFactionCheat(ctx context.Context, payload []byte) boo
 }
 
 // handleWorldTeleport processes CMSG_WORLD_TELEPORT (0x008).
-// Reference: WorldSession::HandleWorldTeleportOpcode (MovementHandler.cpp:810).
+// Reference: WorldSession::HandleWorldTeleportOpcode (MiscHandler.cpp:1070).
 func (s *session) handleWorldTeleport(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
 		return true
 	}
+
+	allowed := s.security >= 1 || (s.player.ExtraFlags&playerExtraGMOn != 0)
+	if !allowed && s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+		hasPerm, err := accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionOpcodeWorldTeleport)
+		if err == nil && hasPerm {
+			allowed = true
+		}
+	}
+	if !allowed {
+		s.sendNotification("You do not have permission to use that command.")
+		return true
+	}
+
 	r := protocol.NewReader(payload)
 	_, _ = r.ReadU32() // time
 	mapID, _ := r.ReadU32()
