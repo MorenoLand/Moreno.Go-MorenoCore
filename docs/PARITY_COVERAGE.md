@@ -4,7 +4,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 177 / 44542 | — |
+| Server source files / lines | 1410 / 710273 | 177 / 44795 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
 | Client opcode registrations | 727 | 432 | 295 |
 | Client behavioral opcode handlers | 430 | 432 | 0 |
@@ -337,6 +337,6 @@ No missing symbols detected.
 | Reference tool | Go path | Status |
 | --- | --- | --- |
 | `map_extractor` | `tools/mapextractor` | implemented source |
-| `vmap4_extractor` | `tools/vmap4extractor` | contains explicit scaffold/not implemented path |
-| `vmap4_assembler` | `tools/vmap4assembler` | contains explicit scaffold/not implemented path |
-| `mmaps_generator` | `tools/mmaps-generator` | contains explicit scaffold/not implemented path |
+| `vmap4_extractor` | `tools/vmap4extractor` | implemented source |
+| `vmap4_assembler` | `tools/vmap4assembler` | implemented source |
+| `mmaps_generator` | `tools/mmaps-generator` | implemented source |
