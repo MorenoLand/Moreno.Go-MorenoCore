@@ -164,27 +164,12 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		overkill = damage - target.Health
 	}
 
-	// Determine school mask (1 Phys, 2 Holy, 4 Fire, 8 Nature, 16 Frost, 32 Shadow, 64 Arcane)
-	var schoolMask uint8 = 4 // default to Fire
-	switch spellID {
-	case 116, 205, 837, 7300, 7301, 8406, 8407, 8408, 10179, 10180, 10181, 25304, 27071, 27072, 42841, 42842: // Frostbolt
-		schoolMask = 16
-	case 120, 8492, 10159, 10160, 10161, 27088, 42930, 42931: // Cone of Cold
-		schoolMask = 16
-	case 122, 865, 6131, 10230, 42917: // Frost Nova
-		schoolMask = 16
-	case 5143, 5144, 5145, 6117, 8416, 8417, 10211, 10212, 25345, 27075, 38697, 42843, 42846: // Arcane Missiles
-		schoolMask = 64
-	case 1459, 1460, 1461, 10156, 10157, 27126, 42995, 43002: // Arcane Intellect
-		schoolMask = 64
-	case 585, 591, 598, 970, 992, 1004, 6060, 10888, 10892, 10893, 10894, 25298, 25364: // Smite
-		schoolMask = 2
-	case 589, 594, 15267, 15268, 25367, 25368: // Shadow Word: Pain
-		schoolMask = 32
-	case 403, 529, 548, 915, 943, 2060, 10391, 10392, 15207, 15208: // Lightning Bolt
-		schoolMask = 8
-	default:
-		schoolMask = 4
+	// Use the school mask from the Spell DBC (field 17). Fallback to physical (1).
+	schoolMask := uint8(1)
+	if s.server.Data != nil {
+		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.SchoolMask != 0 {
+			schoolMask = uint8(spell.SchoolMask)
+		}
 	}
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask), true)
@@ -228,6 +213,11 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	if s.player == nil {
 		return
 	}
+	// Healing always applies to the player themselves (self-targeting heal spells);
+	// if targetGUID differs, it means party heal but we only track self health
+	if targetGUID == 0 {
+		targetGUID = s.playerGUID
+	}
 	effectiveHeal := heal
 	if s.player.Health+heal > s.player.MaxHealth {
 		effectiveHeal = s.player.MaxHealth - s.player.Health
@@ -237,7 +227,8 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	}
 	overheal := heal - effectiveHeal
 
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), buildSpellHealLog(s.playerGUID, s.playerGUID, spellID, heal, overheal, 0, false), true)
+	// TC Unit.cpp:6550: packet = packed(target), packed(healer), spellID, heal, overheal, absorb, crit, unused
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), buildSpellHealLog(targetGUID, s.playerGUID, spellID, heal, overheal, 0, false), true)
 	s.sendPlayerUpdate()
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", s.player.Health, s.playerGUID)
@@ -245,6 +236,9 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 }
 
 func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8) []byte {
+	// Layout matches TrinityCore Unit::SendSpellNonMeleeDamageLog (Unit.cpp:5302)
+	// packed target, packed attacker, spellID, damage, overkill, schoolMask,
+	// absorbed, resist, periodicLog, unused, blocked, HitInfo, HitInfo&debugMask
 	buf := protocol.NewBuffer(64)
 	buf.WritePackedGUID(targetGUID)
 	buf.WritePackedGUID(attackerGUID)
@@ -254,11 +248,11 @@ func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damag
 	buf.WriteU8(schoolMask)
 	buf.WriteU32(0) // Absorbed
 	buf.WriteU32(0) // Resist
-	buf.WriteU8(0)  // Periodic log
-	buf.WriteU8(0)  // Unused
-	buf.WriteU32(0) // Blocked
-	buf.WriteU32(2) // HitInfo: HITINFO_NORMALSWING2
-	buf.WriteU8(0)  // Debug
+	buf.WriteU8(0)  // periodicLog (0 = show spell name prefix)
+	buf.WriteU8(0)  // unused
+	buf.WriteU32(0) // blocked
+	buf.WriteU32(2) // HitInfo flags (SPELL_HIT_TYPE_HIT = 2)
+	buf.WriteU8(0)  // HitInfo & debugMask (always 0, no crit/hit debug)
 	return buf.Bytes()
 }
 
