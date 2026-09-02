@@ -445,9 +445,6 @@ func (s *Server) isHostileFaction(creatureFaction uint32, player playerPos) bool
 				standing := int64(reputation.BaseStanding)
 				if saved, ok := player.Reputations[creatureTemplate.Faction]; ok {
 					standing += int64(saved.Standing)
-					if saved.Flags&0x02 != 0 {
-						return true
-					}
 				}
 				return reputationRank(standing) <= 1
 			}
