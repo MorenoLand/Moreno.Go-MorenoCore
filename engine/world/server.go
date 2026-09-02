@@ -866,6 +866,26 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleUnlearnSkill(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_ITEM_NAME_QUERY):
+			if !state.authed || !state.handleItemNameQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ITEM_TEXT_QUERY):
+			if !state.authed || !state.handleItemTextQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ITEM_REFUND_INFO):
+			if !state.authed || !state.handleItemRefundInfo(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ITEM_REFUND):
+			if !state.authed || !state.handleItemRefund(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_USE_ITEM):
+			if !state.authed || !state.handleUseItem(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
 			if !state.authed || !state.handleTutorialFlag(ctx, payload) {
 				return
