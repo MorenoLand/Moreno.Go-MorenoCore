@@ -115,6 +115,7 @@ type session struct {
 	resurrection       *resurrectionData
 	inFlight           bool
 	buyback            []buybackEntry
+	arenaTeamInvited   uint32
 }
 
 type buybackEntry struct {
@@ -1011,6 +1012,42 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_ACCEPT_LEVEL_GRANT):
 			if !state.authed || !state.handleAcceptLevelGrant(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ARENA_TEAM_QUERY):
+			if !state.authed || !state.handleArenaTeamQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ARENA_TEAM_ROSTER):
+			if !state.authed || !state.handleArenaTeamRoster(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ARENA_TEAM_INVITE):
+			if !state.authed || !state.handleArenaTeamInvite(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ARENA_TEAM_ACCEPT):
+			if !state.authed || !state.handleArenaTeamAccept(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ARENA_TEAM_DECLINE):
+			if !state.authed || !state.handleArenaTeamDecline(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ARENA_TEAM_LEAVE):
+			if !state.authed || !state.handleArenaTeamLeave(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ARENA_TEAM_REMOVE):
+			if !state.authed || !state.handleArenaTeamRemove(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ARENA_TEAM_DISBAND):
+			if !state.authed || !state.handleArenaTeamDisband(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ARENA_TEAM_LEADER):
+			if !state.authed || !state.handleArenaTeamLeader(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):

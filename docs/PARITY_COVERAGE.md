@@ -4,27 +4,18 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 181 / 39263 | — |
+| Server source files / lines | 1410 / 710273 | 183 / 39745 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 225 | 502 |
-| Client behavioral opcode handlers | 430 | 225 | 207 |
+| Client opcode registrations | 727 | 234 | 493 |
+| Client behavioral opcode handlers | 430 | 234 | 198 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 71 / 8543 | — |
+| Test source files / lines | 9 / 1390 | 72 / 8668 | — |
 
 ## Missing behavioral client opcode handlers
 
-- `CMSG_ARENA_TEAM_ACCEPT`
-- `CMSG_ARENA_TEAM_DECLINE`
-- `CMSG_ARENA_TEAM_DISBAND`
-- `CMSG_ARENA_TEAM_INVITE`
-- `CMSG_ARENA_TEAM_LEADER`
-- `CMSG_ARENA_TEAM_LEAVE`
-- `CMSG_ARENA_TEAM_QUERY`
-- `CMSG_ARENA_TEAM_REMOVE`
-- `CMSG_ARENA_TEAM_ROSTER`
 - `CMSG_BATTLEFIELD_LIST`
 - `CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE`
 - `CMSG_BATTLEFIELD_MGR_EXIT_REQUEST`
