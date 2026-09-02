@@ -12,17 +12,17 @@ import (
 // groupState holds all state for a 5-man or raid group.
 // Mirrors TrinityCore's Group class (Groups/Group.h).
 type groupState struct {
-	ID           uint64
-	LeaderGUID   uint64
-	Members      []groupMember // ordered; first entry is leader
-	LootMethod   uint8         // 0=Free, 1=RR, 2=MasterLoot, 3=GroupLoot, 4=NeedBeforeGreed
-	MasterLooter uint64
+	ID            uint64
+	LeaderGUID    uint64
+	Members       []groupMember // ordered; first entry is leader
+	LootMethod    uint8         // 0=Free, 1=RR, 2=MasterLoot, 3=GroupLoot, 4=NeedBeforeGreed
+	MasterLooter  uint64
 	LootThreshold uint8 // item quality threshold (default 2 = uncommon)
-	DungeonDiff  uint8
-	RaidDiff     uint8
-	IsRaid       bool
-	TargetIcons  [8]uint64 // raid target icons, index=icon, value=target GUID
-	counter      uint32
+	DungeonDiff   uint8
+	RaidDiff      uint8
+	IsRaid        bool
+	TargetIcons   [8]uint64 // raid target icons, index=icon, value=target GUID
+	counter       uint32
 }
 
 // groupMember mirrors Group::MemberSlot.
@@ -50,16 +50,16 @@ const (
 
 // PartyResult enum, mirrors TrinityCore's PartyResult.
 const (
-	errPartyResultOK          uint32 = 0
-	errBadPlayerNameS         uint32 = 1
-	errTargetNotInGroup       uint32 = 2
-	errGroupFull              uint32 = 3
-	errAlreadyInGroupS        uint32 = 4
-	errNotLeader              uint32 = 5
-	errPlayerWrongFaction     uint32 = 7
-	errIgnoringYouS           uint32 = 8
-	errTargetNotInInstanceS   uint32 = 11
-	errInviteRestricted       uint32 = 13
+	errPartyResultOK        uint32 = 0
+	errBadPlayerNameS       uint32 = 1
+	errTargetNotInGroup     uint32 = 2
+	errGroupFull            uint32 = 3
+	errAlreadyInGroupS      uint32 = 4
+	errNotLeader            uint32 = 5
+	errPlayerWrongFaction   uint32 = 7
+	errIgnoringYouS         uint32 = 8
+	errTargetNotInInstanceS uint32 = 11
+	errInviteRestricted     uint32 = 13
 )
 
 // MaxGroupSize (5-man). Raids can have up to 40.
@@ -1022,7 +1022,7 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 			buf := protocol.NewBuffer(64)
 			buf.WritePackedGUID(targetGUID)
 			buf.WriteU32(0x00000001) // PMSP_STATUS (online)
-			buf.WriteU8(1)          // online
+			buf.WriteU8(1)           // online
 			buf.WriteU32(targetSess.player.Health)
 			buf.WriteU32(targetSess.player.MaxHealth)
 			buf.WriteU8(0) // power type (mana = 0)
@@ -1036,6 +1036,3 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 	}
 	return true
 }
-
-
-

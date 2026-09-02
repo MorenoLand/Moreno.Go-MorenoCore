@@ -43,13 +43,13 @@ func (s *session) sendBattlefieldList(bmGUID uint64, fromWhere uint8, bgTypeID u
 	buf.WriteU64(bmGUID)
 	buf.WriteU8(fromWhere)
 	buf.WriteU32(bgTypeID)
-	buf.WriteU8(0) // unk
-	buf.WriteU8(0) // unk
-	buf.WriteU8(0) // hasWin
+	buf.WriteU8(0)  // unk
+	buf.WriteU8(0)  // unk
+	buf.WriteU8(0)  // hasWin
 	buf.WriteU32(0) // winHonor
 	buf.WriteU32(0) // winArena
 	buf.WriteU32(0) // lossHonor
-	buf.WriteU8(0) // isRandom
+	buf.WriteU8(0)  // isRandom
 	buf.WriteU32(0) // count of active instances
 	return s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_LIST), buf.Bytes(), true) == nil
 }
@@ -137,8 +137,8 @@ func (s *session) handleBattlefieldPort(ctx context.Context, payload []byte) boo
 		return true
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU8()  // type
-	_, _ = r.ReadU8()  // unk2
+	_, _ = r.ReadU8() // type
+	_, _ = r.ReadU8() // unk2
 	bgTypeID, err := r.ReadU32()
 	if err != nil {
 		return false
@@ -194,7 +194,7 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 	buf.WriteU8(10) // minLevel
 	buf.WriteU8(80) // maxLevel
 	buf.WriteU32(entry.InstanceID)
-	buf.WriteU8(0) // isRated
+	buf.WriteU8(0)             // isRated
 	buf.WriteU32(entry.Status) // STATUS_WAIT_QUEUE = 1
 	switch entry.Status {
 	case 1: // wait queue
@@ -234,7 +234,7 @@ func (s *session) handleBfEntryInviteResponse(ctx context.Context, payload []byt
 	if accepted != 0 {
 		buf := protocol.NewBuffer(9)
 		buf.WriteU32(battleID)
-		buf.WriteU8(0) // unk
+		buf.WriteU8(0)  // unk
 		buf.WriteU32(1) // clear afk
 		_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_MGR_ENTERED), buf.Bytes(), true)
 	}
@@ -328,4 +328,3 @@ func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload
 	}
 	return true
 }
-

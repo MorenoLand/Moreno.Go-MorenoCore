@@ -52,7 +52,7 @@ var sqliteStatementOverrides = map[StatementID]string{
 	"LOGIN_INS_IP_AUTO_BANNED":         "INSERT INTO ip_banned (ip, bandate, unbandate, bannedby, banreason) VALUES (?, unixepoch(), unixepoch()+?, 'Trinity Auth', 'Failed login autoban')",
 	"LOGIN_INS_ACCOUNT_AUTO_BANNED":    "INSERT INTO account_banned (id, bandate, unbandate, bannedby, banreason, active) VALUES (?, unixepoch(), unixepoch()+?, 'Trinity Auth', 'Failed login autoban', 1)",
 	"CHAR_DEL_EXPIRED_BANS":            "UPDATE character_banned SET active = 0 WHERE unbandate <= unixepoch() AND unbandate <> bandate",
-	"CHAR_SEL_CHECK_NAME":               "SELECT 1 FROM characters WHERE UPPER(name) = UPPER(?)",
+	"CHAR_SEL_CHECK_NAME":              "SELECT 1 FROM characters WHERE UPPER(name) = UPPER(?)",
 }
 
 func StatementSQL(id StatementID, backend Backend) (string, error) {

@@ -1093,4 +1093,3 @@ func (s *session) handleEquipmentSetUse(ctx context.Context, payload []byte) boo
 	_ = s.write(uint16(protocol.OpcodeSMSG_EQUIPMENT_SET_USE_RESULT), buf.Bytes(), true)
 	return true
 }
-

@@ -524,4 +524,3 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), res, true)
 	return true
 }
-

@@ -321,4 +321,3 @@ func (s *session) handleSearchLfgLeave(ctx context.Context, payload []byte) bool
 func (s *session) handleSetLfgComment(ctx context.Context, payload []byte) bool {
 	return true
 }
-

@@ -160,7 +160,6 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 	// In TrinityCore, BreadcrumbForQuestId is on the breadcrumb quest to point
 	// to the hub quest; the hub quest itself is not blocked by the breadcrumb.
 
-
 	// ExclusiveGroup check
 	if exclGroup.Valid && exclGroup.Int64 != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		var exclCount int64
@@ -608,4 +607,3 @@ func (s *session) canCompleteQuest(ctx context.Context, questID uint32) bool {
 
 	return true
 }
-

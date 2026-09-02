@@ -450,5 +450,3 @@ func (s *session) handleSetTaxiBenchmarkMode(ctx context.Context, payload []byte
 	s.sendPlayerUpdate()
 	return true
 }
-
-

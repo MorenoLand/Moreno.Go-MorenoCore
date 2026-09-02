@@ -366,4 +366,3 @@ func (s *session) handleOptOutOfLoot(ctx context.Context, payload []byte) bool {
 	s.player.PassOnGroupLoot = (passOnLoot != 0)
 	return true
 }
-

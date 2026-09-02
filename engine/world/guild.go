@@ -787,7 +787,6 @@ func (s *session) handleGuildInfoText(ctx context.Context, payload []byte) bool 
 	return true
 }
 
-
 func (s *Server) getGuildName(ctx context.Context, guildID uint32) string {
 	if guildID == 0 || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		return ""
@@ -962,7 +961,7 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 		resBuf := protocol.NewBuffer(12)
 		resBuf.WriteI32(11) // GUILD_COMMAND_VIEW_TAB
 		resBuf.WriteCString("")
-		resBuf.WriteI32(1)  // ERR_GUILD_PLAYER_NOT_IN_GUILD
+		resBuf.WriteI32(1) // ERR_GUILD_PLAYER_NOT_IN_GUILD
 		_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_COMMAND_RESULT), resBuf.Bytes(), true)
 		return true
 	}
@@ -1568,13 +1567,13 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 
 	buf := protocol.NewBuffer(24)
 	buf.WriteU64(npcGUID)
-	buf.WriteU8(1)                       // count = 1 petition item
-	buf.WriteU32(1)                       // index = 1
-	buf.WriteU32(guildCharterItemID)      // 5863 Guild Charter
-	buf.WriteU32(CHARTER_DISPLAY_ID)      // 16161
-	buf.WriteU32(guildCharterCost)        // 1000 copper
-	buf.WriteU32(0)                       // 0
-	buf.WriteU32(9)                       // 9 required signs
+	buf.WriteU8(1)                   // count = 1 petition item
+	buf.WriteU32(1)                  // index = 1
+	buf.WriteU32(guildCharterItemID) // 5863 Guild Charter
+	buf.WriteU32(CHARTER_DISPLAY_ID) // 16161
+	buf.WriteU32(guildCharterCost)   // 1000 copper
+	buf.WriteU32(0)                  // 0
+	buf.WriteU32(9)                  // 9 required signs
 	_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SHOWLIST), buf.Bytes(), true)
 	return true
 }
@@ -1685,4 +1684,3 @@ func (s *session) handleSaveGuildEmblem(ctx context.Context, payload []byte) boo
 }
 
 const CHARTER_DISPLAY_ID = 16161
-
