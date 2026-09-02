@@ -106,6 +106,7 @@ type session struct {
 	activeLoot         *activeLootState
 	trade              *playerTradeState
 	guildInvitedID     uint32
+	guildInviterGUID   uint64
 	groupID            uint64 // GUID of the group this player is in (0 = no group)
 	pendingGroupLeader uint64 // GUID of the player who invited us (0 = no invite pending)
 	lastStreamX        float32

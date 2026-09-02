@@ -435,8 +435,19 @@ func (s *session) handleEnableTaxi(ctx context.Context, payload []byte) bool {
 }
 
 // handleSetTaxiBenchmarkMode processes CMSG_SET_TAXI_BENCHMARK_MODE (0x389).
-// Reference: WorldSession::HandleSetTaxiBenchmarkModeOpcode (TaxiHandler.cpp:165).
+// Reference: WorldSession::HandleSetTaxiBenchmarkOpcode (MiscHandler.cpp:1403).
 func (s *session) handleSetTaxiBenchmarkMode(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
+		return true
+	}
+	mode := payload[0]
+	const playerFlagTaxiBenchmark uint32 = 0x04000000
+	if mode != 0 {
+		s.player.PlayerFlags |= playerFlagTaxiBenchmark
+	} else {
+		s.player.PlayerFlags &^= playerFlagTaxiBenchmark
+	}
+	s.sendPlayerUpdate()
 	return true
 }
 

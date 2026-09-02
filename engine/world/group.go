@@ -179,6 +179,19 @@ func (s *Server) broadcastGroupList(g *groupState) {
 	}
 }
 
+func (s *Server) broadcastToGroup(groupID uint64, opcode uint16, payload []byte) {
+	if groupID == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if sess.groupID == groupID {
+			_ = sess.write(opcode, payload, true)
+		}
+	}
+}
+
 // -----------------------------------------------------------------
 // Handlers
 // -----------------------------------------------------------------

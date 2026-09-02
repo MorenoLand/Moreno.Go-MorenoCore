@@ -287,20 +287,83 @@ func (s *session) handleLootRelease(payload []byte) bool {
 }
 
 // handleLootMasterGive processes CMSG_LOOT_MASTER_GIVE (0x2A3).
-// Reference: WorldSession::HandleLootMasterGiveOpcode (LootHandler.cpp:115).
+// Reference: WorldSession::HandleLootMasterGiveOpcode (LootHandler.cpp:392).
 func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 17 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	lootGUID, _ := r.ReadU64()
+	slotID, _ := r.ReadU8()
+	targetGUID, _ := r.ReadU64()
+
+	var targetSess *session
+	if s.server != nil {
+		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+	if targetSess == nil || targetSess.player == nil {
+		buf := protocol.NewBuffer(9)
+		buf.WriteU64(lootGUID)
+		buf.WriteU8(3) // LOOT_ERROR_PLAYER_NOT_FOUND
+		_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
+		return true
+	}
+
+	if s.activeLoot != nil {
+		if it, ok := s.activeLoot.Items[slotID]; ok {
+			delete(s.activeLoot.Items, slotID)
+			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				cdb := s.server.CharactersStore.DB
+				var nextGUID int64
+				_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
+				if nextGUID <= 0 {
+					nextGUID = 1
+				}
+				_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 0, 0, '')", nextGUID, it.ItemEntry, targetGUID, it.Count)
+				_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, 23, ?)", targetGUID, nextGUID)
+				_ = targetSess.sendInventoryItems(ctx)
+			}
+			buf := protocol.NewBuffer(9)
+			buf.WriteU64(lootGUID)
+			buf.WriteU8(slotID)
+			_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
+		}
+	}
 	return true
 }
 
 // handleLootRoll processes CMSG_LOOT_ROLL (0x2A0).
-// Reference: WorldSession::HandleLootRoll (LootHandler.cpp:165).
+// Reference: WorldSession::HandleLootRoll (GroupHandler.cpp:470).
 func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 13 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	itemGUID, _ := r.ReadU64()
+	itemSlot, _ := r.ReadU32()
+	rollType, _ := r.ReadU8() // 0 = pass, 1 = need, 2 = greed, 3 = disenchant
+
+	if s.server != nil && s.groupID != 0 {
+		buf := protocol.NewBuffer(22)
+		buf.WriteU64(itemGUID)
+		buf.WriteU32(itemSlot)
+		buf.WriteU64(s.playerGUID)
+		buf.WriteU8(rollType)
+		buf.WriteU8(0) // autoPass
+		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
+	}
 	return true
 }
 
 // handleOptOutOfLoot processes CMSG_OPT_OUT_OF_LOOT (0x409).
-// Reference: WorldSession::HandleOptOutOfLootOpcode (LootHandler.cpp:210).
+// Reference: WorldSession::HandleOptOutOfLootOpcode (GroupHandler.cpp:1066).
 func (s *session) handleOptOutOfLoot(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	passOnLoot, _ := r.ReadU32()
+	s.player.PassOnGroupLoot = (passOnLoot != 0)
 	return true
 }
 

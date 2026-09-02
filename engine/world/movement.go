@@ -295,12 +295,34 @@ func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementI
 }
 
 // handleForceMoveRootAck processes CMSG_FORCE_MOVE_ROOT_ACK (0x0E9).
+// Reference: WorldSession::HandleMoveRootAck (MiscHandler.cpp:945).
 func (s *session) handleForceMoveRootAck(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	b := protocol.NewReader(payload)
+	_, _ = b.ReadPackedGUID()
+	_, _ = b.ReadU32() // ack index
+	info, err := readMovementInfo(b)
+	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
+		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+	}
 	return true
 }
 
 // handleForceMoveUnrootAck processes CMSG_FORCE_MOVE_UNROOT_ACK (0x0EB).
+// Reference: WorldSession::HandleMoveUnRootAck (MiscHandler.cpp:919).
 func (s *session) handleForceMoveUnrootAck(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	b := protocol.NewReader(payload)
+	_, _ = b.ReadPackedGUID()
+	_, _ = b.ReadU32() // ack index
+	info, err := readMovementInfo(b)
+	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
+		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+	}
 	return true
 }
 
@@ -351,7 +373,18 @@ func (s *session) handleMoveFallReset(ctx context.Context, payload []byte) bool 
 }
 
 // handleMoveSplineDone processes CMSG_MOVE_SPLINE_DONE (0x2C9).
+// Reference: WorldSession::HandleMoveSplineDoneOpcode (TaxiHandler.cpp:201).
 func (s *session) handleMoveSplineDone(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	b := protocol.NewReader(payload)
+	_, _ = b.ReadPackedGUID()
+	info, err := readMovementInfo(b)
+	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
+		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+		s.sendPlayerUpdate()
+	}
 	return true
 }
 
@@ -378,7 +411,29 @@ func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) boo
 }
 
 // handleSummonResponse processes CMSG_SUMMON_RESPONSE (0x1AC).
+// Reference: WorldSession::HandleSummonResponseOpcode (MovementHandler.cpp:613).
 func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 9 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	summonerGUID, _ := r.ReadU64()
+	agree, _ := r.ReadU8()
+	if agree == 0 || s.player.Health == 0 {
+		return true
+	}
+
+	if s.server != nil {
+		summonerSess := s.server.findSessionByGUID(summonerGUID)
+		if summonerSess != nil && summonerSess.playerLoaded && summonerSess.player != nil {
+			s.player.Map = summonerSess.player.Map
+			s.player.X = summonerSess.player.X
+			s.player.Y = summonerSess.player.Y
+			s.player.Z = summonerSess.player.Z
+			s.player.Orientation = summonerSess.player.Orientation
+			s.sendPlayerUpdate()
+		}
+	}
 	return true
 }
 
@@ -420,6 +475,10 @@ func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) 
 // handleRequestVehicleExit processes CMSG_REQUEST_VEHICLE_EXIT (0x46F).
 // Reference: WorldSession::HandleRequestVehicleExit (VehicleHandler.cpp:190).
 func (s *session) handleRequestVehicleExit(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	s.sendPlayerUpdate()
 	return true
 }
 
