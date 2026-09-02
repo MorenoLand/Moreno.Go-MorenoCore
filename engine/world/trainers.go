@@ -57,11 +57,9 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 		COALESCE(t.Type, 0), COALESCE(t.Greeting, 'Hello! Ready for some training?')
 		FROM trainer_spell AS ts
 		LEFT JOIN trainer AS t ON t.Id = ts.TrainerId
-		WHERE ts.TrainerId = (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ? LIMIT 1)
-		   OR ts.TrainerId = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)
-		   OR ts.TrainerId = (SELECT trainer_spell FROM creature_template WHERE entry = ? LIMIT 1)
+		WHERE ts.TrainerId IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
 		   OR ts.TrainerId = ?
-		ORDER BY ts.ReqLevel, ts.SpellId LIMIT 128`, creatureEntry, creatureEntry, creatureEntry, creatureEntry)
+		ORDER BY ts.ReqLevel, ts.SpellId LIMIT 128`, creatureEntry, creatureEntry)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -97,8 +95,8 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 	// 2. Fallback to legacy npc_trainer if trainer_spell returned no rows
 	if len(spells) == 0 {
 		fbRows, fbErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT SpellID, COALESCE(MoneyCost, 0), COALESCE(ReqSkill, 0), COALESCE(ReqSkillValue, 0), COALESCE(ReqLevel, 0)
-			FROM npc_trainer WHERE ID = ? OR ID = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)
-			ORDER BY ReqLevel, SpellID LIMIT 128`, creatureEntry, creatureEntry)
+			FROM npc_trainer WHERE ID = ?
+			ORDER BY ReqLevel, SpellID LIMIT 128`, creatureEntry)
 		if fbErr == nil {
 			defer fbRows.Close()
 			for fbRows.Next() {
