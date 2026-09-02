@@ -14,11 +14,12 @@ const unitDynFlagLootable uint32 = 0x00000001
 
 // creatureRespawn records when a killed spawn restores its health.
 type creatureRespawn struct {
-	At          time.Time
-	Health      uint32
-	Entry       uint32
-	Map         uint32
-	X, Y        float32
+	GUID    uint32
+	At      time.Time
+	Health  uint32
+	Entry   uint32
+	Map     uint32
+	X, Y, Z float32
 }
 
 // xpTable mirrors TDB 3.3.5a `player_xp_for_level`; preferred from the world
@@ -157,7 +158,7 @@ func (s *Server) killXPGain(ctx context.Context, playerLevel, mobLevel uint32) u
 		if levelDiff > 4 {
 			levelDiff = 4
 		}
-		return ((playerLevel*5 + baseExp) * (20 + levelDiff) / 10 + 1) / 2
+		return ((playerLevel*5+baseExp)*(20+levelDiff)/10 + 1) / 2
 	}
 	if mobLevel > grayLevel(playerLevel) {
 		zd := zeroDifference(playerLevel)
@@ -247,11 +248,14 @@ func (s *Server) scheduleCreatureRespawn(ctx context.Context, guid, health uint3
 	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(spawntimesecs, 0), 300) FROM creature WHERE guid = ?", guid).Scan(&seconds); err != nil || seconds <= 0 {
 		seconds = 300
 	}
+	var entry, mapID int64
+	var x, y, z float64
+	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT id, map, position_x, position_y, position_z FROM creature WHERE guid = ?", guid).Scan(&entry, &mapID, &x, &y, &z)
 	s.motionMu.Lock()
 	if s.creatureRespawns == nil {
 		s.creatureRespawns = make(map[uint32]creatureRespawn)
 	}
-	s.creatureRespawns[guid] = creatureRespawn{At: now.Add(time.Duration(seconds) * time.Second), Health: health}
+	s.creatureRespawns[guid] = creatureRespawn{GUID: guid, At: now.Add(time.Duration(seconds) * time.Second), Health: health, Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z)}
 	s.motionMu.Unlock()
 }
 
@@ -270,8 +274,20 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 	}
 	s.motionMu.Unlock()
 	for _, respawn := range due {
-		if _, err := s.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = ? WHERE guid = ?", respawn.Health, respawn.Entry); err != nil {
+		if _, err := s.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = ? WHERE guid = ?", respawn.Health, respawn.GUID); err != nil {
 			continue
+		}
+		if respawn.Entry != 0 {
+			rawGUID := creatureWorldGUID(respawn.GUID, respawn.Entry)
+			s.motionMu.Lock()
+			if motion := s.creatureMotion[rawGUID]; motion != nil {
+				motion.Health = respawn.Health
+				motion.MaxHealth = respawn.Health
+				motion.X, motion.Y, motion.Z = respawn.X, respawn.Y, respawn.Z
+				motion.InCombat, motion.TargetGUID, motion.Moving = false, 0, false
+			}
+			s.motionMu.Unlock()
+			s.broadcastCreatureValuesUpdate(respawn.Map, rawGUID, map[int]uint32{unitFieldHealth: respawn.Health, unitFieldDynamicFlags: 0})
 		}
 	}
 }

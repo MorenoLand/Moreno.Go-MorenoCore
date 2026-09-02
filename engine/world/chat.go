@@ -102,7 +102,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	}
 	isGM := s.player != nil && ((s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0))
 	if language == languageUniversal && typeID != chatAFK && typeID != chatDND {
-		if !isGM || (!s.gmChat && s.player.ExtraFlags&0x20 == 0) {
+		if !isGM || (!s.gmChat && s.player.ExtraFlags&playerExtraGMChat == 0) {
 			if s.playerAlliance() {
 				language = 7 // Common
 			} else {
@@ -110,7 +110,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
-	if language != languageAddon && isGM && (s.gmChat || s.player.ExtraFlags&0x20 != 0) {
+	if language != languageAddon && isGM && (s.gmChat || s.player.ExtraFlags&playerExtraGMChat != 0) {
 		language = languageUniversal
 	}
 	values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, scripting.PlayerEventChat, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
@@ -219,7 +219,7 @@ func (s *session) chatTag() uint8 {
 	}
 	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0)
 	var tag uint8
-	if isGM && (s.gmChat || s.player.ExtraFlags&0x20 != 0) {
+	if isGM && (s.gmChat || s.player.ExtraFlags&playerExtraGMChat != 0) {
 		tag |= 0x04
 	}
 	return tag

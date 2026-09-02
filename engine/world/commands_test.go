@@ -88,6 +88,18 @@ func TestExecuteCommands(t *testing.T) {
 	if player.ExtraFlags&0x01 != 0 {
 		t.Fatal("gm off did not clear flag")
 	}
+	if !state.executeCommand(ctx, "gm visible off") {
+		t.Fatal("gm visible off failed")
+	}
+	if player.ExtraFlags&playerExtraGMInvisible == 0 || player.PlayerFlags&playerFlagGhost != 0 {
+		t.Fatalf("invisible state used the player ghost flag: extra=%x flags=%x", player.ExtraFlags, player.PlayerFlags)
+	}
+	if !state.executeCommand(ctx, "gm visible on") {
+		t.Fatal("gm visible on failed")
+	}
+	if player.ExtraFlags&playerExtraGMInvisible != 0 {
+		t.Fatal("gm visible on did not clear invisible flag")
+	}
 
 	// 3. .modify hp 5000
 	if !state.executeCommand(ctx, "modify hp 5000") {

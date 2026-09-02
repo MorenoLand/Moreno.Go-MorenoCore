@@ -78,7 +78,8 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 
 	// If player has few spells, ensure custom starter spells from playercreateinfo_spell_custom are also learned
 	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		crows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = ? OR racemask = 0) AND (classmask = ? OR classmask = 0)", race, class)
+		raceMask, classMask := playerCreateMask(race), playerCreateMask(class)
+		crows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR (racemask & ?) <> 0) AND (classmask = 0 OR (classmask & ?) <> 0)", raceMask, classMask)
 		if err == nil {
 			defer crows.Close()
 			for crows.Next() {
@@ -101,6 +102,13 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 		}
 	}
 	return result, nil
+}
+
+func playerCreateMask(id uint8) uint32 {
+	if id == 0 || id > 32 {
+		return 0
+	}
+	return uint32(1) << (id - 1)
 }
 
 func defaultRacialSpells(race uint8) []learnedSpell {

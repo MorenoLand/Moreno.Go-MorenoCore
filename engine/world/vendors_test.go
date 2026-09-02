@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"net"
 	"testing"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -75,5 +76,60 @@ func TestVendorBuyingAndSelling(t *testing.T) {
 	}
 	if sess.player.Money != 920 { // 900 + (2 * 10)
 		t.Fatalf("expected 920 money after sell, got %d", sess.player.Money)
+	}
+}
+
+func TestVendorInfiniteStockUsesZeroWireCount(t *testing.T) {
+	if got := vendorStockValue(0); got != 0 {
+		t.Fatalf("infinite stock=%d", got)
+	}
+	if got := vendorStockValue(7); got != 7 {
+		t.Fatalf("finite stock=%d", got)
+	}
+}
+
+func TestVendorListEncodesUnlimitedStockAsZero(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER)",
+		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 0)",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 100, 1)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{conn: serverConn, server: &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}}, playerLoaded: true, player: &playerState{GUID: 1}}
+	done := make(chan bool, 1)
+	go func() { done <- sess.sendVendorList(context.Background(), creatureWorldGUID(1, 101)) }()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !<-done || opcode != uint16(protocol.OpcodeSMSG_LIST_INVENTORY) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU64(); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := reader.ReadU8(); err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := reader.ReadU32(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stock, err := reader.ReadU32(); err != nil || stock != 0 {
+		t.Fatalf("unlimited stock=%d err=%v", stock, err)
 	}
 }
