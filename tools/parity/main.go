@@ -22,10 +22,12 @@ type toolStatus struct {
 }
 
 var (
-	opcodePattern    = regexp.MustCompile(`DEFINE_(?:SERVER_)?(?:OPCODE_)?HANDLER\(\s*([A-Z0-9_]+)`)
-	goHandlerPattern = regexp.MustCompile(`case uint32\(protocol\.Opcode([A-Z0-9_]+)\)`)
-	statementPattern = regexp.MustCompile(`PrepareStatement\(\s*([A-Z0-9_]+)`)
-	goIDPattern      = regexp.MustCompile(`ID:\s*"([A-Z0-9_]+)"`)
+	opcodePattern         = regexp.MustCompile(`DEFINE_(?:SERVER_)?(?:OPCODE_)?HANDLER\(\s*([A-Z0-9_]+)`)
+	goHandlerPattern      = regexp.MustCompile(`case uint32\(protocol\.Opcode([A-Z0-9_]+)\)`)
+	statementPattern      = regexp.MustCompile(`PrepareStatement\(\s*([A-Z0-9_]+)`)
+	statementSQLPattern   = regexp.MustCompile(`PrepareStatement\(\s*([A-Z0-9_]+)\s*,\s*"((?:[^"\\]|\\.)*)"`)
+	goStatementSQLPattern = regexp.MustCompile(`ID:\s*"([A-Z0-9_]+)"\s*,\s*SQL:\s*"((?:[^"\\]|\\.)*)"`)
+	schemaPattern         = regexp.MustCompile(`(?i)CREATE\s+(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?[\x60]?([A-Za-z0-9_]+)[\x60]?`)
 )
 
 func main() {
@@ -76,14 +78,41 @@ func buildReport(reference, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	refStatements, err := matches(filepath.Join(reference, "src", "server"), statementPattern, nil)
+	refStatementSQL, err := statementDetails(filepath.Join(reference, "src", "server"), statementSQLPattern, nil)
 	if err != nil {
 		return "", err
 	}
-	goStatements, err := matches(filepath.Join(repo, "engine", "database"), goIDPattern, nil)
+	goStatementSQL, err := statementDetails(filepath.Join(repo, "engine", "database"), goStatementSQLPattern, nil)
 	if err != nil {
 		return "", err
 	}
+	refStatements := keys(refStatementSQL)
+	goStatements := keys(goStatementSQL)
+	refSchema, err := sqlMatches(filepath.Join(reference, "sql"), schemaPattern)
+	if err != nil {
+		return "", err
+	}
+	goMySQLSchema, err := sqlMatches(filepath.Join(repo, "sql", "mysql"), schemaPattern)
+	if err != nil {
+		return "", err
+	}
+	goSQLiteSchema, err := sqlMatches(filepath.Join(repo, "sql", "sqlite"), schemaPattern)
+	if err != nil {
+		return "", err
+	}
+	refScripts, err := countSources(filepath.Join(reference, "src", "server", "scripts"))
+	if err != nil {
+		return "", err
+	}
+	goScripts, err := countSources(filepath.Join(repo, "engine", "scripting"))
+	if err != nil {
+		return "", err
+	}
+	refTests, err := countSources(filepath.Join(reference, "tests"))
+	if err != nil {
+		return "", err
+	}
+	goTests := countTestSources(repo)
 	tools := []toolStatus{
 		{Reference: "map_extractor", GoPath: "tools/mapextractor"},
 		{Reference: "vmap4_extractor", GoPath: "tools/vmap4extractor"},
@@ -104,9 +133,15 @@ func buildReport(reference, repo string) (string, error) {
 	fmt.Fprintf(&report, "| Server source files / lines | %d / %d | %d / %d | — |\n", refServer.Files, refServer.Lines, goSources.Files, goSources.Lines)
 	fmt.Fprintf(&report, "| Tool source files / lines | %d / %d | — | — |\n", refTools.Files, refTools.Lines)
 	fmt.Fprintf(&report, "| Opcode handlers | %d | %d | %d |\n", len(refOpcodes), len(goOpcodes), len(difference(refOpcodes, goOpcodes)))
-	fmt.Fprintf(&report, "| Prepared statements | %d | %d | %d |\n", len(refStatements), len(goStatements), len(difference(refStatements, goStatements)))
+	fmt.Fprintf(&report, "| Prepared statement identifiers | %d | %d | %d |\n", len(refStatements), len(goStatements), len(difference(refStatements, goStatements)))
+	fmt.Fprintf(&report, "| Prepared statement SQL mismatches | — | — | %d |\n", len(sqlDifferences(refStatementSQL, goStatementSQL)))
+	fmt.Fprintf(&report, "| Schema tables/views | %d | %d mysql / %d sqlite | %d mysql / %d sqlite |\n", len(refSchema), len(goMySQLSchema), len(goSQLiteSchema), len(difference(keys(refSchema), keys(goMySQLSchema))), len(difference(keys(refSchema), keys(goSQLiteSchema))))
+	fmt.Fprintf(&report, "| Script source files / lines | %d / %d | %d / %d | — |\n", refScripts.Files, refScripts.Lines, goScripts.Files, goScripts.Lines)
+	fmt.Fprintf(&report, "| Test source files / lines | %d / %d | %d / %d | — |\n", refTests.Files, refTests.Lines, goTests.Files, goTests.Lines)
 	fmt.Fprintf(&report, "\n## Missing opcode handlers\n\n%s\n", list(difference(refOpcodes, goOpcodes)))
 	fmt.Fprintf(&report, "## Missing prepared statements\n\n%s\n", list(difference(refStatements, goStatements)))
+	fmt.Fprintf(&report, "## Prepared statement SQL mismatches\n\n%s\n", list(sqlDifferences(refStatementSQL, goStatementSQL)))
+	fmt.Fprintf(&report, "## Missing schema tables/views\n\n### MySQL\n\n%s\n\n### SQLite\n\n%s\n", list(difference(keys(refSchema), keys(goMySQLSchema))), list(difference(keys(refSchema), keys(goSQLiteSchema))))
 	fmt.Fprintf(&report, "## Extraction tools\n\n| Reference tool | Go path | Status |\n| --- | --- | --- |\n")
 	for _, tool := range tools {
 		status := "implemented source"
@@ -167,6 +202,106 @@ func matches(root string, pattern *regexp.Regexp, filter func(string) bool) ([]s
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func statementDetails(root string, pattern *regexp.Regexp, filter func(string) bool) (map[string]string, error) {
+	values := make(map[string]string)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !isSource(path) || filter != nil && !filter(path) {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, match := range pattern.FindAllStringSubmatch(string(data), -1) {
+			if len(match) > 2 {
+				values[match[1]] = match[2]
+			}
+		}
+		return nil
+	})
+	return values, err
+}
+
+func sqlMatches(root string, pattern *regexp.Regexp) (map[string]string, error) {
+	values := make(map[string]string)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || strings.ToLower(filepath.Ext(path)) != ".sql" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, match := range pattern.FindAllStringSubmatch(string(data), -1) {
+			if len(match) > 1 {
+				values[strings.ToLower(match[1])] = filepath.Base(path)
+			}
+		}
+		return nil
+	})
+	return values, err
+}
+
+func sqlDifferences(reference, implementation map[string]string) []string {
+	values := make([]string, 0)
+	for name, sql := range reference {
+		implementationSQL, ok := implementation[name]
+		if ok && normalizeSQL(sql) != normalizeSQL(implementationSQL) {
+			values = append(values, name)
+		}
+	}
+	sort.Strings(values)
+	return values
+}
+
+func normalizeSQL(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(value)), " ")
+}
+
+func keys(values map[string]string) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func countOptionalSources(root string) sourceCounts {
+	counts, err := countSources(root)
+	if err != nil {
+		return sourceCounts{}
+	}
+	return counts
+}
+
+func countTestSources(root string) sourceCounts {
+	counts := sourceCounts{}
+	if _, err := os.Stat(root); err != nil {
+		return counts
+	}
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(path), "_test.go") {
+			return nil
+		}
+		if data, err := os.ReadFile(path); err == nil {
+			counts.Files++
+			counts.Lines += strings.Count(string(data), "\n")
+		}
+		return nil
+	})
+	return counts
 }
 
 func readGoFiles(root string) (string, error) {
