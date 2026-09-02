@@ -159,6 +159,8 @@ func TestBuildPlayerUpdateCharacterSheetFields(t *testing.T) {
 	server := &Server{}
 	state := playerState{
 		GUID:      100,
+		Race:      1,
+		Class:     1,
 		Level:     20,
 		Health:    500,
 		MaxHealth: 500,
@@ -236,4 +238,42 @@ func TestBuildPlayerUpdateCharacterSheetFields(t *testing.T) {
 	if values[playerCharacterPoints2] != 5 {
 		t.Errorf("expected spent talent points 5, got %d", values[playerCharacterPoints2])
 	}
+
+	// UNIT_FIELD_BYTES_0: Race, Class, Gender, PowerType (prevents client 0x007F69D1 crash)
+	bytes0 := values[unitFieldBytes0]
+	raceByte := uint8(bytes0 & 0xFF)
+	classByte := uint8((bytes0 >> 8) & 0xFF)
+	genderByte := uint8((bytes0 >> 16) & 0xFF)
+	powerTypeByte := uint8((bytes0 >> 24) & 0xFF)
+	if raceByte != 1 || classByte != 1 || genderByte != 0 || powerTypeByte != 1 {
+		t.Errorf("expected bytes0=(race 1, class 1, gender 0, power 1), got race %d, class %d, gender %d, power %d", raceByte, classByte, genderByte, powerTypeByte)
+	}
 }
+
+func TestIsAllowedClassSkill(t *testing.T) {
+	// Warlock (class 9) must NOT have Plate (293), Leather (414), or Mage Frost (6)
+	if isAllowedClassSkill(9, 293) {
+		t.Error("warlock should not be allowed Plate Mail")
+	}
+	if isAllowedClassSkill(9, 414) {
+		t.Error("warlock should not be allowed Leather")
+	}
+	if isAllowedClassSkill(9, 6) {
+		t.Error("warlock should not be allowed Mage Frost")
+	}
+	// Warlock MUST be allowed Cloth (415) and Warlock Demo (354)
+	if !isAllowedClassSkill(9, 415) {
+		t.Error("warlock should be allowed Cloth")
+	}
+	if !isAllowedClassSkill(9, 354) {
+		t.Error("warlock should be allowed Warlock Demo")
+	}
+	// Warrior (class 1) must be allowed Plate (293) and Leather (414)
+	if !isAllowedClassSkill(1, 293) {
+		t.Error("warrior should be allowed Plate Mail")
+	}
+	if !isAllowedClassSkill(1, 414) {
+		t.Error("warrior should be allowed Leather")
+	}
+}
+

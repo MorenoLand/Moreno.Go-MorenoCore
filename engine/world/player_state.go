@@ -18,6 +18,7 @@ const (
 	objectFieldType                             = 2
 	objectFieldEntry                            = 3
 	objectFieldScale                            = 4
+	unitFieldBytes0                             = 23 // UNIT_FIELD_BYTES_0: Race, Class, Gender, PowerType
 	unitFieldHealth                             = 24
 	unitFieldLevel                              = 54
 	unitFieldFaction                            = 55
@@ -387,7 +388,13 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		args = append(args, &powers[i])
 	}
 	args = append(args, &cinematic, &knownCurrency, &watchedFaction, &ammoID, &actionBars)
-	optionalErr = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT xp, money, health, power1, power2, power3, power4, power5, power6, power7, cinematic, knownCurrencies, watchedFaction, ammoId, actionBars FROM characters WHERE guid = ? AND account = ?", state.GUID, s.accountID).Scan(args...)
+	optionalErr = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT xp, money, health, power1, power2, power3, power4, power5, power6, power7,
+		COALESCE(CAST(cinematic AS INTEGER), 0),
+		COALESCE(CAST(knownCurrencies AS INTEGER), 0),
+		COALESCE(CAST(watchedFaction AS INTEGER), 0),
+		COALESCE(CAST(ammoId AS INTEGER), 0),
+		COALESCE(CAST(actionBars AS INTEGER), 0)
+		FROM characters WHERE guid = ? AND account = ?`, state.GUID, s.accountID).Scan(args...)
 	if optionalErr != nil {
 		if isMissingColumn(optionalErr) || errors.Is(optionalErr, sql.ErrNoRows) {
 			return nil
@@ -437,6 +444,10 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 	for rows.Next() {
 		var skill, value, max uint16
 		if err := rows.Scan(&skill, &value, &max); err == nil {
+			if !isAllowedClassSkill(state.Class, skill) {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", state.GUID, skill)
+				continue
+			}
 			if isLanguageSkill(skill) && (value == 0 || max == 0) {
 				value = 300
 				max = 300
@@ -473,6 +484,39 @@ func isLanguageSkill(skill uint16) bool {
 		return true
 	}
 	return false
+}
+
+func isAllowedClassSkill(class uint8, skill uint16) bool {
+	switch skill {
+	case 293: // Plate Mail
+		return class == 1 || class == 2 || class == 6
+	case 413: // Mail
+		return class == 1 || class == 2 || class == 3 || class == 6 || class == 7
+	case 414: // Leather
+		return class != 5 && class != 8 && class != 9 // Not Priest, Mage, Warlock
+	case 433: // Shield
+		return class == 1 || class == 2 || class == 7
+	// Talent / Class spell lines:
+	case 6, 8, 237: // Mage: Frost, Fire, Arcane
+		return class == 8
+	case 134, 573, 574: // Druid: Feral, Resto, Balance
+		return class == 11
+	case 354, 355, 593: // Warlock: Demo, Affliction, Destro
+		return class == 9
+	case 256, 257: // Priest: Discipline, Holy, Shadow
+		return class == 5
+	case 373, 374, 375: // Shaman: Enhancement, Resto, Elemental
+		return class == 7
+	case 253, 254, 255: // Rogue: Assassination, Combat, Subtlety
+		return class == 4
+	case 50, 51, 163: // Hunter: Beast Mastery, Survival, Marksmanship
+		return class == 3
+	case 267, 184: // Paladin: Protection, Retribution
+		return class == 2
+	case 770, 771, 772: // Death Knight: Blood, Frost, Unholy
+		return class == 6
+	}
+	return true
 }
 
 func defaultRacialSkills(race, class uint8) []playerSkill {
@@ -516,6 +560,18 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[objectFieldScale] = math.Float32bits(1)
 	values[unitFieldHealth] = state.Health
 	values[unitFieldLevel] = uint32(state.Level)
+	var powerType uint8
+	switch state.Class {
+	case 1: // Warrior
+		powerType = 1 // Rage
+	case 4: // Rogue
+		powerType = 3 // Energy
+	case 6: // Death Knight
+		powerType = 6 // Runic Power
+	default:
+		powerType = 0 // Mana
+	}
+	values[unitFieldBytes0] = uint32(state.Race) | uint32(state.Class)<<8 | uint32(state.Gender)<<16 | uint32(powerType)<<24
 	values[unitFieldBytes1] = uint32(state.StandState)
 	values[unitFieldFaction] = s.raceFaction(state.Race)
 	values[unitFieldFlags] = unitFlagPlayerControlled | state.UnitFlags
