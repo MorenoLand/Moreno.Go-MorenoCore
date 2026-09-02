@@ -1083,6 +1083,82 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleBattlefieldStatus(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE):
+			if !state.authed || !state.handleBfEntryInviteResponse(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BATTLEFIELD_MGR_QUEUE_INVITE_RESPONSE):
+			if !state.authed || !state.handleBfQueueInviteResponse(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BATTLEFIELD_MGR_EXIT_REQUEST):
+			if !state.authed || !state.handleBfQueueExitRequest(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_GET_CALENDAR):
+			if !state.authed || !state.handleCalendarGetCalendar(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_GET_NUM_PENDING):
+			if !state.authed || !state.handleCalendarGetNumPending(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_GET_EVENT):
+			if !state.authed || !state.handleCalendarGetEvent(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_GUILD_FILTER):
+			if !state.authed || !state.handleCalendarGuildFilter(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_ARENA_TEAM):
+			if !state.authed || !state.handleCalendarArenaTeam(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_ADD_EVENT):
+			if !state.authed || !state.handleCalendarAddEvent(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_UPDATE_EVENT):
+			if !state.authed || !state.handleCalendarUpdateEvent(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_REMOVE_EVENT):
+			if !state.authed || !state.handleCalendarRemoveEvent(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_COPY_EVENT):
+			if !state.authed || !state.handleCalendarCopyEvent(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_INVITE):
+			if !state.authed || !state.handleCalendarEventInvite(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_SIGNUP):
+			if !state.authed || !state.handleCalendarEventSignup(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_RSVP):
+			if !state.authed || !state.handleCalendarEventRSVP(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_REMOVE_INVITE):
+			if !state.authed || !state.handleCalendarEventRemoveInvite(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_STATUS):
+			if !state.authed || !state.handleCalendarEventStatus(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_EVENT_MODERATOR_STATUS):
+			if !state.authed || !state.handleCalendarEventModeratorStatus(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CALENDAR_COMPLAIN):
+			if !state.authed || !state.handleCalendarComplain(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
 			if !state.authed || !state.handleTutorialFlag(ctx, payload) {
 				return
