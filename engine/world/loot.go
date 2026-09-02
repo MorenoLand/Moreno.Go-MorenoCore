@@ -219,24 +219,46 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	if err != nil {
 		return true
 	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, played_time, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 0, 0, '')", nextGUID, it.ItemEntry, s.playerGUID, it.Count); err != nil {
+	if _, err = tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 0, 0, '')", nextGUID, it.ItemEntry, s.playerGUID, it.Count); err != nil {
 		_ = tx.Rollback()
+		s.debug("loot item insert failed", "account", s.accountName, "item", it.ItemEntry, "error", err)
 		return true
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID); err != nil {
 		_ = tx.Rollback()
+		s.debug("loot inventory insert failed", "account", s.accountName, "item", it.ItemEntry, "error", err)
 		return true
 	}
 	if err = tx.Commit(); err != nil {
 		return true
 	}
+	inventoryCount := int64(0)
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?", s.playerGUID, it.ItemEntry).Scan(&inventoryCount)
 	delete(s.activeLoot.Items, lootSlot)
 	removed := protocol.NewBuffer(1)
 	removed.WriteU8(lootSlot)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), removed.Bytes(), true)
+	_ = s.sendItemCreate(uint64(nextGUID), it.ItemEntry, it.Count, 0, freeSlot)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(s.playerGUID, 0, uint32(freeSlot), it.ItemEntry, it.Count, uint32(inventoryCount)), true)
 	s.sendPlayerUpdate()
 	s.debug("loot item stored", "account", s.accountName, "item", it.ItemEntry, "slot", freeSlot)
 	return true
+}
+
+func buildLootItemPushResult(playerGUID uint64, bag uint8, slot, entry, count, inventoryCount uint32) []byte {
+	packet := protocol.NewBuffer(48)
+	packet.WriteU64(playerGUID)
+	packet.WriteU32(0)
+	packet.WriteU32(0)
+	packet.WriteU32(1)
+	packet.WriteU8(bag)
+	packet.WriteU32(slot)
+	packet.WriteU32(entry)
+	packet.WriteU32(0)
+	packet.WriteI32(0)
+	packet.WriteU32(count)
+	packet.WriteU32(inventoryCount)
+	return packet.Bytes()
 }
 
 func (s *session) handleLootRelease(payload []byte) bool {

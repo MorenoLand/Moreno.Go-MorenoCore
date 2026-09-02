@@ -215,9 +215,40 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	wg.Wait()
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
+	_ = s.loadClassLevelStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
 	s.player = &state
 	return state, nil
+}
+
+func (s *session) loadClassLevelStats(ctx context.Context, state *playerState) error {
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return nil
+	}
+	var baseHealth, baseMana int64
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT basehp, basemana FROM player_classlevelstats WHERE class = ? AND level = ?", state.Class, state.Level).Scan(&baseHealth, &baseMana)
+	if err != nil {
+		if missingTable(err) || isMissingColumn(err) {
+			return nil
+		}
+		return err
+	}
+	if baseHealth > 0 {
+		if state.Health <= 1 && state.MaxHealth <= 1 && state.XP == 0 {
+			state.Health = uint32(baseHealth)
+		}
+		state.MaxHealth = uint32(baseHealth)
+		if state.Health > state.MaxHealth {
+			state.Health = state.MaxHealth
+		}
+	}
+	if baseMana > 0 && state.Powers[0] == 0 {
+		state.Powers[0] = uint32(baseMana)
+	}
+	if baseMana > 0 && state.MaxPowers[0] == 0 {
+		state.MaxPowers[0] = uint32(baseMana)
+	}
+	return nil
 }
 
 func (s *session) loadPlayerReputations(ctx context.Context, state *playerState) error {
@@ -288,7 +319,7 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		return optionalErr
 	}
 	state.XP, state.Money = uint32(xp), uint32(money)
-	if health > 0 {
+	if health >= 0 {
 		state.Health, state.MaxHealth = uint32(health), uint32(health)
 	}
 	for i, power := range powers {

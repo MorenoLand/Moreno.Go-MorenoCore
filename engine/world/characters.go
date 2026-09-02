@@ -249,6 +249,7 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CHARACTER", args...); err != nil {
 		return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 48)
 	}
+	s.initializeCreatedPlayerStats(ctx, guid, class, startLevel)
 
 	// Populate starter spells, skills, actions, equipment
 	s.createStarterSpells(ctx, guid, race, class)
@@ -269,6 +270,17 @@ func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
 	}
 	s.legitimate[guid] = struct{}{}
 	return sendCharacterResult(s, uint16(protocol.OpcodeSMSG_CHAR_CREATE), 47)
+}
+
+func (s *session) initializeCreatedPlayerStats(ctx context.Context, guid uint64, class, level uint8) {
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	var health, mana int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT basehp, basemana FROM player_classlevelstats WHERE class = ? AND level = ?", class, level).Scan(&health, &mana); err != nil || health <= 0 {
+		return
+	}
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, power1 = ? WHERE guid = ?", health, mana, guid)
 }
 
 func (s *session) handleCharDelete(ctx context.Context, payload []byte) bool {
@@ -365,7 +377,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), cinematicBuf.Bytes(), true)
 		}
 		state.Cinematic = 1
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1 WHERE guid = ?", guid)
+		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1 WHERE guid = ?", guid); err != nil {
+			s.debug("cinematic state save failed", "account", s.accountName, "guid", guid, "error", err)
+			return false
+		}
 	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
 		return false
@@ -445,6 +460,25 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
+	return true
+}
+
+func (s *session) handleNextCinematicCamera() bool {
+	return true
+}
+
+func (s *session) handleCompleteCinematic(ctx context.Context) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	s.player.Cinematic = 1
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1 WHERE guid = ?", s.playerGUID); err != nil {
+			s.debug("cinematic completion save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
+			return false
+		}
+	}
+	s.debug("cinematic completed", "account", s.accountName, "guid", s.playerGUID)
 	return true
 }
 

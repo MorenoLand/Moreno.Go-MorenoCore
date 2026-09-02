@@ -34,7 +34,7 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 		if err := s.completeLogout(ctx); err != nil {
 			s.debug("player logout failed", "account", s.accountName, "error", err)
 		}
-		return false
+		return true
 	}
 	s.logoutAt = time.Now().Add(logoutDelay)
 	s.debug("player logout pending", "account", s.accountName, "delay_seconds", int(logoutDelay/time.Second))
@@ -55,14 +55,15 @@ func (s *session) completeLogout(ctx context.Context) error {
 		return nil
 	}
 	s.triggerLogout(ctx)
+	var firstErr error
 	if err := s.savePlayerPosition(ctx); err != nil {
-		return err
+		firstErr = err
 	}
-	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID); err != nil {
-		return err
+	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID); err != nil && firstErr == nil {
+		firstErr = err
 	}
-	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID); err != nil {
-		return err
+	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID); err != nil && firstErr == nil {
+		firstErr = err
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGOUT_COMPLETE), nil, true); err != nil {
 		return err
@@ -71,7 +72,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 	s.player = nil
 	s.logoutAt = time.Time{}
 	s.debug("player logged out", "account", s.accountName, "guid", s.playerGUID)
-	return nil
+	return firstErr
 }
 
 func (s *session) triggerLogout(ctx context.Context) {
