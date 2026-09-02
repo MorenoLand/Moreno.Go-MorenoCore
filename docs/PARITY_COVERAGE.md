@@ -4,10 +4,14 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 155 / 32134 | — |
+| Server source files / lines | 1410 / 710273 | 155 / 32269 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
 | Opcode handlers | 1310 | 127 | 1183 |
-| Prepared statements | 612 | 612 | 0 |
+| Prepared statement identifiers | 612 | 612 | 0 |
+| Prepared statement SQL mismatches | — | — | 27 |
+| Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
+| Script source files / lines | 707 / 316814 | 4 / 921 | — |
+| Test source files / lines | 9 / 1390 | 60 / 5156 | — |
 
 ## Missing opcode handlers
 
@@ -1196,6 +1200,45 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `UMSG_UPDATE_GUILD`
 
 ## Missing prepared statements
+
+No missing symbols detected.
+## Prepared statement SQL mismatches
+
+- `CHAR_INS_AURA`
+- `CHAR_INS_CHARACTER`
+- `CHAR_INS_CHAR_STATS`
+- `CHAR_INS_EQUIP_SET`
+- `CHAR_INS_GUILD_BANK_RIGHT`
+- `CHAR_INS_GUILD_MEMBER_WITHDRAW`
+- `CHAR_INS_PET`
+- `CHAR_INS_PET_AURA`
+- `CHAR_SEL_CHARACTER`
+- `CHAR_SEL_CHARACTER_AURAS`
+- `CHAR_SEL_CHARACTER_EQUIPMENTSETS`
+- `CHAR_SEL_CHARACTER_INVENTORY`
+- `CHAR_SEL_CHARACTER_QUESTSTATUS`
+- `CHAR_SEL_CHAR_INVENTORY_ITEM_BY_ENTRY`
+- `CHAR_SEL_ENUM`
+- `CHAR_SEL_ENUM_DECLINED_NAME`
+- `CHAR_SEL_GUILD_MEMBER_EXTENDED`
+- `CHAR_SEL_MAIL_ITEMS_BY_ENTRY`
+- `CHAR_SEL_MAIL_LIST_INFO`
+- `CHAR_SEL_NPCBOT_EQUIP_BY_ITEM_INSTANCE`
+- `CHAR_UPD_CHANNEL`
+- `CHAR_UPD_CHARACTER`
+- `CHAR_UPD_EQUIP_SET`
+- `CHAR_UPD_NPCBOT_EQUIP`
+- `LOGIN_SEL_ACCOUNT_INFO_BY_NAME`
+- `LOGIN_SEL_LOGONCHALLENGE`
+- `LOGIN_SEL_RECONNECTCHALLENGE`
+
+## Missing schema tables/views
+
+### MySQL
+
+No missing symbols detected.
+
+### SQLite
 
 No missing symbols detected.
 ## Extraction tools
