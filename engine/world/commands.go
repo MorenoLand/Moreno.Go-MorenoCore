@@ -753,9 +753,7 @@ func (s *session) handleCmdRevive(ctx context.Context, args []string) {
 	if s.player == nil {
 		return
 	}
-	s.player.Health = maxUint32(s.player.MaxHealth, 100)
-	s.player.PlayerFlags &^= 0x00002000 // GHOST flag
-	s.sendPlayerUpdate()
+	s.resurrectPlayer(ctx, 1.0)
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, playerFlags = ? WHERE guid = ?", s.player.Health, s.player.PlayerFlags, s.playerGUID)
 	}

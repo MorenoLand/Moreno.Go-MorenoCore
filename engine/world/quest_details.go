@@ -96,15 +96,6 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	packet := buildQuestGiverDetails(data, guid, 0)
 	s.debug("quest details response", "account", s.accountName, "quest", questID)
 
-	// In TrinityCore Player.cpp:14836, if quest is AutoAccept, add it upon viewing details
-	var specialFlags int64
-	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
-	if specialFlags&4 != 0 {
-		if canTake, _ := s.canTakeQuest(ctx, questID); canTake {
-			s.addQuestToPlayer(ctx, questID)
-		}
-	}
-
 	return s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), packet, true) == nil
 }
 
@@ -271,8 +262,38 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ? AND quest = ?", s.playerGUID, questID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_daily WHERE guid = ? AND quest = ?", s.playerGUID, questID)
 	}
-	if s.server.Features != nil && s.server.Features.Scripts != nil {
-		_, _ = s.server.Features.Scripts.TriggerPlayerEvent(ctx, 43, 43, s.luaPlayer(), questID)
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		wdb := s.server.WorldStore.DB
+		var entries []uint32
+		rows, err := wdb.QueryContext(ctx, "SELECT id FROM creature_queststarter WHERE quest = ? UNION SELECT id FROM creature_questender WHERE quest = ?", questID, questID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var ent uint32
+				if rows.Scan(&ent) == nil {
+					entries = append(entries, ent)
+				}
+			}
+		}
+		for _, ent := range entries {
+			status, err := s.questDialogStatus(ctx, ent)
+			if err == nil {
+				crows, err := wdb.QueryContext(ctx, "SELECT guid FROM creature WHERE id = ? AND map = ?", ent, s.player.Map)
+				if err == nil {
+					for crows.Next() {
+						var spawnGUID uint32
+						if crows.Scan(&spawnGUID) == nil {
+							guid := creatureWorldGUID(spawnGUID, ent)
+							packet := protocol.NewBuffer(9)
+							packet.WriteU64(guid)
+							packet.WriteU8(status)
+							_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS), packet.Bytes(), true)
+						}
+					}
+					crows.Close()
+				}
+			}
+		}
 	}
 	s.debug("quest abandoned", "account", s.accountName, "quest", questID, "slot", slot)
 	return true
