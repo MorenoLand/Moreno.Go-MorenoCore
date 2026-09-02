@@ -132,6 +132,7 @@ type playerState struct {
 	HomebindY        float32
 	HomebindZ        float32
 	Reputations      []playerReputation
+	Talents          map[uint32]uint8
 }
 
 type playerReputation struct {
@@ -189,6 +190,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		state.HomebindY = state.Y
 		state.HomebindZ = state.Z
 	}
+	state.Talents = make(map[uint32]uint8)
 	s.player = &state
 
 	// Rebuild the quest log slots, taxi masks, guild info, skills, and packet states concurrently

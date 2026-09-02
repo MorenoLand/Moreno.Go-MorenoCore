@@ -854,6 +854,18 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleChatIgnored(payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_LEARN_TALENT):
+			if !state.authed || !state.handleLearnTalent(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_LEARN_PREVIEW_TALENTS):
+			if !state.authed || !state.handleLearnPreviewTalents(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_UNLEARN_SKILL):
+			if !state.authed || !state.handleUnlearnSkill(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
 			if !state.authed || !state.handleTutorialFlag(ctx, payload) {
 				return

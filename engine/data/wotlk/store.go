@@ -112,6 +112,18 @@ type AreaTableEntry struct {
 	Name         string
 }
 
+// TalentEntry mirrors TrinityCore's TalentEntry (DBCStructure.h:1663).
+// Layout: "niiiiiiiixxxxixxixxxxxx" (23 fields).
+type TalentEntry struct {
+	ID           uint32
+	TabID        uint32
+	TierID       uint32
+	ColumnIndex  uint32
+	SpellRank    [5]uint32
+	PrereqTalent uint32
+	PrereqRank   uint32
+}
+
 const (
 	AreaFlagWintergrasp2 uint32 = 0x08000000 // AREA_FLAG_WINTERGRASP_2 (DBCEnums.h:274)
 )
@@ -502,5 +514,44 @@ func (s *Store) Area(id uint32) (AreaTableEntry, bool, error) {
 		AreaBit:      areaBit,
 		Flags:        flags,
 		Name:         name,
+	}, true, nil
+}
+
+// Talent loads a talent record by ID from Talent.dbc.
+func (s *Store) Talent(id uint32) (TalentEntry, bool, error) {
+	file, err := s.File("Talent")
+	if err != nil {
+		return TalentEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return TalentEntry{}, false, nil
+	}
+	tabID, err := record.Uint32(1)
+	if err != nil {
+		return TalentEntry{}, false, err
+	}
+	tierID, err := record.Uint32(2)
+	if err != nil {
+		return TalentEntry{}, false, err
+	}
+	col, err := record.Uint32(3)
+	if err != nil {
+		return TalentEntry{}, false, err
+	}
+	var ranks [5]uint32
+	for i := 0; i < 5; i++ {
+		ranks[i], _ = record.Uint32(4 + i)
+	}
+	prereqTalent, _ := record.Uint32(13)
+	prereqRank, _ := record.Uint32(16)
+	return TalentEntry{
+		ID:           id,
+		TabID:        tabID,
+		TierID:       tierID,
+		ColumnIndex:  col,
+		SpellRank:    ranks,
+		PrereqTalent: prereqTalent,
+		PrereqRank:   prereqRank,
 	}, true, nil
 }

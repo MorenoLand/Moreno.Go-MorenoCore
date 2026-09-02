@@ -4,15 +4,15 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 165 / 35893 | — |
+| Server source files / lines | 1410 / 710273 | 167 / 36458 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 187 | 540 |
-| Client behavioral opcode handlers | 430 | 187 | 245 |
+| Client opcode registrations | 727 | 190 | 537 |
+| Client behavioral opcode handlers | 430 | 190 | 242 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 65 / 6903 | — |
+| Test source files / lines | 9 / 1390 | 66 / 7228 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -141,9 +141,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_ITEM_REFUND`
 - `CMSG_ITEM_REFUND_INFO`
 - `CMSG_ITEM_TEXT_QUERY`
-- `CMSG_LEARN_PREVIEW_TALENTS`
 - `CMSG_LEARN_PREVIEW_TALENTS_PET`
-- `CMSG_LEARN_TALENT`
 - `CMSG_LEAVE_BATTLEFIELD`
 - `CMSG_LFD_PARTY_LOCK_INFO_REQUEST`
 - `CMSG_LFD_PLAYER_LOCK_INFO_REQUEST`
@@ -228,7 +226,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_TOGGLE_PVP`
 - `CMSG_TOTEM_DESTROYED`
 - `CMSG_TURN_IN_PETITION`
-- `CMSG_UNLEARN_SKILL`
 - `CMSG_UNSTABLE_PET`
 - `CMSG_UPDATE_MISSILE_TRAJECTORY`
 - `CMSG_UPDATE_PROJECTILE_POSITION`
