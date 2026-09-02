@@ -26,7 +26,8 @@ var (
 	nullOpcodePattern     = regexp.MustCompile(`DEFINE_HANDLER\(\s*([A-Z0-9_]+)[^;]*Handle_NULL`)
 	goCasePattern         = regexp.MustCompile(`(?ms)^\s*case\s+([^:]+):`)
 	goOpcodePattern       = regexp.MustCompile(`protocol\.Opcode([A-Z0-9_]+)`)
-	statementSQLPattern   = regexp.MustCompile(`PrepareStatement\(\s*([A-Z0-9_]+)\s*,\s*"((?:[^"\\]|\\.)*)"`)
+	statementSQLPattern   = regexp.MustCompile(`(?s)PrepareStatement\(\s*([A-Z0-9_]+)\s*,\s*(.*?)(?:,\s*CONNECTION|\);)`)
+	stringLitPattern      = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 	goStatementSQLPattern = regexp.MustCompile(`ID:\s*"([A-Z0-9_]+)"\s*,\s*SQL:\s*"((?:[^"\\]|\\.)*)"`)
 	schemaPattern         = regexp.MustCompile(`(?i)CREATE\s+(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?[\x60]?([A-Za-z0-9_]+)[\x60]?`)
 )
@@ -281,7 +282,15 @@ func statementDetails(root string, pattern *regexp.Regexp, filter func(string) b
 		}
 		for _, match := range pattern.FindAllStringSubmatch(string(data), -1) {
 			if len(match) > 2 {
-				values[match[1]] = match[2]
+				if pattern == statementSQLPattern {
+					var sb strings.Builder
+					for _, lit := range stringLitPattern.FindAllStringSubmatch(match[2], -1) {
+						sb.WriteString(lit[1])
+					}
+					values[match[1]] = sb.String()
+				} else {
+					values[match[1]] = match[2]
+				}
 			}
 		}
 		return nil
