@@ -4,37 +4,18 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 185 / 40070 | — |
+| Server source files / lines | 1410 / 710273 | 188 / 40452 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 240 | 487 |
-| Client behavioral opcode handlers | 430 | 240 | 192 |
+| Client opcode registrations | 727 | 259 | 468 |
+| Client behavioral opcode handlers | 430 | 259 | 173 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 73 / 8744 | — |
+| Test source files / lines | 9 / 1390 | 74 / 8849 | — |
 
 ## Missing behavioral client opcode handlers
 
-- `CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE`
-- `CMSG_BATTLEFIELD_MGR_EXIT_REQUEST`
-- `CMSG_BATTLEFIELD_MGR_QUEUE_INVITE_RESPONSE`
-- `CMSG_CALENDAR_ADD_EVENT`
-- `CMSG_CALENDAR_ARENA_TEAM`
-- `CMSG_CALENDAR_COMPLAIN`
-- `CMSG_CALENDAR_COPY_EVENT`
-- `CMSG_CALENDAR_EVENT_INVITE`
-- `CMSG_CALENDAR_EVENT_MODERATOR_STATUS`
-- `CMSG_CALENDAR_EVENT_REMOVE_INVITE`
-- `CMSG_CALENDAR_EVENT_RSVP`
-- `CMSG_CALENDAR_EVENT_SIGNUP`
-- `CMSG_CALENDAR_EVENT_STATUS`
-- `CMSG_CALENDAR_GET_CALENDAR`
-- `CMSG_CALENDAR_GET_EVENT`
-- `CMSG_CALENDAR_GET_NUM_PENDING`
-- `CMSG_CALENDAR_GUILD_FILTER`
-- `CMSG_CALENDAR_REMOVE_EVENT`
-- `CMSG_CALENDAR_UPDATE_EVENT`
 - `CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE`
 - `CMSG_CHANNEL_ANNOUNCEMENTS`
 - `CMSG_CHANNEL_BAN`
