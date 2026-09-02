@@ -84,7 +84,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		s.auras[spell] = struct{}{}
+		s.applyAura(spell)
 		return nil, nil
 	}
 	methods["RemoveAura"] = func(_ context.Context, args []any) ([]any, error) {
@@ -92,7 +92,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		if err != nil {
 			return nil, err
 		}
-		delete(s.auras, spell)
+		s.removeAura(spell)
 		return nil, nil
 	}
 	methods["SetCoinage"] = func(_ context.Context, args []any) ([]any, error) {

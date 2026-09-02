@@ -148,8 +148,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				s.executeSpellHeal(ctx, targetGUID, spellID, heal)
 			case 6: // Apply Aura
-				s.auras[spellID] = struct{}{}
-				s.sendPlayerUpdate()
+				s.applyAura(spellID)
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
 			}
@@ -348,8 +347,79 @@ func (s *session) handleCancelAura(payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	delete(s.auras, spellID)
+	s.removeAura(spellID)
 	return true
+}
+
+func (s *session) sendAuraUpdate(slot uint8, spellID uint32, remove bool, maxDurationMs, durationMs uint32) {
+	buf := protocol.NewBuffer(32)
+	buf.WritePackedGUID(s.playerGUID)
+	buf.WriteU8(slot)
+	if remove {
+		buf.WriteU32(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), buf.Bytes(), true)
+		return
+	}
+	buf.WriteU32(spellID)
+	flags := uint8(0x01 | 0x08 | 0x10) // AFLAG_EFF_INDEX_0 | AFLAG_CASTER | AFLAG_POSITIVE
+	if maxDurationMs > 0 {
+		flags |= 0x20 // AFLAG_DURATION
+	}
+	buf.WriteU8(flags)
+	level := uint8(1)
+	if s.player != nil && s.player.Level > 0 {
+		level = s.player.Level
+	}
+	buf.WriteU8(level)
+	buf.WriteU8(1) // stack count
+	if maxDurationMs > 0 {
+		buf.WriteU32(maxDurationMs)
+		buf.WriteU32(durationMs)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), buf.Bytes(), true)
+}
+
+func (s *session) applyAura(spellID uint32) {
+	if s.auras == nil {
+		s.auras = make(map[uint32]struct{})
+	}
+	if s.auraSlots == nil {
+		s.auraSlots = make(map[uint32]uint8)
+	}
+	s.auras[spellID] = struct{}{}
+
+	slot, ok := s.auraSlots[spellID]
+	if !ok {
+		used := make(map[uint8]bool)
+		for _, sl := range s.auraSlots {
+			used[sl] = true
+		}
+		var freeSlot uint8
+		for sl := uint8(0); sl < 64; sl++ {
+			if !used[sl] {
+				freeSlot = sl
+				break
+			}
+		}
+		slot = freeSlot
+		s.auraSlots[spellID] = slot
+	}
+	durationMs := uint32(1800000)
+	s.sendAuraUpdate(slot, spellID, false, durationMs, durationMs)
+	s.sendPlayerUpdate()
+}
+
+func (s *session) removeAura(spellID uint32) {
+	if s.auras != nil {
+		delete(s.auras, spellID)
+	}
+	if s.auraSlots != nil {
+		if slot, ok := s.auraSlots[spellID]; ok {
+			s.sendAuraUpdate(slot, 0, true, 0, 0)
+			delete(s.auraSlots, spellID)
+		}
+	}
+	s.sendPlayerUpdate()
 }
 
 // handleCancelMountAura processes CMSG_CANCEL_MOUNT_AURA (0x375).

@@ -91,6 +91,7 @@ type session struct {
 	writeMu            sync.Mutex
 	selection          uint64
 	auras              map[uint32]struct{}
+	auraSlots          map[uint32]uint8
 	scale              float32
 	emoteState         uint32
 	playerLocked       bool
@@ -230,7 +231,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 	}()
 	defer close(closed)
-	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), auras: make(map[uint32]struct{}), channels: make(map[string]struct{}), scale: 1}
+	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), scale: 1}
 	s.addSession(state)
 	defer s.removeSession(state)
 	defer state.logout()
