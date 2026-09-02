@@ -41,6 +41,9 @@ func Parse(data []byte) (*File, error) {
 		return nil, errors.New("invalid DBC header")
 	}
 	file := &File{RecordCount: binary.LittleEndian.Uint32(data[4:8]), FieldCount: binary.LittleEndian.Uint32(data[8:12]), RecordSize: binary.LittleEndian.Uint32(data[12:16]), StringBlockSize: binary.LittleEndian.Uint32(data[16:20])}
+	if file.RecordSize > file.FieldCount*4 || (file.FieldCount > 0 && file.RecordSize == 0) {
+		return nil, errors.New("invalid record size")
+	}
 	recordBytes := uint64(file.RecordCount) * uint64(file.RecordSize)
 	end := uint64(headerSize) + recordBytes + uint64(file.StringBlockSize)
 	if end > uint64(len(data)) {
