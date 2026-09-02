@@ -212,8 +212,16 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 		} else if chatType == chatChannel {
 			receiverGUID = 0
 		}
-		payload := protocol.BuildChatMessageWithOptions(chatType, language, source.playerGUID, receiverGUID, message, channel, false, "", source.chatTag())
-		if err := target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true); err != nil {
+		tag := source.chatTag()
+		isGMSender := (tag & 0x04) != 0
+		senderName := ""
+		opcode := uint16(protocol.OpcodeSMSG_MESSAGECHAT)
+		if isGMSender {
+			senderName = source.player.Name
+			opcode = uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT)
+		}
+		payload := protocol.BuildChatMessageWithOptions(chatType, language, source.playerGUID, receiverGUID, message, channel, isGMSender, senderName, tag)
+		if err := target.write(opcode, payload, true); err != nil {
 			target.debug("chat delivery failed", "account", target.accountName, "error", err)
 		}
 	}
@@ -223,10 +231,16 @@ func (s *session) chatTag() uint8 {
 	if s.player == nil {
 		return 0
 	}
-	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0)
+	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || (s.player.ExtraFlags&playerExtraGMChat != 0) || s.gmChat || s.security > 0
 	var tag uint8
-	if isGM && (s.gmChat || s.player.ExtraFlags&playerExtraGMChat != 0) {
+	if isGM {
 		tag |= 0x04
+	}
+	if s.player.PlayerFlags&playerFlagDND != 0 {
+		tag |= 0x02
+	}
+	if s.player.PlayerFlags&playerFlagAFK != 0 {
+		tag |= 0x01
 	}
 	return tag
 }

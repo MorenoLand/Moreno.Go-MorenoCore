@@ -479,8 +479,12 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 // handleNextCinematicCamera processes CMSG_NEXT_CINEMATIC_CAMERA (0x0FB).
 // Reference: WorldSession::HandleNextCinematicCamera (MiscHandler.cpp:905).
 func (s *session) handleNextCinematicCamera() bool {
-	if s.player != nil && s.player.Cinematic == 0 {
+	if s.player != nil {
 		s.player.Cinematic = 1
+		s.player.AtLogin &= ^uint32(atLoginFirst)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "UPDATE characters SET cinematic = 1, at_login = at_login & ~1 WHERE guid = ?", s.playerGUID)
+		}
 	}
 	return true
 }
@@ -503,8 +507,9 @@ func (s *session) handleCompleteCinematic(ctx context.Context) bool {
 		return true
 	}
 	s.player.Cinematic = 1
+	s.player.AtLogin &= ^uint32(atLoginFirst)
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1 WHERE guid = ?", s.playerGUID); err != nil {
+		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1, at_login = at_login & ~1 WHERE guid = ?", s.playerGUID); err != nil {
 			s.debug("cinematic completion save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 			return false
 		}
@@ -1007,7 +1012,8 @@ func (s *session) createStarterSpells(ctx context.Context, guid uint64, race, cl
 	}
 
 	// 5. Custom spells from playercreateinfo_spell_custom
-	rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR (racemask & ?) <> 0) AND (classmask = 0 OR (classmask & ?) <> 0)", raceMask, classMask)
+	// In world.db, racemask and classmask are raw integer IDs (1..11), not bitmasks.
+	rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR racemask = ?) AND (classmask = 0 OR classmask = ?)", race, class)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -1069,6 +1075,9 @@ func (s *session) createStarterSkills(ctx context.Context, guid uint64, race, cl
 		for rows.Next() {
 			var skillID, rank int64
 			if err := rows.Scan(&skillID, &rank); err == nil && skillID > 0 {
+				if !isAllowedClassSkill(class, uint16(skillID)) {
+					continue
+				}
 				val := 1
 				max := 300
 				if rank > 0 {
@@ -1288,6 +1297,11 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 func (s *session) handleCompleteMovie(ctx context.Context, payload []byte) bool {
 	if s.player != nil {
 		s.player.Movie = 0
+		s.player.Cinematic = 1
+		s.player.AtLogin &= ^uint32(atLoginFirst)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1, at_login = at_login & ~1 WHERE guid = ?", s.playerGUID)
+		}
 	}
 	s.debug("movie completed", "account", s.accountName)
 	return true

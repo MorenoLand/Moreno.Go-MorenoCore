@@ -96,6 +96,15 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	packet := buildQuestGiverDetails(data, guid, 0)
 	s.debug("quest details response", "account", s.accountName, "quest", questID)
 
+	// In TrinityCore Player.cpp:14836, if quest is AutoAccept, add it upon viewing details
+	var specialFlags int64
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+	if specialFlags&4 != 0 {
+		if canTake, _ := s.canTakeQuest(ctx, questID); canTake {
+			s.addQuestToPlayer(ctx, questID)
+		}
+	}
+
 	return s.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), packet, true) == nil
 }
 
