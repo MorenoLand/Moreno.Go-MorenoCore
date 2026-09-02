@@ -919,6 +919,7 @@ func (s *session) createStarterSpells(ctx context.Context, guid uint64, race, cl
 		return
 	}
 
+	// 1. Default racial & language spells
 	spells := defaultRacialSpells(race)
 	seen := make(map[uint32]bool)
 	for _, sp := range spells {
@@ -926,7 +927,62 @@ func (s *session) createStarterSpells(ctx context.Context, guid uint64, race, cl
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, sp.ID)
 	}
 
+	// 2. Racial traits
+	racialTraits := map[uint8][]uint32{
+		1:  {20599, 20598, 20597, 20595, 20864, 59752},        // Human
+		2:  {20572, 20573, 20575, 20574},                       // Orc
+		3:  {20594, 20592, 20596, 2481, 59224},                 // Dwarf
+		4:  {58984, 20582, 20585, 20583},                       // Night Elf
+		5:  {7744, 20577, 5227, 20579},                         // Undead
+		6:  {20549, 20550, 20552, 20551},                       // Tauren
+		7:  {20589, 20591, 20593, 20592},                       // Gnome
+		8:  {26297, 20555, 20557, 20558, 26290, 58943},        // Troll
+		10: {28730, 25046, 50613, 28877, 822},                  // Blood Elf
+		11: {28880, 28875, 28877, 28878, 6562},                 // Draenei
+	}
+	if traits, ok := racialTraits[race]; ok {
+		for _, trait := range traits {
+			if !seen[trait] {
+				seen[trait] = true
+				_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, trait)
+			}
+		}
+	}
+
+	// 3. Spells from playercreateinfo_action for this race and class (starting abilities)
+	actionRows, err := wdb.QueryContext(ctx, "SELECT action FROM playercreateinfo_action WHERE race = ? AND class = ? AND type = 0 AND action > 0", race, class)
+	if err == nil {
+		defer actionRows.Close()
+		for actionRows.Next() {
+			var act int64
+			if err := actionRows.Scan(&act); err == nil && act > 0 {
+				id := uint32(act)
+				if !seen[id] {
+					seen[id] = true
+					_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, id)
+				}
+			}
+		}
+	}
+
+	// 4. Cast spells from playercreateinfo_cast_spell (stances, presences, passives)
 	raceMask, classMask := playerCreateMask(race), playerCreateMask(class)
+	castRows, err := wdb.QueryContext(ctx, "SELECT spell FROM playercreateinfo_cast_spell WHERE (raceMask = 0 OR (raceMask & ?) <> 0) AND (classMask = 0 OR (classMask & ?) <> 0)", raceMask, classMask)
+	if err == nil {
+		defer castRows.Close()
+		for castRows.Next() {
+			var spID int64
+			if err := castRows.Scan(&spID); err == nil && spID > 0 {
+				id := uint32(spID)
+				if !seen[id] {
+					seen[id] = true
+					_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, id)
+				}
+			}
+		}
+	}
+
+	// 5. Custom spells from playercreateinfo_spell_custom
 	rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR (racemask & ?) <> 0) AND (classmask = 0 OR (classmask & ?) <> 0)", raceMask, classMask)
 	if err == nil {
 		defer rows.Close()
