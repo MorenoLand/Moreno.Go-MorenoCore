@@ -12,12 +12,14 @@ import (
 const meleeAttackRange = 5.0
 
 type combatTarget struct {
-	GUID   uint64
-	Map    uint32
-	X      float32
-	Y      float32
-	Z      float32
-	Health uint32
+	GUID       uint64
+	Map        uint32
+	X          float32
+	Y          float32
+	Z          float32
+	Health     uint32
+	UnitFlags  uint32
+	FlagsExtra uint32
 }
 
 func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarget, bool) {
@@ -25,12 +27,14 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 	if s.server.creatureMotion != nil {
 		if motion := s.server.creatureMotion[guid]; motion != nil {
 			target := combatTarget{
-				GUID:   guid,
-				Map:    motion.Map,
-				X:      motion.X,
-				Y:      motion.Y,
-				Z:      motion.Z,
-				Health: motion.Health,
+				GUID:       guid,
+				Map:        motion.Map,
+				X:          motion.X,
+				Y:          motion.Y,
+				Z:          motion.Z,
+				Health:     motion.Health,
+				UnitFlags:  motion.UnitFlags,
+				FlagsExtra: motion.FlagsExtra,
 			}
 			s.server.motionMu.Unlock()
 			return target, true
@@ -63,6 +67,10 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if target.Health == 0 {
 		s.attackTarget = 0
 		return s.write(uint16(protocol.OpcodeSMSG_ATTACK_SWING_DEAD_TARGET), nil, true) == nil
+	}
+	if creatureCombatDisabled(target.UnitFlags, target.FlagsExtra) {
+		s.attackTarget = 0
+		return s.sendAttackStop(victim, false) == nil
 	}
 	if target.Map != s.player.Map {
 		s.attackTarget = 0
@@ -182,7 +190,7 @@ func buildAttackStop(attacker, victim uint64, nowDead bool) []byte {
 
 func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarget, error) {
 	var target combatTarget
-	var low, entry, mapID int64
+	var low, entry, mapID, unitFlags, flagsExtra int64
 	var curHealth sql.NullInt64
 	lowGUID := uint32(guid & 0x00FFFFFF)
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, c.curhealth FROM creature AS c WHERE c.guid = ?", lowGUID).Scan(&low, &entry, &mapID, &target.X, &target.Y, &target.Z, &curHealth); err != nil {
@@ -190,6 +198,8 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	}
 	target.GUID = creatureWorldGUID(uint32(low), uint32(entry))
 	target.Map = uint32(mapID)
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(unit_flags, 0), COALESCE(flags_extra, 0) FROM creature_template WHERE entry = ?", entry).Scan(&unitFlags, &flagsExtra)
+	target.UnitFlags, target.FlagsExtra = uint32(unitFlags), uint32(flagsExtra)
 	if curHealth.Valid {
 		if curHealth.Int64 > 0 {
 			target.Health = uint32(curHealth.Int64)
@@ -210,6 +220,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	}
 	if motion := s.server.creatureMotion[target.GUID]; motion != nil {
 		target.X, target.Y, target.Z = motion.X, motion.Y, motion.Z
+		target.UnitFlags, target.FlagsExtra = motion.UnitFlags, motion.FlagsExtra
 		if motion.Health > 0 {
 			target.Health = motion.Health
 		} else {
@@ -217,20 +228,22 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 		}
 	} else {
 		s.server.creatureMotion[target.GUID] = &creatureMotion{
-			GUID:      target.GUID,
-			Entry:     uint32(entry),
-			Map:       target.Map,
-			HomeX:     target.X,
-			HomeY:     target.Y,
-			HomeZ:     target.Z,
-			X:         target.X,
-			Y:         target.Y,
-			Z:         target.Z,
-			Speed:     2.5,
-			RunSpeed:  7.0,
-			Health:    target.Health,
-			MaxHealth: target.Health,
-			Refreshed: time.Now(),
+			GUID:       target.GUID,
+			Entry:      uint32(entry),
+			Map:        target.Map,
+			HomeX:      target.X,
+			HomeY:      target.Y,
+			HomeZ:      target.Z,
+			X:          target.X,
+			Y:          target.Y,
+			Z:          target.Z,
+			Speed:      2.5,
+			RunSpeed:   7.0,
+			UnitFlags:  uint32(unitFlags),
+			FlagsExtra: uint32(flagsExtra),
+			Health:     target.Health,
+			MaxHealth:  target.Health,
+			Refreshed:  time.Now(),
 		}
 	}
 	s.server.motionMu.Unlock()
