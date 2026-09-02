@@ -309,3 +309,97 @@ func loadQuestRelationIDs(ctx context.Context, db *sql.DB, table string, entry u
 	}
 	return result, rows.Err()
 }
+
+// handleQuestConfirmAccept processes CMSG_QUEST_CONFIRM_ACCEPT (0x19B).
+// Reference: WorldSession::HandleQuestConfirmAccept (QuestHandler.cpp:387).
+func (s *session) handleQuestConfirmAccept(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleQuestPoiQuery processes CMSG_QUEST_POI_QUERY (0x1E3).
+// Reference: WorldSession::HandleQuestPOIQuery (QuestHandler.cpp:520).
+func (s *session) handleQuestPoiQuery(ctx context.Context, payload []byte) bool {
+	buf := protocol.NewBuffer(4)
+	buf.WriteU32(0) // count = 0 POIs
+	_ = s.write(uint16(protocol.OpcodeSMSG_QUEST_POI_QUERY_RESPONSE), buf.Bytes(), true)
+	return true
+}
+
+// handleQueryQuestsCompleted processes CMSG_QUERY_QUESTS_COMPLETED (0x500).
+// Reference: WorldSession::HandleQuestQueryCompletedQuests (QuestHandler.cpp:588).
+func (s *session) handleQueryQuestsCompleted(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	var completed []uint32
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		rows, err := cdb.QueryContext(ctx, "SELECT quest FROM character_queststatus_rewarded WHERE guid = ?", s.playerGUID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var qID uint32
+				if err := rows.Scan(&qID); err == nil {
+					completed = append(completed, qID)
+				}
+			}
+		}
+	}
+	buf := protocol.NewBuffer(4 + len(completed)*4)
+	buf.WriteU32(uint32(len(completed)))
+	for _, qID := range completed {
+		buf.WriteU32(qID)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_QUERY_QUESTS_COMPLETED_RESPONSE), buf.Bytes(), true)
+	return true
+}
+
+// handleQuestlogSwapQuest processes CMSG_QUESTLOG_SWAP_QUEST (0x193).
+// Reference: WorldSession::HandleQuestLogSwapQuest (QuestHandler.cpp:328).
+func (s *session) handleQuestlogSwapQuest(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handlePushQuestToParty processes CMSG_PUSHQUESTTOPARTY (0x199).
+// Reference: WorldSession::HandleQuestPushToParty (QuestHandler.cpp:342).
+func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleQuestPushResult processes MSG_QUEST_PUSH_RESULT (0x276).
+// Reference: WorldSession::HandleQuestPushResult (QuestHandler.cpp:365).
+func (s *session) handleQuestPushResult(ctx context.Context, payload []byte) bool {
+	return true
+}
+
+// handleQuestgiverStatusMultipleQuery processes CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY (0x417).
+// Reference: WorldSession::HandleQuestgiverStatusMultipleQuery (QuestHandler.cpp:45).
+func (s *session) handleQuestgiverStatusMultipleQuery(ctx context.Context, payload []byte) bool {
+	buf := protocol.NewBuffer(4)
+	buf.WriteU32(0) // count = 0
+	_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE), buf.Bytes(), true)
+	return true
+}
+
+// handleQueryInspectAchievements processes CMSG_QUERY_INSPECT_ACHIEVEMENTS (0x46B).
+// Reference: WorldSession::HandleQueryInspectAchievements (AchievementHandler.cpp:25).
+func (s *session) handleQueryInspectAchievements(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	targetGUID, _ := r.ReadU64()
+
+	buf := protocol.NewBuffer(16)
+	buf.WritePackedGUID(targetGUID)
+	buf.WriteU32(0) // achievement count
+	_ = s.write(uint16(protocol.OpcodeSMSG_RESPOND_INSPECT_ACHIEVEMENTS), buf.Bytes(), true)
+	return true
+}
+
+// handleRaidReadyCheckFinished processes MSG_RAID_READY_CHECK_FINISHED (0x3C6).
+// Reference: WorldSession::HandleRaidReadyCheckFinished (GroupHandler.cpp:450).
+func (s *session) handleRaidReadyCheckFinished(ctx context.Context, payload []byte) bool {
+	return true
+}
+

@@ -682,3 +682,35 @@ func (s *session) handleHearthAndResurrect(ctx context.Context) bool {
 	s.teleportTo(destMap, destX, destY, destZ, s.player.Orientation)
 	return true
 }
+
+// handleSpiritHealerActivate processes CMSG_SPIRIT_HEALER_ACTIVATE (0x21C).
+// Reference: WorldSession::HandleSpiritHealerActivateOpcode (MiscHandler.cpp:712).
+func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	guid, _ := r.ReadU64()
+	if !s.creatureIsSpiritService(ctx, guid) {
+		return true
+	}
+	s.resurrectPlayer(ctx, 0.5)
+	return true
+}
+
+// handleCorpseQuery processes MSG_CORPSE_QUERY (0x216).
+// Reference: WorldSession::HandleCorpseQueryOpcode (CorpseHandler.cpp:25).
+func (s *session) handleCorpseQuery(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	buf := protocol.NewBuffer(20)
+	buf.WriteU32(s.player.Map)
+	buf.WriteF32(s.player.X)
+	buf.WriteF32(s.player.Y)
+	buf.WriteF32(s.player.Z)
+	buf.WriteU32(s.player.Map)
+	_ = s.write(uint16(protocol.OpcodeMSG_CORPSE_QUERY), buf.Bytes(), true)
+	return true
+}
+

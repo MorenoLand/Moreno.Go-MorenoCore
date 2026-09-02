@@ -1411,7 +1411,280 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleTutorialReset(ctx) {
 				return
 			}
-		case uint32(protocol.OpcodeMSG_MOVE_START_FORWARD), uint32(protocol.OpcodeMSG_MOVE_START_BACKWARD), uint32(protocol.OpcodeMSG_MOVE_STOP), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_STRAFE), uint32(protocol.OpcodeMSG_MOVE_JUMP), uint32(protocol.OpcodeMSG_MOVE_START_TURN_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_TURN_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_TURN), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_UP), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_DOWN), uint32(protocol.OpcodeMSG_MOVE_STOP_PITCH), uint32(protocol.OpcodeMSG_MOVE_SET_RUN_MODE), uint32(protocol.OpcodeMSG_MOVE_SET_WALK_MODE), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), uint32(protocol.OpcodeMSG_MOVE_START_SWIM), uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM), uint32(protocol.OpcodeMSG_MOVE_ROOT), uint32(protocol.OpcodeMSG_MOVE_UNROOT), uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT), uint32(protocol.OpcodeMSG_MOVE_HOVER), uint32(protocol.OpcodeMSG_MOVE_SET_FACING), uint32(protocol.OpcodeMSG_MOVE_SET_PITCH):
+
+		// Petitions & Guild Tabards
+		case uint32(protocol.OpcodeCMSG_PETITION_BUY):
+			if !state.authed || !state.handlePetitionBuy(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PETITION_SHOW_SIGNATURES):
+			if !state.authed || !state.handlePetitionShowSignatures(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PETITION_QUERY):
+			if !state.authed || !state.handlePetitionQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PETITION_SIGN):
+			if !state.authed || !state.handlePetitionSign(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_TURN_IN_PETITION):
+			if !state.authed || !state.handleTurnInPetition(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_OFFER_PETITION):
+			if !state.authed || !state.handleOfferPetition(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PETITION_SHOWLIST):
+			if !state.authed || !state.handlePetitionShowList(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_PETITION_DECLINE):
+			if !state.authed || !state.handlePetitionDecline(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_PETITION_RENAME):
+			if !state.authed || !state.handlePetitionRename(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_TABARDVENDOR_ACTIVATE):
+			if !state.authed || !state.handleTabardVendorActivate(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_SAVE_GUILD_EMBLEM):
+			if !state.authed || !state.handleSaveGuildEmblem(ctx, payload) {
+				return
+			}
+
+		// Movement ACKs, Summons & Animations
+		case uint32(protocol.OpcodeCMSG_MOVE_FEATHER_FALL_ACK):
+			if !state.authed || !state.handleMoveFeatherFallAck(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MOVE_HOVER_ACK):
+			if !state.authed || !state.handleMoveHoverAck(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MOVE_WATER_WALK_ACK):
+			if !state.authed || !state.handleMoveWaterWalkAck(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MOVE_KNOCK_BACK_ACK):
+			if !state.authed || !state.handleMoveKnockBackAck(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MOVE_NOT_ACTIVE_MOVER):
+			if !state.authed || !state.handleMoveNotActiveMover(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MOVE_FALL_RESET):
+			if !state.authed || !state.handleMoveFallReset(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MOVE_SPLINE_DONE):
+			if !state.authed || !state.handleMoveSplineDone(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MOVE_CHNG_TRANSPORT):
+			if !state.authed || !state.handleMoveChngTransport(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MOVE_SET_FLY):
+			if !state.authed || !state.handleMoveSetFly(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MOVE_TIME_SKIPPED):
+			if !state.authed || !state.handleMoveTimeSkipped(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SUMMON_RESPONSE):
+			if !state.authed || !state.handleSummonResponse(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_MOUNTSPECIAL_ANIM):
+			if !state.authed || !state.handleMountSpecialAnim(ctx, payload) {
+				return
+			}
+
+		// Vehicle Passengers & Seats
+		case uint32(protocol.OpcodeCMSG_PLAYER_VEHICLE_ENTER):
+			if !state.authed || !state.handlePlayerVehicleEnter(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_EXIT):
+			if !state.authed || !state.handleRequestVehicleExit(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_NEXT_SEAT):
+			if !state.authed || !state.handleRequestVehicleNextSeat(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_PREV_SEAT):
+			if !state.authed || !state.handleRequestVehiclePrevSeat(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REQUEST_VEHICLE_SWITCH_SEAT):
+			if !state.authed || !state.handleRequestVehicleSwitchSeat(ctx, payload) {
+				return
+			}
+
+		// Items & Page Text
+		case uint32(protocol.OpcodeCMSG_OPEN_ITEM):
+			if !state.authed || !state.handleOpenItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_READ_ITEM):
+			if !state.authed || !state.handleReadItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PAGE_TEXT_QUERY):
+			if !state.authed || !state.handlePageTextQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_WRAP_ITEM):
+			if !state.authed || !state.handleWrapItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_REPAIR_ITEM):
+			if !state.authed || !state.handleRepairItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SOCKET_GEMS):
+			if !state.authed || !state.handleSocketGems(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_AMMO):
+			if !state.authed || !state.handleSetAmmo(ctx, payload) {
+				return
+			}
+
+		// Character Display, Titles & PvP
+		case uint32(protocol.OpcodeCMSG_SHOWING_CLOAK):
+			if !state.authed || !state.handleShowingCloak(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SHOWING_HELM):
+			if !state.authed || !state.handleShowingHelm(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_TITLE):
+			if !state.authed || !state.handleSetTitle(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_TOGGLE_PVP):
+			if !state.authed || !state.handleTogglePvP(ctx, payload) {
+				return
+			}
+
+		// Instances & Difficulty
+		case uint32(protocol.OpcodeCMSG_RESET_INSTANCES):
+			if !state.authed || !state.handleResetInstances(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY):
+			if !state.authed || !state.handleSetDungeonDifficulty(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_SET_RAID_DIFFICULTY):
+			if !state.authed || !state.handleSetRaidDifficulty(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_INSTANCE_LOCK_RESPONSE):
+			if !state.authed || !state.handleInstanceLockResponse(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_SAVED_INSTANCE_EXTEND):
+			if !state.authed || !state.handleSetSavedInstanceExtend(ctx, payload) {
+				return
+			}
+
+		// Guild Permissions, Event Log & Inspect
+		case uint32(protocol.OpcodeMSG_GUILD_EVENT_LOG_QUERY):
+			if !state.authed || !state.handleGuildEventLogQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_GUILD_PERMISSIONS):
+			if !state.authed || !state.handleGuildPermissions(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_INSPECT_ARENA_TEAMS):
+			if !state.authed || !state.handleInspectArenaTeams(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_INSPECT_HONOR_STATS):
+			if !state.authed || !state.handleInspectHonorStats(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_PVP_LOG_DATA):
+			if !state.authed || !state.handlePvpLogData(ctx, payload) {
+				return
+			}
+
+		// Spirit Healer & Corpse
+		case uint32(protocol.OpcodeCMSG_SPIRIT_HEALER_ACTIVATE):
+			if !state.authed || !state.handleSpiritHealerActivate(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_CORPSE_QUERY):
+			if !state.authed || !state.handleCorpseQuery(ctx, payload) {
+				return
+			}
+
+		// Spells & Talents
+		case uint32(protocol.OpcodeCMSG_TOTEM_DESTROYED):
+			if !state.authed || !state.handleTotemDestroyed(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SPELLCLICK):
+			if !state.authed || !state.handleSpellClick(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM):
+			if !state.authed || !state.handleTalentWipeConfirm(ctx, payload) {
+				return
+			}
+
+		// Quests & Inspect Achievements
+		case uint32(protocol.OpcodeCMSG_QUEST_CONFIRM_ACCEPT):
+			if !state.authed || !state.handleQuestConfirmAccept(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_QUEST_POI_QUERY):
+			if !state.authed || !state.handleQuestPoiQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_QUERY_QUESTS_COMPLETED):
+			if !state.authed || !state.handleQueryQuestsCompleted(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_QUESTLOG_SWAP_QUEST):
+			if !state.authed || !state.handleQuestlogSwapQuest(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_PUSHQUESTTOPARTY):
+			if !state.authed || !state.handlePushQuestToParty(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_QUEST_PUSH_RESULT):
+			if !state.authed || !state.handleQuestPushResult(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY):
+			if !state.authed || !state.handleQuestgiverStatusMultipleQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_QUERY_INSPECT_ACHIEVEMENTS):
+			if !state.authed || !state.handleQueryInspectAchievements(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_RAID_READY_CHECK_FINISHED):
+			if !state.authed || !state.handleRaidReadyCheckFinished(ctx, payload) {
+				return
+			}
+
+		case uint32(protocol.OpcodeMSG_MOVE_START_FORWARD), uint32(protocol.OpcodeMSG_MOVE_START_BACKWARD), uint32(protocol.OpcodeMSG_MOVE_STOP), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_STRAFE_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_STRAFE), uint32(protocol.OpcodeMSG_MOVE_JUMP), uint32(protocol.OpcodeMSG_MOVE_START_TURN_LEFT), uint32(protocol.OpcodeMSG_MOVE_START_TURN_RIGHT), uint32(protocol.OpcodeMSG_MOVE_STOP_TURN), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_UP), uint32(protocol.OpcodeMSG_MOVE_START_PITCH_DOWN), uint32(protocol.OpcodeMSG_MOVE_STOP_PITCH), uint32(protocol.OpcodeMSG_MOVE_SET_RUN_MODE), uint32(protocol.OpcodeMSG_MOVE_SET_WALK_MODE), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), uint32(protocol.OpcodeMSG_MOVE_START_SWIM), uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM), uint32(protocol.OpcodeMSG_MOVE_ROOT), uint32(protocol.OpcodeMSG_MOVE_UNROOT), uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT), uint32(protocol.OpcodeMSG_MOVE_HOVER), uint32(protocol.OpcodeMSG_MOVE_SET_FACING), uint32(protocol.OpcodeMSG_MOVE_SET_PITCH), uint32(protocol.OpcodeMSG_MOVE_START_ASCEND), uint32(protocol.OpcodeMSG_MOVE_START_DESCEND), uint32(protocol.OpcodeMSG_MOVE_STOP_ASCEND), uint32(protocol.OpcodeMSG_MOVE_GRAVITY_CHNG):
 			if !state.authed || !state.handleMovement(ctx, header.Opcode, payload) {
 				return
 			}

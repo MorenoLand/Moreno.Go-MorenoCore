@@ -783,3 +783,100 @@ func (s *Server) getGuildName(ctx context.Context, guildID uint32) string {
 	_ = s.CharactersStore.DB.QueryRowContext(ctx, "SELECT name FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&name)
 	return name
 }
+
+// handleGuildEventLogQuery processes MSG_GUILD_EVENT_LOG_QUERY (0x3FF).
+// Reference: WorldSession::HandleGuildEventLogQueryOpcode (GuildHandler.cpp:111).
+func (s *session) handleGuildEventLogQuery(ctx context.Context, payload []byte) bool {
+	buf := protocol.NewBuffer(1)
+	buf.WriteU8(0) // count = 0 entries
+	_ = s.write(uint16(protocol.OpcodeMSG_GUILD_EVENT_LOG_QUERY), buf.Bytes(), true)
+	return true
+}
+
+// handleGuildPermissions processes MSG_GUILD_PERMISSIONS (0x3FD).
+// Reference: WorldSession::HandleGuildPermissions (GuildHandler.cpp:89).
+func (s *session) handleGuildPermissions(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	var rankID, rights, goldLimit int64
+	rankID = 0
+	rights = 0xFFFFFFFF
+	goldLimit = 1000000
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		_ = cdb.QueryRowContext(ctx, `SELECT gr.rid, gr.rights, gr.BankMoneyPerDay
+			FROM guild_member gm
+			JOIN guild_rank gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
+			WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&rankID, &rights, &goldLimit)
+	}
+
+	buf := protocol.NewBuffer(16 + 6*8)
+	buf.WriteU32(uint32(rankID))
+	buf.WriteU32(uint32(rights))
+	buf.WriteU32(uint32(goldLimit))
+	buf.WriteU8(6) // 6 tabs
+	for i := 0; i < 6; i++ {
+		buf.WriteU32(0xFFFFFFFF) // full rights
+		buf.WriteU32(1000)       // slot limit
+	}
+	_ = s.write(uint16(protocol.OpcodeMSG_GUILD_PERMISSIONS), buf.Bytes(), true)
+	return true
+}
+
+// handleInspectArenaTeams processes MSG_INSPECT_ARENA_TEAMS (0x377).
+// Reference: WorldSession::HandleInspectArenaTeamsOpcode (ArenaTeamHandler.cpp:333).
+func (s *session) handleInspectArenaTeams(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	targetGUID, _ := r.ReadU64()
+
+	buf := protocol.NewBuffer(8 + 3*24)
+	buf.WriteU64(targetGUID)
+	for slot := 0; slot < 3; slot++ {
+		buf.WriteU32(0) // arenaTeamID
+		buf.WriteU32(0) // rating
+		buf.WriteU32(0) // seasonGames
+		buf.WriteU32(0) // seasonWins
+		buf.WriteU32(0) // played
+		buf.WriteU32(0) // personalRating
+	}
+	_ = s.write(uint16(protocol.OpcodeMSG_INSPECT_ARENA_TEAMS), buf.Bytes(), true)
+	return true
+}
+
+// handleInspectHonorStats processes MSG_INSPECT_HONOR_STATS (0x2D6).
+// Reference: WorldSession::HandleInspectHonorStatsOpcode (MiscHandler.cpp:749).
+func (s *session) handleInspectHonorStats(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	targetGUID, _ := r.ReadU64()
+
+	buf := protocol.NewBuffer(8 + 6*4)
+	buf.WriteU64(targetGUID)
+	buf.WriteU32(0) // honorPoints
+	buf.WriteU32(0) // killsToday
+	buf.WriteU32(0) // killsYesterday
+	buf.WriteU32(0) // lifetimeHK
+	buf.WriteU32(0) // honorToday
+	buf.WriteU32(0) // honorYesterday
+	_ = s.write(uint16(protocol.OpcodeMSG_INSPECT_HONOR_STATS), buf.Bytes(), true)
+	return true
+}
+
+// handlePvpLogData processes MSG_PVP_LOG_DATA (0x2E0).
+// Reference: WorldSession::HandlePVPLogDataOpcode (BattlegroundHandler.cpp:211).
+func (s *session) handlePvpLogData(ctx context.Context, payload []byte) bool {
+	buf := protocol.NewBuffer(16)
+	buf.WriteU8(0)  // arena (0)
+	buf.WriteU32(0) // count (0)
+	buf.WriteU8(0)  // winner
+	_ = s.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), buf.Bytes(), true)
+	return true
+}
+
