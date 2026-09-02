@@ -1524,7 +1524,7 @@ func buildTutorialFlags(tutorials [8]uint32) []byte {
 }
 
 // handleSetPlayerDeclinedNames processes CMSG_SET_PLAYER_DECLINED_NAMES (0x419).
-// Reference: WorldSession::HandleSetPlayerDeclinedNames (CharacterHandler.cpp:1150).
+// Reference: WorldSession::HandleSetPlayerDeclinedNames (CharacterHandler.cpp:1198).
 func (s *session) handleSetPlayerDeclinedNames(ctx context.Context, payload []byte) bool {
 	if len(payload) < 8 {
 		return true
@@ -1532,8 +1532,31 @@ func (s *session) handleSetPlayerDeclinedNames(ctx context.Context, payload []by
 	r := protocol.NewReader(payload)
 	guid, _ := r.ReadU64()
 
+	// Read player name and 5 declined name cases: genitive, dative, accusative, instrumental, prepositional
+	name, _ := r.ReadCString()
+	var declined [5]string
+	for i := 0; i < 5; i++ {
+		declined[i], _ = r.ReadCString()
+	}
+
+	result := uint32(0) // 0 = SUCCESS, 1 = ERROR
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil && guid > 0 {
+		var charName string
+		err := cdb.QueryRowContext(ctx, "SELECT name FROM characters WHERE guid = ?", guid).Scan(&charName)
+		if err != nil || (name != "" && charName != name) {
+			result = 1
+		} else {
+			// Persist declined names to character_declinedname
+			_, _ = cdb.ExecContext(ctx,
+				`REPLACE INTO character_declinedname (guid, genitive, dative, accusative, instrumental, prepositional)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+				guid, declined[0], declined[1], declined[2], declined[3], declined[4])
+		}
+	}
+
 	buf := protocol.NewBuffer(12)
-	buf.WriteU32(0) // result 0 = success
+	buf.WriteU32(result)
 	buf.WriteU64(guid)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SET_PLAYER_DECLINED_NAMES_RESULT), buf.Bytes(), true)
 	return true

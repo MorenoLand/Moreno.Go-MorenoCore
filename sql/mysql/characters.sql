@@ -322,6 +322,15 @@ CREATE TABLE IF NOT EXISTS `character_pet` (
   KEY `owner` (`owner`),
   KEY `idx_slot` (`slot`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3 COMMENT='Pet System';
+CREATE TABLE IF NOT EXISTS `character_declinedname` (
+  `guid` int unsigned NOT NULL DEFAULT '0',
+  `genitive` varchar(15) NOT NULL DEFAULT '',
+  `dative` varchar(15) NOT NULL DEFAULT '',
+  `accusative` varchar(15) NOT NULL DEFAULT '',
+  `instrumental` varchar(15) NOT NULL DEFAULT '',
+  `prepositional` varchar(15) NOT NULL DEFAULT '',
+  PRIMARY KEY (`guid`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
 CREATE TABLE IF NOT EXISTS `character_pet_declinedname` (
   `id` int unsigned NOT NULL DEFAULT '0',
   `owner` int unsigned NOT NULL DEFAULT '0',

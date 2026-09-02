@@ -322,6 +322,15 @@ PRIMARY KEY (`id`)
 );
 CREATE INDEX IF NOT EXISTS `character_pet__owner` ON `character_pet` (`owner`);
 CREATE INDEX IF NOT EXISTS `character_pet__idx_slot` ON `character_pet` (`slot`);
+CREATE TABLE IF NOT EXISTS `character_declinedname` (
+`guid` INTEGER NOT NULL DEFAULT '0',
+`genitive` TEXT NOT NULL DEFAULT '',
+`dative` TEXT NOT NULL DEFAULT '',
+`accusative` TEXT NOT NULL DEFAULT '',
+`instrumental` TEXT NOT NULL DEFAULT '',
+`prepositional` TEXT NOT NULL DEFAULT '',
+PRIMARY KEY (`guid`)
+);
 CREATE TABLE IF NOT EXISTS `character_pet_declinedname` (
 `id` INTEGER  NOT NULL DEFAULT '0',
 `owner` INTEGER  NOT NULL DEFAULT '0',
