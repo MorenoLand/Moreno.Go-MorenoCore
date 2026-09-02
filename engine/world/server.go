@@ -958,6 +958,30 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleGMReportLag(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_BANKER_ACTIVATE):
+			if !state.authed || !state.handleBankerActivate(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_BUY_BANK_SLOT):
+			if !state.authed || !state.handleBuyBankSlot(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUTOBANK_ITEM):
+			if !state.authed || !state.handleAutoBankItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUTOSTORE_BANK_ITEM):
+			if !state.authed || !state.handleAutoStoreBankItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AREATRIGGER):
+			if !state.authed || !state.handleAreaTrigger(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ALTER_APPEARANCE):
+			if !state.authed || !state.handleAlterAppearance(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
 			if !state.authed || !state.handleTutorialFlag(ctx, payload) {
 				return

@@ -1,6 +1,7 @@
 package world
 
 import (
+	"math"
 	"testing"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -153,3 +154,87 @@ func TestBuildPlayerUpdateKeepsMovementAndUpdateMaskAligned(t *testing.T) {
 		t.Fatalf("object values=%x/%x/%x", values[0], values[1], values[2])
 	}
 }
+
+func TestBuildPlayerUpdateCharacterSheetFields(t *testing.T) {
+	server := &Server{}
+	state := playerState{
+		GUID:      100,
+		Level:     20,
+		Health:    500,
+		MaxHealth: 500,
+		Powers:    [7]uint32{400},
+		MaxPowers: [7]uint32{400},
+		Talents:   map[uint32]uint8{1: 2, 2: 1}, // rank 2 (3 pts) + rank 1 (2 pts) = 5 pts
+	}
+	packet, err := server.buildPlayerUpdate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := packet.Payload.Bytes()
+	if packet.Opcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		payload, err = protocol.DecompressUpdatePayload(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader := protocol.NewReader(payload)
+	_, _ = reader.ReadU32() // blocks
+	_, _ = reader.ReadU8()  // updateType
+	_, _ = reader.ReadPackedGUID()
+	_, _ = reader.ReadU8()  // obj type
+	_, _ = reader.ReadU16() // flags
+	_, _ = reader.ReadU32()
+	_, _ = reader.ReadU16()
+	_, _ = reader.ReadU32()
+	for i := 0; i < 4; i++ {
+		_, _ = reader.ReadF32()
+	}
+	_, _ = reader.ReadU32() // fall time
+	for i := 0; i < 9; i++ {
+		_, _ = reader.ReadF32()
+	}
+	maskBlocks, _ := reader.ReadU8()
+	mask := make([]uint32, maskBlocks)
+	for i := range mask {
+		mask[i], _ = reader.ReadU32()
+	}
+	values := make(map[int]uint32)
+	for i := 0; i < playerValuesCount; i++ {
+		if mask[i/32]&(1<<uint(i%32)) == 0 {
+			continue
+		}
+		val, err := reader.ReadU32()
+		if err != nil {
+			t.Fatal(err)
+		}
+		values[i] = val
+	}
+
+	// Attack speeds and damages
+	if values[unitFieldRangedAttackTime] != 2000 {
+		t.Errorf("ranged attack time expected 2000, got %d", values[unitFieldRangedAttackTime])
+	}
+	if values[unitModCastSpeed] != math.Float32bits(1.0) {
+		t.Errorf("cast speed expected 1.0, got %f", math.Float32frombits(values[unitModCastSpeed]))
+	}
+	if values[playerFieldModDamageDonePct] != math.Float32bits(1.0) {
+		t.Errorf("damage done pct expected 1.0, got %f", math.Float32frombits(values[playerFieldModDamageDonePct]))
+	}
+
+	// Base stats (20 + 20*2 = 60)
+	if values[unitFieldStat0] != 60 || values[unitFieldStat1] != 60 {
+		t.Errorf("expected stat0=60, got %d", values[unitFieldStat0])
+	}
+	if values[unitFieldResistances] != 120 {
+		t.Errorf("expected armor=120, got %d", values[unitFieldResistances])
+	}
+
+	// Free talent points: level 20 has (20 - 9) = 11 total. Spent = (2+1) + (1+1) = 5. Free = 6.
+	if values[playerCharacterPoints1] != 6 {
+		t.Errorf("expected free talent points 6, got %d", values[playerCharacterPoints1])
+	}
+	if values[playerCharacterPoints2] != 5 {
+		t.Errorf("expected spent talent points 5, got %d", values[playerCharacterPoints2])
+	}
+}
+

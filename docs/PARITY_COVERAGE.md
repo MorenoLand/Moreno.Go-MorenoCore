@@ -4,21 +4,19 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 172 / 37897 | — |
+| Server source files / lines | 1410 / 710273 | 176 / 38824 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 213 | 514 |
-| Client behavioral opcode handlers | 430 | 213 | 219 |
+| Client opcode registrations | 727 | 219 | 508 |
+| Client behavioral opcode handlers | 430 | 219 | 213 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 69 / 8070 | — |
+| Test source files / lines | 9 / 1390 | 70 / 8416 | — |
 
 ## Missing behavioral client opcode handlers
 
 - `CMSG_ACCEPT_LEVEL_GRANT`
-- `CMSG_ALTER_APPEARANCE`
-- `CMSG_AREATRIGGER`
 - `CMSG_ARENA_TEAM_ACCEPT`
 - `CMSG_ARENA_TEAM_DECLINE`
 - `CMSG_ARENA_TEAM_DISBAND`
@@ -29,9 +27,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_ARENA_TEAM_REMOVE`
 - `CMSG_ARENA_TEAM_ROSTER`
 - `CMSG_AUCTION_LIST_PENDING_SALES`
-- `CMSG_AUTOBANK_ITEM`
-- `CMSG_AUTOSTORE_BANK_ITEM`
-- `CMSG_BANKER_ACTIVATE`
 - `CMSG_BATTLEFIELD_LIST`
 - `CMSG_BATTLEFIELD_MGR_ENTRY_INVITE_RESPONSE`
 - `CMSG_BATTLEFIELD_MGR_EXIT_REQUEST`
@@ -44,7 +39,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_BINDER_ACTIVATE`
 - `CMSG_BUG`
 - `CMSG_BUYBACK_ITEM`
-- `CMSG_BUY_BANK_SLOT`
 - `CMSG_BUY_STABLE_SLOT`
 - `CMSG_CALENDAR_ADD_EVENT`
 - `CMSG_CALENDAR_ARENA_TEAM`

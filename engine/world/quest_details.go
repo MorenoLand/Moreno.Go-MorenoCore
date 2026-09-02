@@ -227,10 +227,27 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 }
 
 func (s *session) questgiverStartsQuest(ctx context.Context, guid uint64, questID uint32) bool {
+	if guid == 0 {
+		return true
+	}
 	high := uint16(guid >> 48)
 	if high == 0xF110 {
 		entry := uint32((guid >> 24) & 0x00FFFFFF)
 		return questRelationExists(ctx, s.server.WorldStore.DB, "gameobject_queststarter", entry, questID)
+	}
+	// Item starting quest (HighGuid 0x4000 or item GUID)
+	if high == 0x4000 {
+		var itemEntry uint32
+		itemLow := guid & 0x0000FFFFFFFFFFFF
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ? OR guid = ?", itemLow, guid).Scan(&itemEntry)
+		}
+		if itemEntry != 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var startQuest uint32
+			if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT startquest FROM item_template WHERE entry = ?", itemEntry).Scan(&startQuest); err == nil && startQuest == questID {
+				return true
+			}
+		}
 	}
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
 	if entry != 0 && s.creatureStartsQuest(ctx, entry, questID) {
@@ -244,6 +261,13 @@ func (s *session) questgiverStartsQuest(ctx context.Context, guid uint64, questI
 	spawnGUID := uint32(guid & 0x00FFFFFF)
 	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&spawnEntry); err == nil && spawnEntry != 0 {
 		return s.creatureStartsQuest(ctx, spawnEntry, questID)
+	}
+	// Also check item_template directly with entry
+	if entry != 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var startQuest uint32
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT startquest FROM item_template WHERE entry = ?", entry).Scan(&startQuest); err == nil && startQuest == questID {
+			return true
+		}
 	}
 	return false
 }

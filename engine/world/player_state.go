@@ -51,6 +51,47 @@ const (
 	playerVisibleItemCount             = 19
 	unitFieldMaxHealth                 = 32
 	unitFieldMaxPower1                 = 33
+	unitFieldRangedAttackTime          = 64
+	unitFieldMinDamage                 = 70
+	unitFieldMaxDamage                 = 71
+	unitFieldMinOffhandDamage          = 72
+	unitFieldMaxOffhandDamage          = 73
+	unitModCastSpeed                   = 80
+	unitFieldStat0                     = 84 // Strength
+	unitFieldStat1                     = 85 // Agility
+	unitFieldStat2                     = 86 // Stamina
+	unitFieldStat3                     = 87 // Intellect
+	unitFieldStat4                     = 88 // Spirit
+	unitFieldPosStat0                  = 89
+	unitFieldNegStat0                  = 94
+	unitFieldResistances               = 99 // 99..105 (Physical/Armor, Holy, Fire, Nature, Frost, Shadow, Arcane)
+	unitFieldBaseMana                  = 120
+	unitFieldBaseHealth                = 121
+	unitFieldAttackPower               = 123
+	unitFieldAttackPowerMods           = 124
+	unitFieldAttackPowerMultiplier     = 125
+	unitFieldRangedAttackPower         = 126
+	unitFieldRangedAttackPowerMods     = 127
+	unitFieldRangedAttackPowerMultiplier = 128
+	unitFieldMinRangedDamage           = 129
+	unitFieldMaxRangedDamage           = 130
+	playerCharacterPoints1             = 1020 // Free talent points
+	playerCharacterPoints2             = 1021
+	playerBlockPercentage              = 1024
+	playerDodgePercentage              = 1025
+	playerParryPercentage              = 1026
+	playerCritPercentage               = 1029
+	playerRangedCritPercentage         = 1030
+	playerOffhandCritPercentage        = 1031
+	playerSpellCritPercentage1         = 1032 // 1032..1038
+	playerShieldBlock                  = 1039
+	playerFieldModDamageDonePos        = 1171 // 1171..1177
+	playerFieldModDamageDoneNeg        = 1178 // 1178..1184
+	playerFieldModDamageDonePct        = 1185 // 1185..1191
+	playerFieldModHealingDonePos       = 1192
+	playerFieldModHealingPct           = 1193
+	playerFieldModHealingDonePct       = 1194
+	playerFieldCombatRating1           = 1231 // 1231..1255
 	unitFlagPlayerControlled    uint32 = 0x00000008
 )
 
@@ -542,6 +583,58 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		values[unitFieldMaxPower1+i] = state.MaxPowers[i]
 	}
 	values[unitFieldMaxHealth] = state.MaxHealth
+
+	// Combat & Attack speeds (prevents client div-by-zero crashes in PaperDollFrame_UpdateStats)
+	values[unitFieldRangedAttackTime] = 2000
+	values[unitModCastSpeed] = math.Float32bits(1.0)
+	values[unitFieldMinDamage] = math.Float32bits(1.0)
+	values[unitFieldMaxDamage] = math.Float32bits(2.0)
+	values[unitFieldMinOffhandDamage] = math.Float32bits(1.0)
+	values[unitFieldMaxOffhandDamage] = math.Float32bits(2.0)
+	values[unitFieldMinRangedDamage] = math.Float32bits(1.0)
+	values[unitFieldMaxRangedDamage] = math.Float32bits(2.0)
+	values[unitFieldAttackPowerMultiplier] = math.Float32bits(1.0)
+	values[unitFieldRangedAttackPowerMultiplier] = math.Float32bits(1.0)
+	values[unitFieldAttackPower] = uint32(20 + int(state.Level)*2)
+	values[unitFieldRangedAttackPower] = uint32(20 + int(state.Level)*2)
+
+	// Base stats & Armor (displayed in character sheet)
+	baseStat := uint32(20 + int(state.Level)*2)
+	for i := 0; i < 5; i++ {
+		values[unitFieldStat0+i] = baseStat
+		values[unitFieldPosStat0+i] = baseStat
+	}
+	values[unitFieldResistances] = baseStat * 2 // Armor = Agility * 2
+
+	values[unitFieldBaseHealth] = maxUint32(state.MaxHealth, 1)
+	if len(state.MaxPowers) > 0 {
+		values[unitFieldBaseMana] = maxUint32(state.MaxPowers[0], 1)
+	}
+
+	// Modifiers & Ratings (required by client PaperDoll formulas)
+	for i := 0; i < 7; i++ {
+		values[playerFieldModDamageDonePct+i] = math.Float32bits(1.0)
+		values[playerSpellCritPercentage1+i] = math.Float32bits(5.0)
+	}
+	values[playerFieldModHealingPct] = math.Float32bits(1.0)
+	values[playerFieldModHealingDonePct] = math.Float32bits(1.0)
+	values[playerCritPercentage] = math.Float32bits(5.0)
+	values[playerRangedCritPercentage] = math.Float32bits(5.0)
+	values[playerOffhandCritPercentage] = math.Float32bits(5.0)
+
+	// Free talent points & spent points
+	if state.Level >= 10 {
+		var spent uint32
+		for _, rank := range state.Talents {
+			spent += uint32(rank + 1)
+		}
+		totalPoints := uint32(state.Level - 9)
+		if totalPoints > spent {
+			values[playerCharacterPoints1] = totalPoints - spent
+		}
+		values[playerCharacterPoints2] = spent
+	}
+
 	mask := protocol.NewUpdateMask(len(values))
 	for index, value := range values {
 		if value != 0 {
