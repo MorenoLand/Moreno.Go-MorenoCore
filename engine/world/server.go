@@ -1239,6 +1239,166 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleComplain(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_GUILD_CREATE):
+			if !state.authed || !state.handleGuildCreate(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_INFO):
+			if !state.authed || !state.handleGuildInfo(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_PROMOTE):
+			if !state.authed || !state.handleGuildPromote(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_DEMOTE):
+			if !state.authed || !state.handleGuildDemote(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_LEADER):
+			if !state.authed || !state.handleGuildLeader(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_REMOVE):
+			if !state.authed || !state.handleGuildRemove(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_DISBAND):
+			if !state.authed || !state.handleGuildDisband(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_ADD_RANK):
+			if !state.authed || !state.handleGuildAddRank(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_DEL_RANK):
+			if !state.authed || !state.handleGuildDelRank(ctx) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_RANK):
+			if !state.authed || !state.handleGuildRank(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_SET_PUBLIC_NOTE):
+			if !state.authed || !state.handleGuildSetPublicNote(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_SET_OFFICER_NOTE):
+			if !state.authed || !state.handleGuildSetOfficerNote(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_INFO_TEXT):
+			if !state.authed || !state.handleGuildInfoText(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_BANKER_ACTIVATE):
+			if !state.authed || !state.handleGuildBankerActivate(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_BANK_SWAP_ITEMS):
+			if !state.authed || !state.handleGuildBankSwapItems(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_BANK_BUY_TAB):
+			if !state.authed || !state.handleGuildBankBuyTab(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_BANK_UPDATE_TAB):
+			if !state.authed || !state.handleGuildBankUpdateTab(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_BANK_DEPOSIT_MONEY):
+			if !state.authed || !state.handleGuildBankDepositMoney(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GUILD_BANK_WITHDRAW_MONEY):
+			if !state.authed || !state.handleGuildBankWithdrawMoney(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_GUILD_BANK_LOG_QUERY):
+			if !state.authed || !state.handleGuildBankLogQuery(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_GUILD_BANK_MONEY_WITHDRAWN):
+			if !state.authed || !state.handleGuildBankMoneyWithdrawn(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeMSG_QUERY_GUILD_BANK_TEXT):
+			if !state.authed || !state.handleQueryGuildBankText(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_GUILD_BANK_TEXT):
+			if !state.authed || !state.handleSetGuildBankText(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_DUEL_ACCEPTED):
+			if !state.authed || !state.handleDuelAccepted(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_DUEL_CANCELLED):
+			if !state.authed || !state.handleDuelCancelled(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_FAR_SIGHT):
+			if !state.authed || !state.handleFarSight(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_FORCE_MOVE_ROOT_ACK):
+			if !state.authed || !state.handleForceMoveRootAck(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_FORCE_MOVE_UNROOT_ACK):
+			if !state.authed || !state.handleForceMoveUnrootAck(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_FORCE_TURN_RATE_CHANGE_ACK):
+			if !state.authed || !state.handleForceTurnRateChangeAck(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GET_CHANNEL_MEMBER_COUNT):
+			if !state.authed || !state.handleGetChannelMemberCount(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GET_MIRRORIMAGE_DATA):
+			if !state.authed || !state.handleGetMirrorImageData(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GMTICKETSYSTEM_TOGGLE):
+			if !state.authed || !state.handleGmTicketSystemToggle(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GRANT_LEVEL):
+			if !state.authed || !state.handleGrantLevel(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GROUP_ASSISTANT_LEADER):
+			if !state.authed || !state.handleGroupAssistantLeader(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_GROUP_CHANGE_SUB_GROUP):
+			if !state.authed || !state.handleGroupChangeSubGroup(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_ENABLETAXI):
+			if !state.authed || !state.handleEnableTaxi(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_DISMISS_CRITTER):
+			if !state.authed || !state.handleDismissCritter(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE):
+			if !state.authed || !state.handleChangeSeatsOnControlledVehicle(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CONTROLLER_EJECT_PASSENGER):
+			if !state.authed || !state.handleControllerEjectPassenger(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_DISMISS_CONTROLLED_VEHICLE):
+			if !state.authed || !state.handleDismissControlledVehicle(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
 			if !state.authed || !state.handleTutorialFlag(ctx, payload) {
 				return

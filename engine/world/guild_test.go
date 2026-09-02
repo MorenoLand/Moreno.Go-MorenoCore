@@ -34,7 +34,7 @@ func TestGuildQueryRosterAndInvite(t *testing.T) {
 	}
 	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
 	srv := &Server{AuthStore: store, CharactersStore: store, WorldStore: store, sessions: make(map[*session]struct{})}
-	sessLeader := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Name: "GMPlayer"}}
+	sessLeader := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Name: "GMPlayer", Money: 1000}}
 	sessNewbie := &session{server: srv, playerGUID: 2, playerLoaded: true, player: &playerState{GUID: 2, Name: "Newbie"}}
 	srv.sessions[sessLeader] = struct{}{}
 	srv.sessions[sessNewbie] = struct{}{}
@@ -73,5 +73,171 @@ func TestGuildQueryRosterAndInvite(t *testing.T) {
 	_ = db.QueryRow("SELECT COUNT(*) FROM guild_member WHERE guildid = 1").Scan(&count)
 	if count != 2 {
 		t.Fatalf("expected 2 guild members, got %d", count)
+	}
+
+	// 6. Guild Info
+	if !sessLeader.handleGuildInfo(ctx) {
+		t.Fatal("handleGuildInfo failed")
+	}
+
+	// 7. Public & Officer Notes
+	noteBuf := protocol.NewBuffer(64)
+	noteBuf.WriteCString("Newbie")
+	noteBuf.WriteCString("Great recruit")
+	if !sessLeader.handleGuildSetPublicNote(ctx, noteBuf.Bytes()) {
+		t.Fatal("handleGuildSetPublicNote failed")
+	}
+	offNoteBuf := protocol.NewBuffer(64)
+	offNoteBuf.WriteCString("Newbie")
+	offNoteBuf.WriteCString("Potential officer")
+	if !sessLeader.handleGuildSetOfficerNote(ctx, offNoteBuf.Bytes()) {
+		t.Fatal("handleGuildSetOfficerNote failed")
+	}
+	var pnote, offnote string
+	_ = db.QueryRow("SELECT pnote, offnote FROM guild_member WHERE guid = 2").Scan(&pnote, &offnote)
+	if pnote != "Great recruit" || offnote != "Potential officer" {
+		t.Fatalf("unexpected notes: %q, %q", pnote, offnote)
+	}
+
+	// 8. Info Text
+	infoBuf := protocol.NewBuffer(64)
+	infoBuf.WriteCString("Updated guild information")
+	if !sessLeader.handleGuildInfoText(ctx, infoBuf.Bytes()) {
+		t.Fatal("handleGuildInfoText failed")
+	}
+
+	// 9. Add Rank & Del Rank
+	rankBuf := protocol.NewBuffer(32)
+	rankBuf.WriteCString("Raider")
+	if !sessLeader.handleGuildAddRank(ctx, rankBuf.Bytes()) {
+		t.Fatal("handleGuildAddRank failed")
+	}
+	_ = db.QueryRow("SELECT COUNT(*) FROM guild_rank WHERE guildid = 1").Scan(&count)
+	if count != 3 {
+		t.Fatalf("expected 3 ranks, got %d", count)
+	}
+	if !sessLeader.handleGuildDelRank(ctx) {
+		t.Fatal("handleGuildDelRank failed")
+	}
+
+	// 10. Promote & Demote
+	targetBuf := protocol.NewBuffer(32)
+	targetBuf.WriteCString("Newbie")
+	if !sessLeader.handleGuildPromote(ctx, targetBuf.Bytes()) {
+		t.Fatal("handleGuildPromote failed")
+	}
+	if !sessLeader.handleGuildDemote(ctx, targetBuf.Bytes()) {
+		t.Fatal("handleGuildDemote failed")
+	}
+
+	// 11. Guild Bank operations
+	for _, stmt := range []string{
+		"CREATE TABLE guild_bank_tab (guildid INTEGER, TabId INTEGER, TabName TEXT, TabIcon TEXT, TabText TEXT, PRIMARY KEY (guildid, TabId))",
+		"CREATE TABLE guild_bank_item (guildid INTEGER, TabId INTEGER, SlotId INTEGER, item_guid INTEGER, PRIMARY KEY (guildid, TabId, SlotId))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, count INTEGER)",
+		"INSERT INTO guild_bank_tab VALUES (1, 0, 'General', 'INV_Misc_Bag_08', 'Bank Rules')",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	actBuf := protocol.NewBuffer(16)
+	actBuf.WriteU64(1001) // Banker GUID
+	actBuf.WriteU8(1)    // Full update
+	if !sessLeader.handleGuildBankerActivate(ctx, actBuf.Bytes()) {
+		t.Fatal("handleGuildBankerActivate failed")
+	}
+
+	qTabBuf := protocol.NewBuffer(16)
+	qTabBuf.WriteU64(1001)
+	qTabBuf.WriteU8(0) // Tab 0
+	qTabBuf.WriteU8(1) // Full update
+	if !sessLeader.handleGuildBankQueryTab(ctx, qTabBuf.Bytes()) {
+		t.Fatal("handleGuildBankQueryTab failed")
+	}
+
+	// Deposit & Withdraw Money
+	depBuf := protocol.NewBuffer(16)
+	depBuf.WriteU64(1001)
+	depBuf.WriteU32(500)
+	if !sessLeader.handleGuildBankDepositMoney(ctx, depBuf.Bytes()) {
+		t.Fatal("handleGuildBankDepositMoney failed")
+	}
+	if sessLeader.player.Money != 500 {
+		t.Fatalf("expected player money 500, got %d", sessLeader.player.Money)
+	}
+
+	withBuf := protocol.NewBuffer(16)
+	withBuf.WriteU64(1001)
+	withBuf.WriteU32(200)
+	if !sessLeader.handleGuildBankWithdrawMoney(ctx, withBuf.Bytes()) {
+		t.Fatal("handleGuildBankWithdrawMoney failed")
+	}
+	if sessLeader.player.Money != 700 {
+		t.Fatalf("expected player money 700, got %d", sessLeader.player.Money)
+	}
+
+	// Buy Tab & Update Tab
+	buyBuf := protocol.NewBuffer(16)
+	buyBuf.WriteU64(1001)
+	buyBuf.WriteU8(1)
+	if !sessLeader.handleGuildBankBuyTab(ctx, buyBuf.Bytes()) {
+		t.Fatal("handleGuildBankBuyTab failed")
+	}
+	updBuf := protocol.NewBuffer(64)
+	updBuf.WriteU64(1001)
+	updBuf.WriteU8(1)
+	updBuf.WriteCString("Raiding Gear")
+	updBuf.WriteCString("INV_Sword_04")
+	if !sessLeader.handleGuildBankUpdateTab(ctx, updBuf.Bytes()) {
+		t.Fatal("handleGuildBankUpdateTab failed")
+	}
+
+	// Bank Text & Log Query
+	if !sessLeader.handleQueryGuildBankText(ctx, []byte{0}) {
+		t.Fatal("handleQueryGuildBankText failed")
+	}
+	setTxtBuf := protocol.NewBuffer(64)
+	setTxtBuf.WriteU8(0)
+	setTxtBuf.WriteCString("New Tab Description")
+	if !sessLeader.handleSetGuildBankText(ctx, setTxtBuf.Bytes()) {
+		t.Fatal("handleSetGuildBankText failed")
+	}
+	if !sessLeader.handleGuildBankLogQuery(ctx, []byte{0}) {
+		t.Fatal("handleGuildBankLogQuery failed")
+	}
+	if !sessLeader.handleGuildBankMoneyWithdrawn(ctx, nil) {
+		t.Fatal("handleGuildBankMoneyWithdrawn failed")
+	}
+
+	// 12. Slice 18 Misc Handlers
+	if !sessLeader.handleDuelAccepted(ctx, nil) {
+		t.Fatal("handleDuelAccepted failed")
+	}
+	if !sessLeader.handleDuelCancelled(ctx, nil) {
+		t.Fatal("handleDuelCancelled failed")
+	}
+	mirrorBuf := protocol.NewBuffer(8)
+	mirrorBuf.WriteU64(1)
+	if !sessLeader.handleGetMirrorImageData(ctx, mirrorBuf.Bytes()) {
+		t.Fatal("handleGetMirrorImageData failed")
+	}
+	if !sessLeader.handleFarSight(ctx, nil) || !sessLeader.handleForceMoveRootAck(ctx, nil) ||
+		!sessLeader.handleForceMoveUnrootAck(ctx, nil) || !sessLeader.handleForceTurnRateChangeAck(ctx, nil) ||
+		!sessLeader.handleGetChannelMemberCount(ctx, nil) || !sessLeader.handleGmTicketSystemToggle(ctx, nil) ||
+		!sessLeader.handleGroupAssistantLeader(ctx, nil) || !sessLeader.handleGroupChangeSubGroup(ctx, nil) ||
+		!sessLeader.handleDismissCritter(ctx, nil) || !sessLeader.handleChangeSeatsOnControlledVehicle(ctx, nil) ||
+		!sessLeader.handleControllerEjectPassenger(ctx, nil) || !sessLeader.handleDismissControlledVehicle(ctx, nil) {
+		t.Fatal("misc handlers returned false")
+	}
+
+	// 13. Disband
+	if !sessLeader.handleGuildDisband(ctx) {
+		t.Fatal("handleGuildDisband failed")
+	}
+	_ = db.QueryRow("SELECT COUNT(*) FROM guild WHERE guildid = 1").Scan(&count)
+	if count != 0 {
+		t.Fatalf("expected 0 guilds after disband, got %d", count)
 	}
 }

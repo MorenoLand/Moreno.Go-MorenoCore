@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -304,42 +305,475 @@ func (s *session) handleGuildMotd(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-func (s *session) handleGuildBankQueryTab(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 10 {
+// handleGuildCreate processes CMSG_GUILD_CREATE (0x081).
+// Reference: WorldSession::HandleGuildCreateOpcode (GuildHandler.cpp:38).
+func (s *session) handleGuildCreate(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
 		return true
 	}
-	reader := protocol.NewReader(payload)
-	_, _ = reader.ReadU64() // banker
-	tab, _ := reader.ReadU8()
-	fullUpdate, _ := reader.ReadU8()
+	r := protocol.NewReader(payload)
+	guildName, err := r.ReadCString()
+	if err != nil || guildName == "" {
+		return true
+	}
+	s.debug("guild create rejected", "account", s.accountName, "name", guildName)
+	return true
+}
+
+// handleGuildInfo processes CMSG_GUILD_INFO (0x087).
+// Reference: WorldSession::HandleGuildInfoOpcode (GuildHandler.cpp:77).
+func (s *session) handleGuildInfo(ctx context.Context) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+	var guildID int64
+	err := cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID)
+	if err != nil || guildID == 0 {
+		return true
+	}
+
+	var name string
+	var createdDate int64
+	err = cdb.QueryRowContext(ctx, "SELECT name, createdate FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&name, &createdDate)
+	if err != nil {
+		return true
+	}
+
+	var memberCount, accountCount int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*), COUNT(DISTINCT c.account) FROM guild_member gm JOIN characters c ON c.guid = gm.guid WHERE gm.guildid = ?", guildID).Scan(&memberCount, &accountCount)
+
+	buf := protocol.NewBuffer(128)
+	buf.WriteCString(name)
+	buf.WriteU32(uint32(createdDate))
+	buf.WriteI32(int32(memberCount))
+	buf.WriteI32(int32(accountCount))
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_INFO), buf.Bytes(), true)
+	s.debug("guild info sent", "guild", name, "members", memberCount)
+	return true
+}
+
+// handleGuildPromote processes CMSG_GUILD_PROMOTE (0x08B).
+// Reference: WorldSession::HandleGuildPromoteOpcode (GuildHandler.cpp:95).
+func (s *session) handleGuildPromote(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	targetName, err := r.ReadCString()
+	if err != nil || targetName == "" {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var guildID, myRank int64
+	err = cdb.QueryRowContext(ctx, "SELECT guildid, rank FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID, &myRank)
+	if err != nil || guildID == 0 {
+		return true
+	}
+
+	var targetGUID, targetRank int64
+	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank FROM guild_member gm
+		JOIN characters c ON c.guid = gm.guid
+		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID, &targetRank)
+	if err != nil || targetGUID == 0 {
+		return true
+	}
+
+	if targetRank <= myRank+1 || targetRank <= 1 {
+		return true
+	}
+
+	newRank := targetRank - 1
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = ? WHERE guid = ? AND guildid = ?", newRank, targetGUID, guildID)
+
+	eventBuf := protocol.NewBuffer(128)
+	eventBuf.WriteU8(0) // GE_PROMOTION
+	eventBuf.WriteU8(2)
+	eventBuf.WriteCString(s.player.Name)
+	eventBuf.WriteCString(targetName)
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+
+	return s.handleGuildRoster(ctx)
+}
+
+// handleGuildDemote processes CMSG_GUILD_DEMOTE (0x08C).
+// Reference: WorldSession::HandleGuildDemoteOpcode (GuildHandler.cpp:104).
+func (s *session) handleGuildDemote(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	targetName, err := r.ReadCString()
+	if err != nil || targetName == "" {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var guildID, myRank int64
+	err = cdb.QueryRowContext(ctx, "SELECT guildid, rank FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID, &myRank)
+	if err != nil || guildID == 0 {
+		return true
+	}
+
+	var targetGUID, targetRank int64
+	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank FROM guild_member gm
+		JOIN characters c ON c.guid = gm.guid
+		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, targetName).Scan(&targetGUID, &targetRank)
+	if err != nil || targetGUID == 0 {
+		return true
+	}
+
+	var maxRank int64 = 4
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(rid), 4) FROM guild_rank WHERE guildid = ?", guildID).Scan(&maxRank)
+
+	if targetRank <= myRank || targetRank >= maxRank {
+		return true
+	}
+
+	newRank := targetRank + 1
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = ? WHERE guid = ? AND guildid = ?", newRank, targetGUID, guildID)
+
+	eventBuf := protocol.NewBuffer(128)
+	eventBuf.WriteU8(1) // GE_DEMOTION
+	eventBuf.WriteU8(2)
+	eventBuf.WriteCString(s.player.Name)
+	eventBuf.WriteCString(targetName)
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+
+	return s.handleGuildRoster(ctx)
+}
+
+// handleGuildLeader processes CMSG_GUILD_LEADER (0x090).
+// Reference: WorldSession::HandleGuildSetGuildMaster (GuildHandler.cpp:129).
+func (s *session) handleGuildLeader(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	newMasterName, err := r.ReadCString()
+	if err != nil || newMasterName == "" {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var guildID, leaderGUID int64
+	err = cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
+		JOIN guild_member gm ON gm.guildid = g.guildid
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
+	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+		return true
+	}
+
+	var newLeaderGUID int64
+	err = cdb.QueryRowContext(ctx, `SELECT gm.guid FROM guild_member gm
+		JOIN characters c ON c.guid = gm.guid
+		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, newMasterName).Scan(&newLeaderGUID)
+	if err != nil || newLeaderGUID == 0 || uint64(newLeaderGUID) == s.playerGUID {
+		return true
+	}
+
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET leaderguid = ? WHERE guildid = ?", newLeaderGUID, guildID)
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = 1 WHERE guid = ? AND guildid = ?", s.playerGUID, guildID)
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = 0 WHERE guid = ? AND guildid = ?", newLeaderGUID, guildID)
+
+	eventBuf := protocol.NewBuffer(128)
+	eventBuf.WriteU8(7) // GE_LEADER_CHANGED
+	eventBuf.WriteU8(2)
+	eventBuf.WriteCString(s.player.Name)
+	eventBuf.WriteCString(newMasterName)
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+
+	return s.handleGuildRoster(ctx)
+}
+
+// handleGuildRemove processes CMSG_GUILD_REMOVE (0x08E).
+// Reference: WorldSession::HandleGuildRemoveOpcode (GuildHandler.cpp:51).
+func (s *session) handleGuildRemove(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	removee, err := r.ReadCString()
+	if err != nil || removee == "" {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var guildID, myRank int64
+	err = cdb.QueryRowContext(ctx, "SELECT guildid, rank FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID, &myRank)
+	if err != nil || guildID == 0 {
+		return true
+	}
+
+	var targetGUID, targetRank int64
+	err = cdb.QueryRowContext(ctx, `SELECT gm.guid, gm.rank FROM guild_member gm
+		JOIN characters c ON c.guid = gm.guid
+		WHERE gm.guildid = ? AND UPPER(c.name) = UPPER(?) LIMIT 1`, guildID, removee).Scan(&targetGUID, &targetRank)
+	if err != nil || targetGUID == 0 {
+		return true
+	}
+
+	if targetRank <= myRank {
+		return true
+	}
+
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ? AND guildid = ?", targetGUID, guildID)
+
+	eventBuf := protocol.NewBuffer(128)
+	eventBuf.WriteU8(5) // GE_REMOVED
+	eventBuf.WriteU8(2)
+	eventBuf.WriteCString(removee)
+	eventBuf.WriteCString(s.player.Name)
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+
+	return s.handleGuildRoster(ctx)
+}
+
+// handleGuildDisband processes CMSG_GUILD_DISBAND (0x08F).
+// Reference: WorldSession::HandleGuildDelete (GuildHandler.cpp:121).
+func (s *session) handleGuildDisband(ctx context.Context) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var guildID, leaderGUID int64
+	err := cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
+		JOIN guild_member gm ON gm.guildid = g.guildid
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
+	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+		return true
+	}
+
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild WHERE guildid = ?", guildID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guildid = ?", guildID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_rank WHERE guildid = ?", guildID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_tab WHERE guildid = ?", guildID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ?", guildID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_eventlog WHERE guildid = ?", guildID)
+
+	eventBuf := protocol.NewBuffer(32)
+	eventBuf.WriteU8(8) // GE_DISBANDED
+	eventBuf.WriteU8(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), eventBuf.Bytes(), true)
+	s.debug("guild disbanded", "guild_id", guildID)
+	return true
+}
+
+// handleGuildAddRank processes CMSG_GUILD_ADD_RANK (0x232).
+// Reference: WorldSession::HandleGuildAddRankOpcode (GuildHandler.cpp:181).
+func (s *session) handleGuildAddRank(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	rankName, err := r.ReadCString()
+	if err != nil || rankName == "" {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var guildID, leaderGUID int64
+	err = cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
+		JOIN guild_member gm ON gm.guildid = g.guildid
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
+	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+		return true
+	}
+
+	var maxRid sql.NullInt64
+	_ = cdb.QueryRowContext(ctx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&maxRid)
+	newRid := 0
+	if maxRid.Valid {
+		newRid = int(maxRid.Int64) + 1
+	}
+	if newRid > 9 {
+		return true
+	}
+
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_rank (guildid, rid, rname, rights, BankMoneyPerDay) VALUES (?, ?, ?, 0x00000040, 0)", guildID, newRid, rankName)
+	return s.handleGuildRoster(ctx)
+}
+
+// handleGuildDelRank processes CMSG_GUILD_DEL_RANK (0x233).
+// Reference: WorldSession::HandleGuildDeleteRank (GuildHandler.cpp:189).
+func (s *session) handleGuildDelRank(ctx context.Context) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var guildID, leaderGUID int64
+	err := cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
+		JOIN guild_member gm ON gm.guildid = g.guildid
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
+	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+		return true
+	}
+
+	var maxRid sql.NullInt64
+	_ = cdb.QueryRowContext(ctx, "SELECT MAX(rid) FROM guild_rank WHERE guildid = ?", guildID).Scan(&maxRid)
+	if !maxRid.Valid || maxRid.Int64 <= 1 {
+		return true
+	}
+
+	lowestRank := maxRid.Int64
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, lowestRank)
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild_member SET rank = ? WHERE guildid = ? AND rank = ?", lowestRank-1, guildID, lowestRank)
+
+	return s.handleGuildRoster(ctx)
+}
+
+// handleGuildRank processes CMSG_GUILD_RANK (0x231).
+// Reference: WorldSession::HandleGuildSetRankPermissions (GuildHandler.cpp:166).
+func (s *session) handleGuildRank(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	rankID, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	rights, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	rankName, err := r.ReadCString()
+	if err != nil {
+		return false
+	}
+	goldLimit, _ := r.ReadU32()
 
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
 	}
-	var guildID, bankMoney int64
-	err := cdb.QueryRowContext(ctx, `SELECT g.guildid, g.BankMoney FROM guild_member AS gm
-		JOIN guild AS g ON g.guildid = gm.guildid
-		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &bankMoney)
+
+	var guildID, leaderGUID int64
+	err = cdb.QueryRowContext(ctx, `SELECT g.guildid, g.leaderguid FROM guild g
+		JOIN guild_member gm ON gm.guildid = g.guildid
+		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &leaderGUID)
+	if err != nil || guildID == 0 || uint64(leaderGUID) != s.playerGUID {
+		return true
+	}
+
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild_rank SET rname = ?, rights = ?, BankMoneyPerDay = ? WHERE guildid = ? AND rid = ?", rankName, rights, goldLimit, guildID, rankID)
+	return s.handleGuildRoster(ctx)
+}
+
+// handleGuildSetPublicNote processes CMSG_GUILD_SET_PUBLIC_NOTE (0x234).
+// Reference: WorldSession::HandleGuildSetPublicNoteOpcode (GuildHandler.cpp:146).
+func (s *session) handleGuildSetPublicNote(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	targetName, err := r.ReadCString()
+	if err != nil || targetName == "" {
+		return false
+	}
+	note, _ := r.ReadCString()
+
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var guildID int64
+	err = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID)
 	if err != nil || guildID == 0 {
 		return true
 	}
 
-	buf := protocol.NewBuffer(256)
-	buf.WriteU64(uint64(bankMoney))
-	buf.WriteU8(tab)
-	buf.WriteI32(1000000) // WithdrawalsRemaining
-	buf.WriteU8(fullUpdate)
-	if tab == 0 && fullUpdate != 0 {
-		// Tab info
-		buf.WriteU8(1) // 1 tab
-		buf.WriteCString("General")
-		buf.WriteCString("INV_Misc_Bag_08")
+	_, _ = cdb.ExecContext(ctx, `UPDATE guild_member SET pnote = ?
+		WHERE guildid = ? AND guid = (SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1)`, note, guildID, targetName)
+
+	return s.handleGuildRoster(ctx)
+}
+
+// handleGuildSetOfficerNote processes CMSG_GUILD_SET_OFFICER_NOTE (0x235).
+// Reference: WorldSession::HandleGuildSetOfficerNoteOpcode (GuildHandler.cpp:156).
+func (s *session) handleGuildSetOfficerNote(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 {
+		return true
 	}
-	buf.WriteU8(0) // 0 items in tab for now
-	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_BANK_LIST), buf.Bytes(), true)
+	r := protocol.NewReader(payload)
+	targetName, err := r.ReadCString()
+	if err != nil || targetName == "" {
+		return false
+	}
+	note, _ := r.ReadCString()
+
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var guildID int64
+	err = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID)
+	if err != nil || guildID == 0 {
+		return true
+	}
+
+	_, _ = cdb.ExecContext(ctx, `UPDATE guild_member SET offnote = ?
+		WHERE guildid = ? AND guid = (SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1)`, note, guildID, targetName)
+
+	return s.handleGuildRoster(ctx)
+}
+
+// handleGuildInfoText processes CMSG_GUILD_INFO_TEXT (0x2FC).
+// Reference: WorldSession::HandleGuildUpdateInfoText (GuildHandler.cpp:197).
+func (s *session) handleGuildInfoText(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	infoText, err := r.ReadCString()
+	if err != nil {
+		return false
+	}
+
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var guildID int64
+	err = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID)
+	if err != nil || guildID == 0 {
+		return true
+	}
+
+	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET info = ? WHERE guildid = ?", infoText, guildID)
 	return true
 }
+
 
 func (s *Server) getGuildName(ctx context.Context, guildID uint32) string {
 	if guildID == 0 || s.CharactersStore == nil || s.CharactersStore.DB == nil {
