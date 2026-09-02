@@ -1,6 +1,7 @@
 package wotlk
 
 import (
+	"encoding/binary"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -296,18 +297,43 @@ func (s *Store) CharStartOutfit(race, class, gender uint8) ([]uint32, error) {
 		if err != nil {
 			continue
 		}
-		r, _ := record.Uint32(1)
-		c, _ := record.Uint32(2)
-		g, _ := record.Uint32(3)
-		if uint8(r) == race && uint8(c) == class && uint8(g) == gender {
-			var items []uint32
-			for j := 5; j <= 28; j++ {
-				itemID, err := record.Int32(j)
-				if err == nil && itemID > 0 {
-					items = append(items, uint32(itemID))
+		data := record.Data()
+		if len(data) >= 104 && file.RecordSize == 296 {
+			// In 3.3.5a CharStartOutfit.dbc (format dbbbXiiii...):
+			// Offset 0..3: ID (uint32)
+			// Offset 4: Race (uint8)
+			// Offset 5: Class (uint8)
+			// Offset 6: Gender (uint8)
+			// Offset 7: OutfitID (uint8)
+			// Offset 8..103: 24 Item IDs (int32)
+			r := data[4]
+			c := data[5]
+			g := data[6]
+			if r == race && c == class && g == gender {
+				var items []uint32
+				for j := 0; j < 24; j++ {
+					offset := 8 + j*4
+					itemID := int32(binary.LittleEndian.Uint32(data[offset : offset+4]))
+					if itemID > 0 {
+						items = append(items, uint32(itemID))
+					}
 				}
+				return items, nil
 			}
-			return items, nil
+		} else {
+			r, _ := record.Uint32(1)
+			c, _ := record.Uint32(2)
+			g, _ := record.Uint32(3)
+			if uint8(r) == race && uint8(c) == class && uint8(g) == gender {
+				var items []uint32
+				for j := 5; j <= 28; j++ {
+					itemID, err := record.Int32(j)
+					if err == nil && itemID > 0 {
+						items = append(items, uint32(itemID))
+					}
+				}
+				return items, nil
+			}
 		}
 	}
 	return nil, nil
