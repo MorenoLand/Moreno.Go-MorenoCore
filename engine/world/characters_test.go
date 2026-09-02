@@ -56,7 +56,7 @@ func TestCharacterCreatePersistsReferenceDefaults(t *testing.T) {
 	if err := stores.Characters.DB.QueryRow("SELECT health FROM characters WHERE account = 7 AND name = 'Newhero'").Scan(&health); err != nil {
 		t.Fatal(err)
 	}
-	if health != 20 {
+	if health != 220 {
 		t.Fatalf("created character health=%d", health)
 	}
 	var realmCount int

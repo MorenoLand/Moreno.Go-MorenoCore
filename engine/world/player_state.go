@@ -304,27 +304,37 @@ func (s *session) loadClassLevelStats(ctx context.Context, state *playerState) e
 	}
 	var baseHealth, baseMana int64
 	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT basehp, basemana FROM player_classlevelstats WHERE class = ? AND level = ?", state.Class, state.Level).Scan(&baseHealth, &baseMana)
-	if err != nil {
-		if missingTable(err) || isMissingColumn(err) {
-			return nil
-		}
+	if err != nil && !missingTable(err) && !isMissingColumn(err) {
 		return err
 	}
-	if baseHealth > 0 {
-		if state.Health <= 1 && state.MaxHealth <= 1 && state.XP == 0 {
-			state.Health = uint32(baseHealth)
-		}
-		state.MaxHealth = uint32(baseHealth)
-		if state.Health > state.MaxHealth {
-			state.Health = state.MaxHealth
-		}
+	if baseHealth <= 0 {
+		baseHealth = int64(20 + int(state.Level)*15)
 	}
-	if baseMana > 0 && state.Powers[0] == 0 {
-		state.Powers[0] = uint32(baseMana)
+	if baseMana <= 0 {
+		baseMana = int64(80 + int(state.Level)*20)
 	}
-	if baseMana > 0 && state.MaxPowers[0] == 0 {
-		state.MaxPowers[0] = uint32(baseMana)
+
+	// In WoW 3.3.5a (TrinityCore StatSystem.cpp:309-325):
+	// MaxHealth = BaseHealth + (Stamina * 10)
+	// MaxMana = BaseMana + (Intellect * 15)
+	var str, agi, sta, inte, spi int64
+	errStats := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT str, agi, sta, inte, spi FROM player_levelstats WHERE race = ? AND class = ? AND level = ?", state.Race, state.Class, state.Level).Scan(&str, &agi, &sta, &inte, &spi)
+	if errStats != nil {
+		sta = int64(18 + int(state.Level)*2)
+		inte = int64(20 + int(state.Level)*2)
 	}
+
+	totalHealth := uint32(baseHealth + sta*10)
+	totalMana := uint32(baseMana + inte*15)
+
+	state.MaxHealth = totalHealth
+	if state.Health <= 1 || state.Health > state.MaxHealth || (state.XP == 0 && state.Level == 1) {
+		state.Health = state.MaxHealth
+	}
+	if state.Powers[0] == 0 || state.Powers[0] > totalMana || (state.XP == 0 && state.Level == 1) {
+		state.Powers[0] = totalMana
+	}
+	state.MaxPowers[0] = totalMana
 	return nil
 }
 
