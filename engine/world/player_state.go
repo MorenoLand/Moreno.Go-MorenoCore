@@ -122,6 +122,13 @@ type playerState struct {
 	TaxiMask       [taxiMaskSize]uint32
 	QuestLog       [playerQuestLogSlots]questLogEntry
 	MountDisplayID uint32
+	Reputations    []playerReputation
+}
+
+type playerReputation struct {
+	ListID   uint32
+	Standing int32
+	Flags    uint8
 }
 
 func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState, error) {
@@ -206,8 +213,60 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	wg.Wait()
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
+	_ = s.loadPlayerReputations(ctx, &state)
 	s.player = &state
 	return state, nil
+}
+
+func (s *session) loadPlayerReputations(ctx context.Context, state *playerState) error {
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
+		return nil
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT faction, standing, flags FROM character_reputation WHERE guid = ? ORDER BY faction", state.GUID)
+	if err != nil {
+		if isMissingColumn(err) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var faction, standing, flags int64
+		if err := rows.Scan(&faction, &standing, &flags); err != nil {
+			continue
+		}
+		reputation, found, err := s.server.Data.Reputation(uint32(faction), state.Race, state.Class)
+		if err != nil {
+			return err
+		}
+		if !found || reputation.ReputationList < 0 || reputation.ReputationList >= 128 {
+			continue
+		}
+		state.Reputations = append(state.Reputations, playerReputation{ListID: uint32(reputation.ReputationList), Standing: int32(standing), Flags: uint8(flags)})
+	}
+	return rows.Err()
+}
+
+func buildInitialReputations(state playerState) []byte {
+	values := make([]playerReputation, 128)
+	for _, reputation := range state.Reputations {
+		if reputation.ListID < uint32(len(values)) {
+			values[reputation.ListID] = reputation
+		}
+	}
+	packet := protocol.NewBuffer(4 + len(values)*5)
+	packet.WriteU32(uint32(len(values)))
+	for _, reputation := range values {
+		packet.WriteU8(reputation.Flags)
+		packet.WriteU32(uint32(reputation.Standing))
+	}
+	return packet.Bytes()
+}
+
+func buildForcedReactions() []byte {
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(0)
+	return packet.Bytes()
 }
 
 func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerState) error {

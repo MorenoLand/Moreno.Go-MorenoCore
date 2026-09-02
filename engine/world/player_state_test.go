@@ -12,6 +12,25 @@ func TestPlayerCreateMask(t *testing.T) {
 	}
 }
 
+func TestBuildInitialReputations(t *testing.T) {
+	payload := buildInitialReputations(playerState{Reputations: []playerReputation{{ListID: 72, Standing: 42999, Flags: 1}}})
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil || count != 128 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	for index := uint32(0); index < count; index++ {
+		flags, flagsErr := reader.ReadU8()
+		standing, standingErr := reader.ReadU32()
+		if flagsErr != nil || standingErr != nil {
+			t.Fatalf("entry %d flags=%v standing=%v", index, flagsErr, standingErr)
+		}
+		if index == 72 && (flags != 1 || standing != 42999) {
+			t.Fatalf("stormwind entry flags=%d standing=%d", flags, standing)
+		}
+	}
+}
+
 func TestBuildPlayerUpdateKeepsMovementAndUpdateMaskAligned(t *testing.T) {
 	server := &Server{}
 	packet, err := server.buildPlayerUpdate(playerState{GUID: 26, Level: 21, Map: 0, X: 1, Y: 2, Z: 3, Orientation: 4})
