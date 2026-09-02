@@ -355,3 +355,124 @@ func TestUpdatePlayerDeathTimersAutoReleases(t *testing.T) {
 		t.Fatalf("corpse type=%d", corpseType)
 	}
 }
+
+func resurrectResponsePayload(resurrecter uint64, response uint8) []byte {
+	payload := protocol.NewBuffer(9)
+	payload.WriteU64(resurrecter)
+	payload.WriteU8(response)
+	return payload.Bytes()
+}
+
+func TestResurrectResponseAcceptFlow(t *testing.T) {
+	player := &playerState{GUID: 9, Health: 1, MaxHealth: 100, PlayerFlags: playerFlagGhost, Map: 0, X: 10, Y: 10, Z: 10}
+	player.Powers = [7]uint32{0, 40, 0, 20, 0, 0, 0}
+	player.MaxPowers = [7]uint32{100, 100, 100, 100, 0, 0, 0}
+	state, clientConn, server := newDeathTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	if _, err := server.CharactersStore.DB.Exec("INSERT INTO corpse (guid, posX, posY, posZ, orientation, mapId, itemCache, time, corpseType) VALUES (9, 10, 10, 10, 0, 0, '', ?, ?)", time.Now().Unix()-3600, corpseTypePvE); err != nil {
+		t.Fatal(err)
+	}
+	state.setResurrectRequestData(77, 1, 50.5, 60.5, 70.5, 321, 222)
+	if !state.handleResurrectResponse(context.Background(), resurrectResponsePayload(77, 1)) {
+		t.Fatal("accepted resurrect response failed")
+	}
+	if state.resurrection != nil {
+		t.Fatal("resurrect request not cleared")
+	}
+	if player.PlayerFlags&playerFlagGhost != 0 || player.Health != 321 || player.Powers[0] != 222 || player.Powers[1] != 0 || player.Powers[3] != 100 {
+		t.Fatalf("player=%+v powers=%v", player, player.Powers)
+	}
+	if player.Map != 1 || player.X != 50.5 || player.Y != 60.5 || player.Z != 70.5 {
+		t.Fatalf("player not teleported to caster location: %+v", player)
+	}
+	var corpseType int64
+	if err := server.CharactersStore.DB.QueryRow("SELECT corpseType FROM corpse WHERE guid = 9").Scan(&corpseType); err != nil {
+		t.Fatal(err)
+	}
+	if corpseType != int64(corpseTypeBones) {
+		t.Fatalf("corpse type=%d", corpseType)
+	}
+}
+
+func TestResurrectResponseRejectAndGuards(t *testing.T) {
+	ghost := &playerState{GUID: 9, Health: 1, PlayerFlags: playerFlagGhost}
+	state, clientConn, _ := newDeathTestSession(t, ghost)
+	drainServerFrames(t, clientConn)
+	state.setResurrectRequestData(77, 0, 1, 2, 3, 100, 50)
+	// Reject clears the stored request without resurrecting.
+	if !state.handleResurrectResponse(context.Background(), resurrectResponsePayload(77, 0)) {
+		t.Fatal("rejected resurrect response failed")
+	}
+	if state.resurrection != nil {
+		t.Fatal("rejected response did not clear the request")
+	}
+	// Mismatched resurrecter guid is ignored.
+	state.setResurrectRequestData(77, 0, 1, 2, 3, 100, 50)
+	if !state.handleResurrectResponse(context.Background(), resurrectResponsePayload(78, 1)) {
+		t.Fatal("mismatched resurrecter handling failed")
+	}
+	if state.resurrection == nil || ghost.PlayerFlags&playerFlagGhost == 0 {
+		t.Fatal("mismatched resurrecter resurrected or cleared the request")
+	}
+	// Alive players ignore the packet entirely.
+	alive := &playerState{GUID: 9, Health: 100}
+	state2, clientConn2, _ := newDeathTestSession(t, alive)
+	drainServerFrames(t, clientConn2)
+	state2.setResurrectRequestData(77, 0, 1, 2, 3, 100, 50)
+	if !state2.handleResurrectResponse(context.Background(), resurrectResponsePayload(77, 1)) {
+		t.Fatal("alive resurrect response should be ignored")
+	}
+	if alive.Health != 100 || alive.PlayerFlags&playerFlagGhost != 0 {
+		t.Fatal("alive player was resurrected")
+	}
+	// Malformed payload is rejected.
+	if state2.handleResurrectResponse(context.Background(), resurrectResponsePayload(77, 1)[:5]) {
+		t.Fatal("truncated resurrect response should be rejected")
+	}
+}
+
+func TestSetResurrectRequestDataOverwriteGuard(t *testing.T) {
+	ghost := &playerState{GUID: 9, Health: 1, PlayerFlags: playerFlagGhost}
+	state, _, _ := newDeathTestSession(t, ghost)
+	state.setResurrectRequestData(77, 0, 1, 2, 3, 100, 50)
+	state.setResurrectRequestData(78, 0, 4, 5, 6, 200, 60)
+	if state.resurrection.GUID != 77 || state.resurrection.Health != 100 {
+		t.Fatalf("resurrect request overwritten: %+v", state.resurrection)
+	}
+}
+
+func TestSendResurrectRequestPacketLayout(t *testing.T) {
+	ghost := &playerState{GUID: 9, Health: 1, PlayerFlags: playerFlagGhost}
+	state, clientConn, _ := newDeathTestSession(t, ghost)
+	result := make(chan bool, 1)
+	go func() { result <- true; state.sendResurrectRequest(77, "Healer", true, false) }()
+	if err := clientConn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-result
+	if opcode != uint16(protocol.OpcodeSMSG_RESURRECT_REQUEST) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	guid, err := reader.ReadU64()
+	if err != nil || guid != 77 {
+		t.Fatalf("guid=%d err=%v", guid, err)
+	}
+	nameLen, err := reader.ReadU32()
+	if err != nil || nameLen != 7 {
+		t.Fatalf("name length=%d err=%v", nameLen, err)
+	}
+	name, err := reader.ReadString(int(nameLen) - 1)
+	if err != nil || name != "Healer" {
+		t.Fatalf("name=%q err=%v", name, err)
+	}
+	sickness, err := reader.ReadU8()
+	ignoreTimer, err2 := reader.ReadU8()
+	if err != nil || err2 != nil || sickness != 1 || ignoreTimer != 0 {
+		t.Fatalf("flags=%d/%d err=%v/%v", sickness, ignoreTimer, err, err2)
+	}
+}

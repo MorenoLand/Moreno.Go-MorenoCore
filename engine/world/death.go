@@ -367,6 +367,97 @@ func (s *session) resurrectPlayer(ctx context.Context, restorePercent float32) {
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
 }
 
+// resurrectionData mirrors Player::_resurrectionData (ResurrectionData):
+// the caster, the caster location for the teleport, and the restored health
+// and mana values carried by the resurrect spell effect.
+type resurrectionData struct {
+	GUID    uint64
+	MapID   uint32
+	X, Y, Z float32
+	Health  uint32
+	Mana    uint32
+}
+
+// setResurrectRequestData mirrors Player::SetResurrectRequestData. The
+// reference asserts that no request is outstanding; the caller is expected to
+// check first, so an overwrite here is logged and refused.
+func (s *session) setResurrectRequestData(casterGUID uint64, mapID uint32, x, y, z float32, health, mana uint32) {
+	if s.resurrection != nil {
+		s.debug("resurrect request overwritten", "account", s.accountName, "guid", s.playerGUID)
+		return
+	}
+	s.resurrection = &resurrectionData{GUID: casterGUID, MapID: mapID, X: x, Y: y, Z: z, Health: health, Mana: mana}
+}
+
+// sendResurrectRequest mirrors Spell::SendResurrectRequest: raw caster GUID,
+// length-prefixed caster name (empty for player casters, the client resolves
+// those by GUID), the spirit healer resurrection sickness flag, and the flag
+// overriding the corpse reclaim delay for spells that ignore the timer.
+func (s *session) sendResurrectRequest(casterGUID uint64, name string, spiritHealer, ignoreReclaimTimer bool) {
+	packet := protocol.NewBuffer(24 + len(name))
+	packet.WriteU64(casterGUID)
+	packet.WriteU32(uint32(len(name)) + 1)
+	packet.WriteString(name)
+	packet.WriteU8(boolByte(spiritHealer))
+	packet.WriteU8(boolByte(ignoreReclaimTimer))
+	_ = s.write(uint16(protocol.OpcodeSMSG_RESURRECT_REQUEST), packet.Bytes(), true)
+}
+
+func boolByte(value bool) uint8 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+// handleResurrectResponse mirrors WorldSession::HandleResurrectResponse:
+// alive players ignore the packet, a zero response clears the pending request,
+// and an accepted response must match the stored resurrecter before the stored
+// health, mana, and location are applied.
+func (s *session) handleResurrectResponse(ctx context.Context, payload []byte) bool {
+	reader := protocol.NewReader(payload)
+	resurrecter, err := reader.ReadU64()
+	if err != nil {
+		return false
+	}
+	response, err := reader.ReadU8()
+	if err != nil {
+		return false
+	}
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	// Reference IsAlive() is death-state based: ghosts and corpses are not alive.
+	if s.player.PlayerFlags&playerFlagGhost == 0 && s.player.Health > 0 {
+		return true
+	}
+	if response == 0 {
+		s.resurrection = nil
+		return true
+	}
+	if s.resurrection == nil || s.resurrection.GUID != resurrecter {
+		return true
+	}
+	data := *s.resurrection
+	// Reference teleports to the caster location before resurrecting so the
+	// player does not revive into nearby creatures at the corpse; the delayed
+	// teleport retry path has no Go equivalent because teleportTo is sync.
+	if data.MapID != s.player.Map || data.X != s.player.X || data.Y != s.player.Y || data.Z != s.player.Z {
+		s.teleportTo(data.MapID, data.X, data.Y, data.Z, s.player.Orientation)
+	}
+	s.resurrectPlayer(ctx, 0)
+	s.player.Health = data.Health
+	s.player.Powers[0] = data.Mana
+	s.player.Powers[1] = 0 // rage
+	if s.player.MaxPowers[3] > 0 {
+		s.player.Powers[3] = s.player.MaxPowers[3] // full energy
+	}
+	s.resurrection = nil
+	s.spawnCorpseBones(ctx)
+	s.sendPlayerUpdate()
+	return true
+}
+
 // corpseRecord is one row of the characters.corpse table as written by
 // buildPlayerRepop.
 type corpseRecord struct {

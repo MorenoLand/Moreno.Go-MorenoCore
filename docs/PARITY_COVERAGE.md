@@ -4,15 +4,15 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 163 / 34286 | — |
+| Server source files / lines | 1410 / 710273 | 163 / 34503 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 177 | 550 |
-| Client behavioral opcode handlers | 430 | 177 | 255 |
+| Client opcode registrations | 727 | 178 | 549 |
+| Client behavioral opcode handlers | 430 | 178 | 254 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 64 / 6081 | — |
+| Test source files / lines | 9 / 1390 | 64 / 6202 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -210,7 +210,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_REQUEST_VEHICLE_PREV_SEAT`
 - `CMSG_REQUEST_VEHICLE_SWITCH_SEAT`
 - `CMSG_RESET_INSTANCES`
-- `CMSG_RESURRECT_RESPONSE`
 - `CMSG_SEARCH_LFG_JOIN`
 - `CMSG_SEARCH_LFG_LEAVE`
 - `CMSG_SELF_RES`

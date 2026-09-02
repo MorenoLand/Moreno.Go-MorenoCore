@@ -112,6 +112,7 @@ type session struct {
 	overSpeedPings     uint32
 	deathExpireTime    int64
 	deathTimer         time.Time
+	resurrection       *resurrectionData
 }
 
 type account struct {
@@ -810,6 +811,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_RECLAIM_CORPSE):
 			if !state.authed || !state.handleReclaimCorpse(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_RESURRECT_RESPONSE):
+			if !state.authed || !state.handleResurrectResponse(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
