@@ -50,6 +50,15 @@ func (s *session) handleLogoutCancel() bool {
 	return s.write(uint16(protocol.OpcodeSMSG_LOGOUT_CANCEL_ACK), nil, true) == nil
 }
 
+// handlePlayerLogout mirrors WorldSession::HandlePlayerLogoutOpcode, whose body
+// is empty at the reference commit (MiscHandler.cpp:457): the client sends this
+// packet when its own countdown finishes, but logout completion is already
+// driven by the server-side pending-logout deadline, so the packet only needs
+// to be consumed.
+func (s *session) handlePlayerLogout() bool {
+	return true
+}
+
 func (s *session) completeLogout(ctx context.Context) error {
 	if !s.playerLoaded {
 		return nil
