@@ -103,14 +103,14 @@ type conditionRow struct {
 	Negative      bool
 }
 
-const conditionSourceGossipMenuOption = 14
+const conditionSourceGossipMenuOption = 15
 
 // loadGossipOptionConditions fetches conditions attached to a gossip menu
-// option (SourceType 14: SourceGroup = MenuID, SourceEntry = OptionID).
+// option (SourceType 15: SourceGroup = MenuID, SourceEntry = OptionID).
 func (s *session) loadGossipOptionConditions(ctx context.Context, menuID, optionID uint32) ([]conditionRow, error) {
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx,
-		"SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId = ? AND SourceGroup = ? AND SourceEntry = ?",
-		conditionSourceGossipMenuOption, menuID, optionID)
+		"SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId IN (14, 15) AND SourceGroup = ? AND SourceEntry = ?",
+		menuID, optionID)
 	if err != nil {
 		if missingTable(err) {
 			return nil, nil
@@ -130,7 +130,7 @@ func (s *session) loadGossipOptionConditions(ctx context.Context, menuID, option
 }
 
 func (s *session) loadQuestConditions(ctx context.Context, questID uint32) ([]conditionRow, error) {
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId IN (19, 20) AND SourceEntry = ? ORDER BY ElseGroup", questID)
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId = 19 AND SourceEntry = ? ORDER BY ElseGroup", questID)
 	if err != nil {
 		if missingTable(err) {
 			return nil, nil
@@ -167,7 +167,7 @@ func (s *session) meetQuestConditions(ctx context.Context, questID uint32) (bool
 	for _, group := range groups {
 		met := true
 		for _, row := range group {
-			ok, err := s.evalCondition(ctx, row, 0)
+			ok, err := s.evalQuestCondition(ctx, row)
 			if err != nil {
 				return false, err
 			}
@@ -184,6 +184,26 @@ func (s *session) meetQuestConditions(ctx context.Context, questID uint32) (bool
 		}
 	}
 	return false, nil
+}
+
+func (s *session) evalQuestCondition(ctx context.Context, row conditionRow) (bool, error) {
+	ok, err := s.evalCondition(ctx, row, 0)
+	if err != nil {
+		return false, err
+	}
+	if !ok && !isImplementedConditionType(row.ConditionType) {
+		return true, nil
+	}
+	return ok, nil
+}
+
+func isImplementedConditionType(condType int64) bool {
+	switch condType {
+	case 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 31, 36, 37, 38, 42, 43, 47, 50:
+		return true
+	default:
+		return false
+	}
 }
 
 // meetGossipOptionConditions evaluates the ElseGroup clause set; empty sets
@@ -345,6 +365,29 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			return false, nil
 		}
 		return row.Value2 == 0 || uint32(row.Value2) == creatureEntry, nil
+	case 17: // CONDITION_ACHIEVEMENT
+		return true, nil
+	case 18: // CONDITION_TITLE
+		return true, nil
+	case 36: // CONDITION_ALIVE
+		return s.player != nil && s.player.Health > 0, nil
+	case 37: // CONDITION_HP_VAL
+		if s.player == nil {
+			return false, nil
+		}
+		return compareValues(int(row.Value2), int64(s.player.Health), row.Value1), nil
+	case 38: // CONDITION_HP_PCT
+		if s.player == nil || s.player.MaxHealth == 0 {
+			return false, nil
+		}
+		return compareValues(int(row.Value2), int64(s.player.Health*100/s.player.MaxHealth), row.Value1), nil
+	case 42: // CONDITION_STAND_STATE
+		if s.player == nil {
+			return false, nil
+		}
+		return (row.Value1 == 0 && int64(s.player.StandState) == row.Value2) || (row.Value1 == 1 && row.Value2 == 0 && s.player.StandState == 0), nil
+	case 43: // CONDITION_DAILY_QUEST_DONE
+		return false, nil
 	case 47: // CONDITION_QUESTSTATE (1 none, 2 complete, 8 in progress, 32 failed, 64 rewarded)
 		status, _ := s.characterQuestStatus(ctx, uint32(row.Value1))
 		var bit uint32
@@ -362,6 +405,8 @@ func (s *session) evalCondition(ctx context.Context, row conditionRow, creatureE
 			return uint32(row.Value2)&64 != 0, nil
 		}
 		return uint32(row.Value2)&bit != 0, nil
+	case 50: // CONDITION_GAMEMASTER
+		return true, nil
 	default:
 		return false, nil
 	}

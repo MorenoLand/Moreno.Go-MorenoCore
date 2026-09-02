@@ -157,13 +157,9 @@ func (s *session) canTakeQuest(ctx context.Context, questID uint32) (bool, error
 		}
 	}
 
-	// Breadcrumb check
-	if breadcrumb.Valid && breadcrumb.Int64 > 0 {
-		bStatus, _ := s.characterQuestStatus(ctx, uint32(breadcrumb.Int64))
-		if bStatus != 0 || s.isQuestRewarded(ctx, uint32(breadcrumb.Int64)) {
-			return false, nil
-		}
-	}
+	// In TrinityCore, BreadcrumbForQuestId is on the breadcrumb quest to point
+	// to the hub quest; the hub quest itself is not blocked by the breadcrumb.
+
 
 	// ExclusiveGroup check
 	if exclGroup.Valid && exclGroup.Int64 != 0 && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

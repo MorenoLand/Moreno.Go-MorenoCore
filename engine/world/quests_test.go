@@ -135,3 +135,60 @@ func TestQuestChainPrerequisites(t *testing.T) {
 		t.Fatal("expected canTake=true for Part 2 after Part 1 rewarded")
 	}
 }
+
+func TestQuestgiverAcceptQuestItemStarterAndGuidZero(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"CREATE TABLE quest_template (ID INTEGER PRIMARY KEY, QuestLevel INTEGER NOT NULL, MinLevel INTEGER NOT NULL, Flags INTEGER NOT NULL, LogTitle TEXT, AllowableRaces INTEGER DEFAULT 0)",
+		"CREATE TABLE character_queststatus (guid INTEGER NOT NULL, quest INTEGER NOT NULL, status INTEGER NOT NULL)",
+		"CREATE TABLE character_queststatus_rewarded (guid INTEGER NOT NULL, quest INTEGER NOT NULL)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, startquest INTEGER NOT NULL DEFAULT 0)",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER NOT NULL, owner_guid INTEGER, count INTEGER)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER)",
+		"INSERT INTO quest_template VALUES (301, 5, 1, 0, 'Letter Quest', 0)",
+		"INSERT INTO item_template VALUES (5001, 301)",
+		"INSERT INTO item_instance VALUES (9001, 5001, 99, 1)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	server := &Server{WorldStore: store, CharactersStore: store, Config: config.Default()}
+	state := &session{server: server, playerGUID: 99, playerLoaded: true, player: &playerState{GUID: 99, Level: 10}}
+	ctx := context.Background()
+
+	// 1. Accept quest via item GUID (highguid 0x4000)
+	itemGUID := uint64(9001) | (uint64(0x4000) << 48)
+	acceptPayload := protocol.NewBuffer(12)
+	acceptPayload.WriteU64(itemGUID)
+	acceptPayload.WriteU32(301)
+	if !state.handleQuestgiverAcceptQuest(ctx, acceptPayload.Bytes()) {
+		t.Fatal("handleQuestgiverAcceptQuest failed for item quest starter")
+	}
+
+	// Verify quest was added to quest log
+	if state.player.QuestLog[0].QuestID != 301 {
+		t.Fatalf("expected quest 301 in player quest log slot 0, got %d", state.player.QuestLog[0].QuestID)
+	}
+
+	// 2. Accept another quest with GUID 0
+	if _, err := db.Exec("INSERT INTO quest_template VALUES (302, 5, 1, 0, 'Direct Quest', 0)"); err != nil {
+		t.Fatal(err)
+	}
+	acceptZeroPayload := protocol.NewBuffer(12)
+	acceptZeroPayload.WriteU64(0)
+	acceptZeroPayload.WriteU32(302)
+	if !state.handleQuestgiverAcceptQuest(ctx, acceptZeroPayload.Bytes()) {
+		t.Fatal("handleQuestgiverAcceptQuest failed for guid 0")
+	}
+	if state.player.QuestLog[1].QuestID != 302 {
+		t.Fatalf("expected quest 302 in player quest log slot 1, got %d", state.player.QuestLog[1].QuestID)
+	}
+}
+

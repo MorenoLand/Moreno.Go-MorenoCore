@@ -77,7 +77,7 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 			serviceState := uint8(0) // Available
 			if s.hasLearnedSpell(uint32(spellID)) {
 				serviceState = 2 // Already Known
-			} else if s.player.Level < uint8(reqLevel) || s.player.Money < uint32(moneyCost) {
+			} else if s.player.Level < uint8(reqLevel) {
 				serviceState = 1 // Not Available
 			}
 			spells = append(spells, trainerSpellRecord{
@@ -109,7 +109,7 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 				serviceState := uint8(0)
 				if s.hasLearnedSpell(uint32(spellID)) {
 					serviceState = 2
-				} else if s.player.Level < uint8(reqLevel) || s.player.Money < uint32(moneyCost) {
+				} else if s.player.Level < uint8(reqLevel) {
 					serviceState = 1
 				}
 				spells = append(spells, trainerSpellRecord{
@@ -119,6 +119,48 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 					ReqLevel:      uint8(reqLevel),
 					ReqSkill:      uint32(reqSkill),
 					ReqSkillValue: uint32(reqSkillValue),
+				})
+			}
+		}
+	}
+
+	// 3. Fallback to class trainer matching player's class (TrinityCore _classTrainers)
+	if len(spells) == 0 && s.player != nil && s.player.Class > 0 {
+		ctRows, ctErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT ts.SpellId, COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqLevel, 0),
+			COALESCE(ts.ReqAbility1, 0), COALESCE(ts.ReqAbility2, 0), COALESCE(ts.ReqAbility3, 0),
+			COALESCE(t.Type, 0), COALESCE(t.Greeting, 'Hello! Ready for some training?')
+			FROM trainer_spell AS ts
+			JOIN trainer AS t ON t.Id = ts.TrainerId
+			WHERE t.Type = 0 AND t.Requirement = ?
+			ORDER BY ts.ReqLevel, ts.SpellId LIMIT 128`, s.player.Class)
+		if ctErr == nil {
+			defer ctRows.Close()
+			for ctRows.Next() {
+				var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel, reqAb1, reqAb2, reqAb3, tType int64
+				var greet sql.NullString
+				if err := ctRows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel, &reqAb1, &reqAb2, &reqAb3, &tType, &greet); err != nil {
+					continue
+				}
+				if greet.Valid && greet.String != "" {
+					greeting = greet.String
+				}
+				trainerType = uint32(tType)
+				serviceState := uint8(0) // Available
+				if s.hasLearnedSpell(uint32(spellID)) {
+					serviceState = 2 // Already Known
+				} else if s.player.Level < uint8(reqLevel) {
+					serviceState = 1 // Not Available
+				}
+				spells = append(spells, trainerSpellRecord{
+					SpellID:       uint32(spellID),
+					ServiceState:  serviceState,
+					Cost:          uint32(moneyCost),
+					ReqLevel:      uint8(reqLevel),
+					ReqSkill:      uint32(reqSkill),
+					ReqSkillValue: uint32(reqSkillValue),
+					ReqSpell:      uint32(reqAb1),
+					ReqSpellChain: uint32(reqAb2),
+					ReqSpell3:     uint32(reqAb3),
 				})
 			}
 		}
@@ -141,7 +183,7 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 		packet.WriteU32(sp.ReqSpellChain)
 		packet.WriteU32(sp.ReqSpell3)
 	}
-	packet.WriteString(greeting)
+	packet.WriteCString(greeting)
 	_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_LIST), packet.Bytes(), true)
 	s.debug("trainer list sent", "account", s.accountName, "trainer", trainerGUID, "spells", len(spells))
 	return true
@@ -191,6 +233,14 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(MoneyCost, 0), COALESCE(ReqLevel, 0)
 			FROM npc_trainer WHERE (ID = ? OR ID = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)) AND SpellID = ? LIMIT 1`,
 			creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel)
+		if err != nil && s.player != nil && s.player.Class > 0 {
+			// Fallback to class trainer
+			err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0)
+				FROM trainer_spell AS ts
+				JOIN trainer AS t ON t.Id = ts.TrainerId
+				WHERE t.Type = 0 AND t.Requirement = ? AND ts.SpellId = ? LIMIT 1`,
+				s.player.Class, spellID).Scan(&moneyCost, &reqLevel)
+		}
 		if err != nil {
 			return true
 		}
