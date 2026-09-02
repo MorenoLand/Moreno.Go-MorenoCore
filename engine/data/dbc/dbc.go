@@ -3,7 +3,6 @@ package dbc
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"math"
 	"os"
 	"strings"
@@ -42,9 +41,6 @@ func Parse(data []byte) (*File, error) {
 		return nil, errors.New("invalid DBC header")
 	}
 	file := &File{RecordCount: binary.LittleEndian.Uint32(data[4:8]), FieldCount: binary.LittleEndian.Uint32(data[8:12]), RecordSize: binary.LittleEndian.Uint32(data[12:16]), StringBlockSize: binary.LittleEndian.Uint32(data[16:20])}
-	if file.RecordSize != file.FieldCount*4 {
-		return nil, fmt.Errorf("DBC record size %d does not match %d fields", file.RecordSize, file.FieldCount)
-	}
 	recordBytes := uint64(file.RecordCount) * uint64(file.RecordSize)
 	end := uint64(headerSize) + recordBytes + uint64(file.StringBlockSize)
 	if end > uint64(len(data)) {
@@ -80,6 +76,29 @@ func (f *File) Find(id uint32) (Record, bool) {
 	})
 	record, ok := f.index[id]
 	return record, ok
+}
+
+func (r Record) Data() []byte {
+	return r.data
+}
+
+func (r Record) ByteAt(offset int) (uint8, error) {
+	if offset < 0 || offset >= len(r.data) {
+		return 0, errors.New("DBC byte offset out of range")
+	}
+	return r.data[offset], nil
+}
+
+func (r Record) Uint32At(offset int) (uint32, error) {
+	if offset < 0 || offset+4 > len(r.data) {
+		return 0, errors.New("DBC uint32 offset out of range")
+	}
+	return binary.LittleEndian.Uint32(r.data[offset : offset+4]), nil
+}
+
+func (r Record) Int32At(offset int) (int32, error) {
+	val, err := r.Uint32At(offset)
+	return int32(val), err
 }
 
 func (r Record) Bytes(field int) ([]byte, error) {
