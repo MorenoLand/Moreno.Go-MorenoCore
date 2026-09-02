@@ -1160,7 +1160,19 @@ func (s *session) handleCharCustomize(ctx context.Context, payload []byte) bool 
 	return true
 }
 
+func teamForRace(race uint8) uint32 {
+	switch race {
+	case 1, 3, 4, 7, 11: // Alliance: Human, Dwarf, Night Elf, Gnome, Draenei
+		return 0
+	case 2, 5, 6, 8, 10: // Horde: Orc, Undead, Tauren, Troll, Blood Elf
+		return 1
+	default:
+		return 0
+	}
+}
+
 // handleCharRaceChange processes CMSG_CHAR_RACE_CHANGE (0x4F8).
+// Reference: WorldSession::HandleCharFactionOrRaceChange (CharacterHandler.cpp:1616).
 func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool {
 	if len(payload) < 16 {
 		return true
@@ -1178,6 +1190,15 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {
+		var oldRace uint8
+		_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", guid).Scan(&oldRace)
+		// Race change must stay on the same faction team (CharacterHandler.cpp:1687)
+		if oldRace != 0 && teamForRace(oldRace) != teamForRace(race) {
+			buf := protocol.NewBuffer(1)
+			buf.WriteU8(0x38) // CHAR_CREATE_CHARACTER_RACE_ONLY
+			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+			return true
+		}
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ? WHERE guid = ?",
 			newName, gender, skin, face, hairStyle, hairColor, facialHair, race, guid)
 	}
@@ -1198,8 +1219,63 @@ func (s *session) handleCharRaceChange(ctx context.Context, payload []byte) bool
 }
 
 // handleCharFactionChange processes CMSG_CHAR_FACTION_CHANGE (0x4D9).
+// Reference: WorldSession::HandleCharFactionOrRaceChange (CharacterHandler.cpp:1616).
 func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) bool {
-	return s.handleCharRaceChange(ctx, payload)
+	if len(payload) < 16 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	guid, _ := r.ReadU64()
+	newName, _ := r.ReadCString()
+	gender, _ := r.ReadU8()
+	skin, _ := r.ReadU8()
+	face, _ := r.ReadU8()
+	hairStyle, _ := r.ReadU8()
+	hairColor, _ := r.ReadU8()
+	facialHair, _ := r.ReadU8()
+	race, _ := r.ReadU8()
+
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil {
+		var oldRace uint8
+		_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", guid).Scan(&oldRace)
+		// Faction change must swap to the opposite faction team (CharacterHandler.cpp:1687)
+		if oldRace != 0 && teamForRace(oldRace) == teamForRace(race) {
+			buf := protocol.NewBuffer(1)
+			buf.WriteU8(0x37) // CHAR_CREATE_CHARACTER_SWAP_FACTION
+			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+			return true
+		}
+		// Reset homebind to new race's starting location and update appearance/race
+		var spawnMap, spawnZone int64
+		var spawnX, spawnY, spawnZ, spawnO float64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT map, zone, position_x, position_y, position_z, orientation FROM playercreateinfo WHERE race = ? LIMIT 1", race).Scan(&spawnMap, &spawnZone, &spawnX, &spawnY, &spawnZ, &spawnO)
+		}
+		if spawnMap != 0 || spawnX != 0 {
+			_, _ = cdb.ExecContext(ctx, "UPDATE character_homebind SET mapId = ?, zoneId = ?, posX = ?, posY = ?, posZ = ? WHERE guid = ?",
+				spawnMap, spawnZone, spawnX, spawnY, spawnZ, guid)
+			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ?, map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
+				newName, gender, skin, face, hairStyle, hairColor, facialHair, race, spawnMap, spawnZone, spawnX, spawnY, spawnZ, spawnO, guid)
+		} else {
+			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ? WHERE guid = ?",
+				newName, gender, skin, face, hairStyle, hairColor, facialHair, race, guid)
+		}
+	}
+
+	buf := protocol.NewBuffer(17 + len(newName))
+	buf.WriteU8(0) // RESPONSE_SUCCESS
+	buf.WriteU64(guid)
+	buf.WriteCString(newName)
+	buf.WriteU8(gender)
+	buf.WriteU8(skin)
+	buf.WriteU8(face)
+	buf.WriteU8(hairStyle)
+	buf.WriteU8(hairColor)
+	buf.WriteU8(facialHair)
+	buf.WriteU8(race)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
+	return true
 }
 
 // handleCompleteMovie processes CMSG_COMPLETE_MOVIE (0x465).

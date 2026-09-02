@@ -433,3 +433,85 @@ func TestItemUseCleanHandling(t *testing.T) {
 	}
 }
 
+func TestUseItemValidationAndConsumption(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, count INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, class INTEGER)",
+		"INSERT INTO characters VALUES (1, '')",
+		"INSERT INTO item_template VALUES (1001, 0)",             // Consumable (class 0)
+		"INSERT INTO item_instance VALUES (500, 1001, 2)",        // 2 potions
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 500)", // in backpack slot 23
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{AuthStore: store, CharactersStore: store, WorldStore: store}
+	sess := &session{server: srv, conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Health: 100}}
+
+	// Drain frames in background
+	go func() {
+		for {
+			if _, _, err := readServerFrame(clientConn, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	// 1. Use consumable item from slot 23
+	buf := protocol.NewBuffer(32)
+	buf.WriteU8(0)    // bag 0
+	buf.WriteU8(23)   // slot 23
+	buf.WriteU8(1)    // castCount
+	buf.WriteU32(0)   // spellID
+	buf.WriteU64(500) // itemGUID
+	buf.WriteU32(0)   // glyphIndex
+	buf.WriteU8(0)    // castFlags
+	buf.WriteU32(0)   // target flags
+
+	if !sess.handleUseItem(context.Background(), buf.Bytes()) {
+		t.Fatal("handleUseItem failed")
+	}
+
+	// Verify count was decremented to 1
+	var count int
+	_ = db.QueryRow("SELECT count FROM item_instance WHERE guid = 500").Scan(&count)
+	if count != 1 {
+		t.Fatalf("expected count 1 after use, got %d", count)
+	}
+
+	// 2. Dead player cannot use item
+	sess.player.Health = 0
+	deadBuf := protocol.NewBuffer(32)
+	deadBuf.WriteU8(0)
+	deadBuf.WriteU8(23)
+	deadBuf.WriteU8(1)
+	deadBuf.WriteU32(0)
+	deadBuf.WriteU64(500)
+	deadBuf.WriteU32(0)
+	deadBuf.WriteU8(0)
+	deadBuf.WriteU32(0)
+
+	if !sess.handleUseItem(context.Background(), deadBuf.Bytes()) {
+		t.Fatal("handleUseItem should return true even when dead")
+	}
+	// Count remains 1
+	_ = db.QueryRow("SELECT count FROM item_instance WHERE guid = 500").Scan(&count)
+	if count != 1 {
+		t.Fatalf("dead player used item, count changed to %d", count)
+	}
+}
+
