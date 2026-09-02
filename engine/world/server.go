@@ -1159,6 +1159,86 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleCalendarComplain(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_PASSWORD):
+			if !state.authed || !state.handleChannelPassword(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_SET_OWNER):
+			if !state.authed || !state.handleChannelSetOwner(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_OWNER):
+			if !state.authed || !state.handleChannelOwner(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_MODERATOR):
+			if !state.authed || !state.handleChannelModerator(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_UNMODERATOR):
+			if !state.authed || !state.handleChannelUnmoderator(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_MUTE):
+			if !state.authed || !state.handleChannelMute(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_UNMUTE):
+			if !state.authed || !state.handleChannelUnmute(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_INVITE):
+			if !state.authed || !state.handleChannelInvite(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_KICK):
+			if !state.authed || !state.handleChannelKick(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_BAN):
+			if !state.authed || !state.handleChannelBan(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_UNBAN):
+			if !state.authed || !state.handleChannelUnban(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_ANNOUNCEMENTS):
+			if !state.authed || !state.handleChannelAnnouncements(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_VOICE_ON):
+			if !state.authed || !state.handleChannelVoiceOn(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_DECLINE_CHANNEL_INVITE):
+			if !state.authed || !state.handleDeclineChannelInvite(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHAR_RENAME):
+			if !state.authed || !state.handleCharRename(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHAR_CUSTOMIZE):
+			if !state.authed || !state.handleCharCustomize(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHAR_RACE_CHANGE):
+			if !state.authed || !state.handleCharRaceChange(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHAR_FACTION_CHANGE):
+			if !state.authed || !state.handleCharFactionChange(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_COMPLETE_MOVIE):
+			if !state.authed || !state.handleCompleteMovie(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_COMPLAIN):
+			if !state.authed || !state.handleComplain(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
 			if !state.authed || !state.handleTutorialFlag(ctx, payload) {
 				return

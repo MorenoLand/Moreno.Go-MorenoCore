@@ -4,40 +4,20 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 188 / 40452 | — |
+| Server source files / lines | 1410 / 710273 | 191 / 40855 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 259 | 468 |
-| Client behavioral opcode handlers | 430 | 259 | 173 |
+| Client opcode registrations | 727 | 279 | 448 |
+| Client behavioral opcode handlers | 430 | 279 | 153 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 74 / 8849 | — |
+| Test source files / lines | 9 / 1390 | 75 / 8966 | — |
 
 ## Missing behavioral client opcode handlers
 
 - `CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE`
-- `CMSG_CHANNEL_ANNOUNCEMENTS`
-- `CMSG_CHANNEL_BAN`
-- `CMSG_CHANNEL_INVITE`
-- `CMSG_CHANNEL_KICK`
-- `CMSG_CHANNEL_MODERATOR`
-- `CMSG_CHANNEL_MUTE`
-- `CMSG_CHANNEL_OWNER`
-- `CMSG_CHANNEL_PASSWORD`
-- `CMSG_CHANNEL_SET_OWNER`
-- `CMSG_CHANNEL_UNBAN`
-- `CMSG_CHANNEL_UNMODERATOR`
-- `CMSG_CHANNEL_UNMUTE`
-- `CMSG_CHANNEL_VOICE_ON`
-- `CMSG_CHAR_CUSTOMIZE`
-- `CMSG_CHAR_FACTION_CHANGE`
-- `CMSG_CHAR_RACE_CHANGE`
-- `CMSG_CHAR_RENAME`
-- `CMSG_COMPLAIN`
-- `CMSG_COMPLETE_MOVIE`
 - `CMSG_CONTROLLER_EJECT_PASSENGER`
-- `CMSG_DECLINE_CHANNEL_INVITE`
 - `CMSG_DISMISS_CONTROLLED_VEHICLE`
 - `CMSG_DISMISS_CRITTER`
 - `CMSG_DUEL_ACCEPTED`
