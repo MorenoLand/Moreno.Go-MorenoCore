@@ -385,3 +385,15 @@ func buildAuctionCommandResult(auctionID, action, result uint32) []byte {
 	buf.WriteU32(result)
 	return buf.Bytes()
 }
+
+// handleAuctionListPendingSales processes CMSG_AUCTION_LIST_PENDING_SALES (0x48F).
+// Reference: WorldSession::HandleAuctionListPendingSales (AuctionHouseHandler.cpp:812).
+func (s *session) handleAuctionListPendingSales(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return false
+	}
+	buf := protocol.NewBuffer(4)
+	buf.WriteU32(0) // count = 0 pending sales
+	return s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES), buf.Bytes(), true) == nil
+}
+

@@ -230,10 +230,93 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	} else {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
 	}
+	s.buyback = append(s.buyback, buybackEntry{
+		ItemEntry: uint32(itemEntry),
+		Count:     uint32(count),
+		Price:     earned,
+	})
+	if len(s.buyback) > 12 {
+		s.buyback = s.buyback[len(s.buyback)-12:]
+	}
 	s.syncEquipmentCache(ctx)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SELL_ITEM), buildSellResult(vendorGUID, itemGUID, 0), true)
 	s.sendPlayerUpdate()
 	s.debug("item sold to vendor", "account", s.accountName, "item", itemEntry, "guid", itemGUID, "count", count, "earned", earned)
+	return true
+}
+
+// handleBuybackItem processes CMSG_BUYBACK_ITEM (0x290).
+// Reference: WorldSession::HandleBuybackItem (ItemHandler.cpp:490).
+func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 12 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	vendorGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	slot, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+
+	idx := int(slot)
+	if idx >= len(s.buyback) && idx > 0 {
+		idx--
+	}
+	if idx < 0 || idx >= len(s.buyback) {
+		return true
+	}
+
+	entry := s.buyback[idx]
+	if s.player.Money < entry.Price {
+		return true
+	}
+
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	usedSlots := make(map[uint8]bool)
+	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
+	if err == nil {
+		for rows.Next() {
+			var sl int64
+			if rows.Scan(&sl) == nil {
+				usedSlots[uint8(sl)] = true
+			}
+		}
+		rows.Close()
+	}
+	freeSlot := uint8(0xFF)
+	for sl := uint8(23); sl <= 38; sl++ {
+		if !usedSlots[sl] {
+			freeSlot = sl
+			break
+		}
+	}
+	if freeSlot == 0xFF {
+		return true // Backpack full
+	}
+
+	s.buyback = append(s.buyback[:idx], s.buyback[idx+1:]...)
+	s.player.Money -= entry.Price
+	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+
+	var nextGUID int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
+	if nextGUID <= 0 {
+		nextGUID = 1
+	}
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 100, 0, '')", nextGUID, entry.ItemEntry, s.playerGUID, entry.Count)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
+
+	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, entry.ItemEntry, entry.Count, entry.Count), true)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
+	s.debug("buyback item purchased", "account", s.accountName, "item", entry.ItemEntry, "slot", freeSlot)
 	return true
 }
 
