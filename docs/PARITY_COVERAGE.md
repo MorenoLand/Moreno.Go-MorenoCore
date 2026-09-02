@@ -4,54 +4,18 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 191 / 40855 | — |
+| Server source files / lines | 1410 / 710273 | 193 / 42129 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 279 | 448 |
-| Client behavioral opcode handlers | 430 | 279 | 153 |
+| Client opcode registrations | 727 | 319 | 408 |
+| Client behavioral opcode handlers | 430 | 319 | 113 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 75 / 8966 | — |
+| Test source files / lines | 9 / 1390 | 75 / 9132 | — |
 
 ## Missing behavioral client opcode handlers
 
-- `CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE`
-- `CMSG_CONTROLLER_EJECT_PASSENGER`
-- `CMSG_DISMISS_CONTROLLED_VEHICLE`
-- `CMSG_DISMISS_CRITTER`
-- `CMSG_DUEL_ACCEPTED`
-- `CMSG_DUEL_CANCELLED`
-- `CMSG_ENABLETAXI`
-- `CMSG_FAR_SIGHT`
-- `CMSG_FORCE_MOVE_ROOT_ACK`
-- `CMSG_FORCE_MOVE_UNROOT_ACK`
-- `CMSG_FORCE_TURN_RATE_CHANGE_ACK`
-- `CMSG_GET_CHANNEL_MEMBER_COUNT`
-- `CMSG_GET_MIRRORIMAGE_DATA`
-- `CMSG_GMTICKETSYSTEM_TOGGLE`
-- `CMSG_GRANT_LEVEL`
-- `CMSG_GROUP_ASSISTANT_LEADER`
-- `CMSG_GROUP_CHANGE_SUB_GROUP`
-- `CMSG_GUILD_ADD_RANK`
-- `CMSG_GUILD_BANKER_ACTIVATE`
-- `CMSG_GUILD_BANK_BUY_TAB`
-- `CMSG_GUILD_BANK_DEPOSIT_MONEY`
-- `CMSG_GUILD_BANK_SWAP_ITEMS`
-- `CMSG_GUILD_BANK_UPDATE_TAB`
-- `CMSG_GUILD_BANK_WITHDRAW_MONEY`
-- `CMSG_GUILD_CREATE`
-- `CMSG_GUILD_DEL_RANK`
-- `CMSG_GUILD_DEMOTE`
-- `CMSG_GUILD_DISBAND`
-- `CMSG_GUILD_INFO`
-- `CMSG_GUILD_INFO_TEXT`
-- `CMSG_GUILD_LEADER`
-- `CMSG_GUILD_PROMOTE`
-- `CMSG_GUILD_RANK`
-- `CMSG_GUILD_REMOVE`
-- `CMSG_GUILD_SET_OFFICER_NOTE`
-- `CMSG_GUILD_SET_PUBLIC_NOTE`
 - `CMSG_INSTANCE_LOCK_RESPONSE`
 - `CMSG_LEARN_PREVIEW_TALENTS_PET`
 - `CMSG_LEAVE_BATTLEFIELD`
@@ -120,7 +84,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_SET_AMMO`
 - `CMSG_SET_CHANNEL_WATCH`
 - `CMSG_SET_FACTION_CHEAT`
-- `CMSG_SET_GUILD_BANK_TEXT`
 - `CMSG_SET_LFG_COMMENT`
 - `CMSG_SET_PLAYER_DECLINED_NAMES`
 - `CMSG_SET_SAVED_INSTANCE_EXTEND`
@@ -147,8 +110,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_WRAP_ITEM`
 - `MSG_BATTLEGROUND_PLAYER_POSITIONS`
 - `MSG_CORPSE_QUERY`
-- `MSG_GUILD_BANK_LOG_QUERY`
-- `MSG_GUILD_BANK_MONEY_WITHDRAWN`
 - `MSG_GUILD_EVENT_LOG_QUERY`
 - `MSG_GUILD_PERMISSIONS`
 - `MSG_INSPECT_ARENA_TEAMS`
@@ -161,7 +122,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `MSG_PETITION_DECLINE`
 - `MSG_PETITION_RENAME`
 - `MSG_PVP_LOG_DATA`
-- `MSG_QUERY_GUILD_BANK_TEXT`
 - `MSG_QUEST_PUSH_RESULT`
 - `MSG_RAID_READY_CHECK_FINISHED`
 - `MSG_SAVE_GUILD_EMBLEM`
