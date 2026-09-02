@@ -560,6 +560,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleCancelCast(payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_CANCEL_CHANNELLING):
+			if !state.authed || !state.handleCancelChanneling(payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_CANCEL_AURA):
 			if !state.authed || !state.handleCancelAura(payload) {
 				return
@@ -711,6 +715,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_EMOTE):
 			if !state.authed || !state.handleEmote(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_TEXT_EMOTE):
+			if !state.authed || !state.handleTextEmote(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeMSG_MOVE_WORLDPORT_ACK):
