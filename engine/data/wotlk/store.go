@@ -37,6 +37,12 @@ type Class struct {
 	RequiredExpansion uint32
 }
 
+type Reputation struct {
+	ID             uint32
+	ReputationList int32
+	DefaultFlags   uint8
+}
+
 type SpellEffect struct {
 	Effect          uint32
 	BasePoints      int32
@@ -156,6 +162,49 @@ func (s *Store) Class(id uint32) (Class, bool, error) {
 		return Class{}, false, err
 	}
 	return Class{ID: id, SpellClassSet: spellClassSet, CinematicSequence: cinematic, RequiredExpansion: requiredExpansion}, true, nil
+}
+
+func (s *Store) Reputation(id uint32, race, class uint8) (Reputation, bool, error) {
+	file, err := s.File("Faction")
+	if err != nil {
+		return Reputation{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return Reputation{}, false, nil
+	}
+	list, err := record.Int32(1)
+	if err != nil {
+		return Reputation{}, false, err
+	}
+	rep := Reputation{ID: id, ReputationList: list}
+	if list < 0 {
+		return rep, true, nil
+	}
+	raceMask := uint32(1) << uint(race-1)
+	classMask := uint32(1) << uint(class-1)
+	for i := 0; i < 4; i++ {
+		raceMaskValue, raceErr := record.Uint32(2 + i)
+		classMaskValue, classErr := record.Uint32(6 + i)
+		flags, flagsErr := record.Uint32(14 + i)
+		if raceErr != nil || classErr != nil || flagsErr != nil {
+			return Reputation{}, false, fmt.Errorf("read faction %d reputation masks: %w", id, firstDBCError(raceErr, classErr, flagsErr))
+		}
+		if (raceMaskValue&raceMask != 0 || (raceMaskValue == 0 && classMaskValue != 0)) && (classMaskValue&classMask != 0 || classMaskValue == 0) {
+			rep.DefaultFlags = uint8(flags)
+			break
+		}
+	}
+	return rep, true, nil
+}
+
+func firstDBCError(errors ...error) error {
+	for _, err := range errors {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) CharStartOutfit(race, class, gender uint8) ([]uint32, error) {
