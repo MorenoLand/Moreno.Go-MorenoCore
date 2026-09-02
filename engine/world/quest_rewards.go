@@ -39,6 +39,10 @@ func (s *session) handleQuestgiverCompleteQuest(ctx context.Context, payload []b
 	if err != nil {
 		return false
 	}
+	if status == questStatusIncomplete && s.canCompleteQuest(ctx, questID) {
+		s.completeQuest(ctx, questID)
+		status = questStatusComplete
+	}
 	view, err := s.loadQuestRewardView(ctx, questID)
 	if err != nil {
 		return false
@@ -78,6 +82,10 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 	if err != nil {
 		return false
 	}
+	if status == questStatusIncomplete && s.canCompleteQuest(ctx, questID) {
+		s.completeQuest(ctx, questID)
+		status = questStatusComplete
+	}
 	view, err := s.loadQuestRewardView(ctx, questID)
 	if err != nil {
 		return false
@@ -100,11 +108,35 @@ func (s *session) handleQuestgiverRequestReward(ctx context.Context, payload []b
 func (s *session) questGiverEnder(ctx context.Context, guid uint64, questID uint32) (uint32, bool) {
 	if creature := s.luaCreature(ctx, guid); creature != nil {
 		entry := objectUint32OrZero(creature, "Entry")
-		return entry, s.creatureEndsQuest(ctx, entry, questID)
+		if entry != 0 && s.creatureEndsQuest(ctx, entry, questID) {
+			return entry, true
+		}
 	}
 	if object := s.luaGameObject(ctx, guid); object != nil {
 		entry := objectUint32OrZero(object, "Entry")
-		return entry, questRelationExists(ctx, s.server.WorldStore.DB, "gameobject_questender", entry, questID)
+		if entry != 0 && questRelationExists(ctx, s.server.WorldStore.DB, "gameobject_questender", entry, questID) {
+			return entry, true
+		}
+	}
+	// Fallback to packed GUID entry
+	creatureEntry := uint32((guid >> 24) & 0x00FFFFFF)
+	if creatureEntry != 0 && s.creatureEndsQuest(ctx, creatureEntry, questID) {
+		return creatureEntry, true
+	}
+	// Fallback to DB spawn query
+	spawnGUID := uint32(guid & 0x00FFFFFF)
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var dbEntry int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&dbEntry); err == nil && dbEntry > 0 {
+			if s.creatureEndsQuest(ctx, uint32(dbEntry), questID) {
+				return uint32(dbEntry), true
+			}
+		}
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM gameobject WHERE guid = ?", spawnGUID).Scan(&dbEntry); err == nil && dbEntry > 0 {
+			if questRelationExists(ctx, s.server.WorldStore.DB, "gameobject_questender", uint32(dbEntry), questID) {
+				return uint32(dbEntry), true
+			}
+		}
 	}
 	return 0, false
 }

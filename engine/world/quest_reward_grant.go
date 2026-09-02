@@ -71,6 +71,10 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	if err != nil {
 		return false
 	}
+	if status == questStatusIncomplete && s.canCompleteQuest(ctx, questID) {
+		s.completeQuest(ctx, questID)
+		status = questStatusComplete
+	}
 	if status != questStatusComplete && view.Detail.Flags&questAutoCompleteFlags == 0 {
 		s.debug("quest reward rejected", "account", s.accountName, "quest", questID, "reason", "quest incomplete", "status", status)
 		return true
@@ -104,6 +108,22 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	}
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
+	if giverGUID != 0 {
+		entry := uint32((giverGUID >> 24) & 0x00FFFFFF)
+		if entry == 0 {
+			if creature := s.luaCreature(ctx, giverGUID); creature != nil {
+				entry = objectUint32OrZero(creature, "Entry")
+			}
+		}
+		if entry != 0 {
+			if qStatus, err := s.questDialogStatus(ctx, entry); err == nil {
+				packet := protocol.NewBuffer(9)
+				packet.WriteU64(giverGUID)
+				packet.WriteU8(qStatus)
+				_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS), packet.Bytes(), true)
+			}
+		}
+	}
 	s.gossip = nil
 	s.gossipClosed = true
 	s.debug("quest rewarded", "account", s.accountName, "quest", questID, "reward", reward, "items", len(grants), "money", view.Detail.RewardMoney)
