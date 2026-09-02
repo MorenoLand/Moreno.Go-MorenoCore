@@ -785,8 +785,20 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleLogoutRequest(ctx) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_PLAYER_LOGOUT):
+			if !state.authed || !state.handlePlayerLogout() {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_LOGOUT_CANCEL):
 			if !state.authed || !state.handleLogoutCancel() {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_WATCHED_FACTION):
+			if !state.authed || !state.handleSetWatchedFaction(payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_SET_FACTION_INACTIVE):
+			if !state.authed || !state.handleSetFactionInactive(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
