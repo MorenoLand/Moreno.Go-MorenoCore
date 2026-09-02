@@ -21,6 +21,7 @@ const (
 	chatChannel        = 0x11
 	chatAFK            = 0x17
 	chatDND            = 0x18
+	chatIgnored        = 0x19
 	chatBattleground   = 0x2C
 	chatBattleLeader   = 0x2D
 	chatPartyLeader    = 0x33
@@ -223,4 +224,28 @@ func (s *session) chatTag() uint8 {
 		tag |= 0x04
 	}
 	return tag
+}
+
+// handleChatIgnored processes CMSG_CHAT_IGNORED (0x225).
+// Reference: WorldSession::HandleChatIgnoredOpcode (ChatHandler.cpp:745).
+func (s *session) handleChatIgnored(payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	b := protocol.NewReader(payload)
+	targetGUID, err := b.ReadU64()
+	if err != nil {
+		return false
+	}
+	_, err = b.ReadU8() // unk (spam reporting flag in reference)
+	if err != nil {
+		return false
+	}
+	targetSess := s.server.findSessionByGUID(targetGUID)
+	if targetSess == nil || !targetSess.playerLoaded || targetSess.player == nil {
+		return true
+	}
+	msg := protocol.BuildChatMessageWithOptions(chatIgnored, languageUniversal, s.playerGUID, s.playerGUID, s.player.Name, "", false, "", s.chatTag())
+	_ = targetSess.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), msg, true)
+	return true
 }

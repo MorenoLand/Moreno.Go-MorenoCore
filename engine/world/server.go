@@ -264,6 +264,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleTimeSyncResponse(payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_KEEP_ALIVE):
+			if !state.authed || !state.handleKeepAlive() {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_CHAR_ENUM):
 			if !state.authed || !state.handleCharEnum(ctx) {
 				return
@@ -834,6 +838,22 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleAreaSpiritHealerQueue(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_WHO):
+			if !state.authed || !state.handleWho(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_WHOIS):
+			if !state.authed || !state.handleWhoIs(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_INSPECT):
+			if !state.authed || !state.handleInspect(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHAT_IGNORED):
+			if !state.authed || !state.handleChatIgnored(payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_TUTORIAL_FLAG):
 			if !state.authed || !state.handleTutorialFlag(ctx, payload) {
 				return
@@ -1097,6 +1117,12 @@ func (s *session) handlePing(ctx context.Context, payload []byte) bool {
 	response := protocol.NewBuffer(4)
 	response.WriteU32(ping)
 	return s.write(opcodePong, response.Bytes(), true) == nil
+}
+
+// handleKeepAlive mirrors WorldSocket::ReadDataHandler case CMSG_KEEP_ALIVE (WorldSocket.cpp:348).
+// An empty client heartbeat packet resetting the session activity timeout.
+func (s *session) handleKeepAlive() bool {
+	return true
 }
 
 func (s *session) decrypt(data []byte) error {

@@ -340,3 +340,12 @@ func (s *session) handleGuildBankQueryTab(ctx context.Context, payload []byte) b
 	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_BANK_LIST), buf.Bytes(), true)
 	return true
 }
+
+func (s *Server) getGuildName(ctx context.Context, guildID uint32) string {
+	if guildID == 0 || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return ""
+	}
+	var name string
+	_ = s.CharactersStore.DB.QueryRowContext(ctx, "SELECT name FROM guild WHERE guildid = ? LIMIT 1", guildID).Scan(&name)
+	return name
+}

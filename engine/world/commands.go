@@ -180,7 +180,7 @@ func (s *session) handleCmdGM(args []string) {
 
 func (s *session) sendNotification(msg string) {
 	buf := protocol.NewBuffer(len(msg) + 1)
-	buf.WriteString(msg)
+	buf.WriteCString(msg)
 	_ = s.write(uint16(protocol.OpcodeSMSG_NOTIFICATION), buf.Bytes(), true)
 }
 
