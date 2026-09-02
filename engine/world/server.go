@@ -276,6 +276,14 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleAutoEquipItemSlot(ctx, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_SPLIT_ITEM):
+			if !state.authed || !state.handleSplitItem(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_AUTOSTORE_BAG_ITEM):
+			if !state.authed || !state.handleAutoStoreBagItem(ctx, payload) {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_SWAP_INV_ITEM):
 			if !state.authed || !state.handleSwapInvItem(ctx, payload) {
 				return

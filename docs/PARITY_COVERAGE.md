@@ -4,15 +4,15 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 157 / 32533 | — |
+| Server source files / lines | 1410 / 710273 | 158 / 32796 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 168 | 559 |
-| Client behavioral opcode handlers | 430 | 168 | 264 |
+| Client opcode registrations | 727 | 170 | 557 |
+| Client behavioral opcode handlers | 430 | 170 | 262 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 27 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 61 / 5192 | — |
+| Test source files / lines | 9 / 1390 | 61 / 5275 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -32,7 +32,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_ARENA_TEAM_ROSTER`
 - `CMSG_AUCTION_LIST_PENDING_SALES`
 - `CMSG_AUTOBANK_ITEM`
-- `CMSG_AUTOSTORE_BAG_ITEM`
 - `CMSG_AUTOSTORE_BANK_ITEM`
 - `CMSG_BANKER_ACTIVATE`
 - `CMSG_BATTLEFIELD_LIST`
@@ -237,7 +236,6 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 - `CMSG_SOCKET_GEMS`
 - `CMSG_SPELLCLICK`
 - `CMSG_SPIRIT_HEALER_ACTIVATE`
-- `CMSG_SPLIT_ITEM`
 - `CMSG_STABLE_PET`
 - `CMSG_STABLE_REVIVE_PET`
 - `CMSG_STABLE_SWAP_PET`
