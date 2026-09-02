@@ -103,3 +103,15 @@ func TestBuildNearbyGameObjectUpdates(t *testing.T) {
 		t.Fatalf("values=%x", values)
 	}
 }
+
+func TestGameObjectUseHandlers(t *testing.T) {
+	s := &session{playerLoaded: true, player: &playerState{GUID: 1}}
+	buf := protocol.NewBuffer(8)
+	buf.WriteU64(12345)
+	if !s.handleGameObjectUse(context.Background(), buf.Bytes()) {
+		t.Fatal("handleGameObjectUse failed")
+	}
+	if !s.handleGameObjectReportUse(context.Background(), buf.Bytes()) {
+		t.Fatal("handleGameObjectReportUse failed")
+	}
+}
