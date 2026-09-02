@@ -713,4 +713,3 @@ func (s *session) handleCorpseQuery(ctx context.Context, payload []byte) bool {
 	_ = s.write(uint16(protocol.OpcodeMSG_CORPSE_QUERY), buf.Bytes(), true)
 	return true
 }
-

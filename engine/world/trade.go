@@ -7,17 +7,17 @@ import (
 )
 
 const (
-	tradeStatusBeginTrade   = 0
-	tradeStatusOpenWindow   = 1
-	tradeStatusTradeChange  = 2
-	tradeStatusCancelled    = 3
-	tradeStatusTradeAccept  = 4
-	tradeStatusUnaccept     = 5
-	tradeStatusComplete     = 7
-	tradeStatusCloseWindow  = 8
-	tradeStatusOnlyTarget   = 9
-	tradeStatusNotEligible  = 10
-	tradeStatusInitiated    = 11
+	tradeStatusBeginTrade  = 0
+	tradeStatusOpenWindow  = 1
+	tradeStatusTradeChange = 2
+	tradeStatusCancelled   = 3
+	tradeStatusTradeAccept = 4
+	tradeStatusUnaccept    = 5
+	tradeStatusComplete    = 7
+	tradeStatusCloseWindow = 8
+	tradeStatusOnlyTarget  = 9
+	tradeStatusNotEligible = 10
+	tradeStatusInitiated   = 11
 )
 
 type tradeSlotItem struct {

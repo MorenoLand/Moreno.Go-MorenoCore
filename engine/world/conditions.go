@@ -94,13 +94,13 @@ func (s *Server) cachedActiveGameEvents(ctx context.Context) map[int64]struct{} 
 // conditionRow is one `conditions` row; rows sharing an ElseGroup are AND'ed
 // while distinct ElseGroups OR together, exactly like ConditionMgr.
 type conditionRow struct {
-	ElseGroup     int64
-	ConditionType int64
+	ElseGroup       int64
+	ConditionType   int64
 	ConditionTarget int64
-	Value1        int64
-	Value2        int64
-	Value3        int64
-	Negative      bool
+	Value1          int64
+	Value2          int64
+	Value3          int64
+	Negative        bool
 }
 
 const conditionSourceGossipMenuOption = 15

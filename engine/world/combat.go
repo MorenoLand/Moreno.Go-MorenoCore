@@ -301,4 +301,3 @@ func (s *session) handleDuelCancelled(ctx context.Context, payload []byte) bool 
 	_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
 	return true
 }
-

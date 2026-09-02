@@ -396,4 +396,3 @@ func (s *session) handleAuctionListPendingSales(ctx context.Context, payload []b
 	buf.WriteU32(0) // count = 0 pending sales
 	return s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES), buf.Bytes(), true) == nil
 }
-

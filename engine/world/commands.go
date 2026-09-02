@@ -976,5 +976,3 @@ func (s *session) handleWorldTeleport(ctx context.Context, payload []byte) bool 
 	s.teleportTo(mapID, x, y, z, o)
 	return true
 }
-
-

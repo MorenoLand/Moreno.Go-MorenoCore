@@ -11,24 +11,24 @@ import (
 // FriendsResult mirrors TrinityCore's FriendsResult enum.
 // From SocialMgr.h.
 const (
-	friendsResultOK            uint8 = 0
-	friendsResultNotFound      uint8 = 1
-	friendsResultOffline       uint8 = 2
-	friendsResultEnemy         uint8 = 7
-	friendsResultIgnored       uint8 = 8
-	friendsResultMuted         uint8 = 9
-	friendsResultSelf          uint8 = 10
-	friendsResultAlready       uint8 = 11
-	friendsResultAddedOnline   uint8 = 12
-	friendsResultAddedOffline  uint8 = 13
-	friendsResultListFull      uint8 = 14
-	friendsResultRemoved       uint8 = 15
+	friendsResultOK             uint8 = 0
+	friendsResultNotFound       uint8 = 1
+	friendsResultOffline        uint8 = 2
+	friendsResultEnemy          uint8 = 7
+	friendsResultIgnored        uint8 = 8
+	friendsResultMuted          uint8 = 9
+	friendsResultSelf           uint8 = 10
+	friendsResultAlready        uint8 = 11
+	friendsResultAddedOnline    uint8 = 12
+	friendsResultAddedOffline   uint8 = 13
+	friendsResultListFull       uint8 = 14
+	friendsResultRemoved        uint8 = 15
 	friendsResultIgnoreNotFound uint8 = 16
-	friendsResultIgnoreSelf    uint8 = 17
-	friendsResultIgnoreAlready uint8 = 18
-	friendsResultIgnoreAdded   uint8 = 19
-	friendsResultIgnoreRemoved uint8 = 20
-	friendsResultIgnoreFull    uint8 = 21
+	friendsResultIgnoreSelf     uint8 = 17
+	friendsResultIgnoreAlready  uint8 = 18
+	friendsResultIgnoreAdded    uint8 = 19
+	friendsResultIgnoreRemoved  uint8 = 20
+	friendsResultIgnoreFull     uint8 = 21
 )
 
 // FriendStatus mirrors TrinityCore's FriendStatus enum.

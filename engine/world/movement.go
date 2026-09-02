@@ -499,6 +499,3 @@ func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []by
 func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []byte) bool {
 	return true
 }
-
-
-

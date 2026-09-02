@@ -42,7 +42,7 @@ func (s *session) handleCalendarGetCalendar(ctx context.Context, payload []byte)
 	}
 
 	buf := protocol.NewBuffer(128 + len(events)*64)
-	buf.WriteU32(0)                  // invites count
+	buf.WriteU32(0)                   // invites count
 	buf.WriteU32(uint32(len(events))) // events count
 	for _, ev := range events {
 		buf.WriteU64(ev.id)
@@ -146,7 +146,7 @@ func (s *session) handleCalendarAddEvent(ctx context.Context, payload []byte) bo
 	title, _ := r.ReadCString()
 	description, _ := r.ReadCString()
 	eventType, _ := r.ReadU8()
-	_, _ = r.ReadU8() // repeatable
+	_, _ = r.ReadU8()  // repeatable
 	_, _ = r.ReadU32() // maxInvites
 	dungeonID, _ := r.ReadI32()
 	packedEventTime, _ := r.ReadU32()
@@ -182,7 +182,7 @@ func (s *session) handleCalendarUpdateEvent(ctx context.Context, payload []byte)
 	title, _ := r.ReadCString()
 	description, _ := r.ReadCString()
 	eventType, _ := r.ReadU8()
-	_, _ = r.ReadU8() // repeatable
+	_, _ = r.ReadU8()  // repeatable
 	_, _ = r.ReadU32() // maxInvites
 	dungeonID, _ := r.ReadI32()
 	packedEventTime, _ := r.ReadU32()

@@ -953,16 +953,16 @@ func (s *session) createStarterSpells(ctx context.Context, guid uint64, race, cl
 
 	// 2. Racial traits
 	racialTraits := map[uint8][]uint32{
-		1:  {20599, 20598, 20597, 20595, 20864, 59752},        // Human
-		2:  {20572, 20573, 20575, 20574},                       // Orc
-		3:  {20594, 20592, 20596, 2481, 59224},                 // Dwarf
-		4:  {58984, 20582, 20585, 20583},                       // Night Elf
-		5:  {7744, 20577, 5227, 20579},                         // Undead
-		6:  {20549, 20550, 20552, 20551},                       // Tauren
-		7:  {20589, 20591, 20593, 20592},                       // Gnome
-		8:  {26297, 20555, 20557, 20558, 26290, 58943},        // Troll
-		10: {28730, 25046, 50613, 28877, 822},                  // Blood Elf
-		11: {28880, 28875, 28877, 28878, 6562},                 // Draenei
+		1:  {20599, 20598, 20597, 20595, 20864, 59752}, // Human
+		2:  {20572, 20573, 20575, 20574},               // Orc
+		3:  {20594, 20592, 20596, 2481, 59224},         // Dwarf
+		4:  {58984, 20582, 20585, 20583},               // Night Elf
+		5:  {7744, 20577, 5227, 20579},                 // Undead
+		6:  {20549, 20550, 20552, 20551},               // Tauren
+		7:  {20589, 20591, 20593, 20592},               // Gnome
+		8:  {26297, 20555, 20557, 20558, 26290, 58943}, // Troll
+		10: {28730, 25046, 50613, 28877, 822},          // Blood Elf
+		11: {28880, 28875, 28877, 28878, 6562},         // Draenei
 	}
 	if traits, ok := racialTraits[race]; ok {
 		for _, trait := range traits {
@@ -1569,4 +1569,3 @@ func (s *session) handleSetPlayerDeclinedNames(ctx context.Context, payload []by
 	_ = s.write(uint16(protocol.OpcodeSMSG_SET_PLAYER_DECLINED_NAMES_RESULT), buf.Bytes(), true)
 	return true
 }
-

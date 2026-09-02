@@ -216,5 +216,3 @@ func (s *session) handleListStabledPets(ctx context.Context, payload []byte) boo
 func (s *session) handleLearnPreviewTalentsPet(ctx context.Context, payload []byte) bool {
 	return true
 }
-
-

@@ -8,13 +8,13 @@ import (
 // TaxiNode mirrors TrinityCore TaxiNodesEntry (3.3.5): ID, ContinentID,
 // position and MountCreatureID[4] (index 0 = Horde, 1 = Alliance).
 type TaxiNode struct {
-	ID               uint32
-	ContinentID      int32
-	X                float32
-	Y                float32
-	Z                float32
-	MountCreatureID  [4]uint32
-	HasOutgoingPath  bool
+	ID              uint32
+	ContinentID     int32
+	X               float32
+	Y               float32
+	Z               float32
+	MountCreatureID [4]uint32
+	HasOutgoingPath bool
 }
 
 const (
@@ -23,9 +23,9 @@ const (
 )
 
 type taxiNetwork struct {
-	nodes  []TaxiNode
-	mask   [taxiMaskSize]uint32
-	byID   map[uint32]int
+	nodes []TaxiNode
+	mask  [taxiMaskSize]uint32
+	byID  map[uint32]int
 }
 
 func (s *Store) taxiNetwork() (*taxiNetwork, error) {
@@ -171,8 +171,6 @@ func (s *Store) NearestTaxiNode(x, y, z float32, mapID uint32, teamAlliance bool
 	}
 	return id, nil
 }
-
-
 
 // TaxiPathLinks returns the TaxiPath.dbc row id and price for a direct
 // hop between two nodes (0 when no such path exists).
