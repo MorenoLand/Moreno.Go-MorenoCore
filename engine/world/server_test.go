@@ -288,8 +288,36 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if logoutOpcode != uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE) || len(logoutPayload) != 5 || binary.LittleEndian.Uint32(logoutPayload[:4]) != 0 || logoutPayload[4] != 0 {
 		t.Fatalf("logout response opcode=%x payload=%x", logoutOpcode, logoutPayload)
 	}
+	rootOpcode, _, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rootOpcode != uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT) {
+		t.Fatalf("expected SMSG_FORCE_MOVE_ROOT (%x), got %x", uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT), rootOpcode)
+	}
+	updateOpcode, _, err = readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updateOpcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && updateOpcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected SMSG_UPDATE_OBJECT (%x) or SMSG_COMPRESSED_UPDATE_OBJECT (%x), got %x", uint16(protocol.OpcodeSMSG_UPDATE_OBJECT), uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT), updateOpcode)
+	}
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_LOGOUT_CANCEL), nil, clientCrypt); err != nil {
 		t.Fatal(err)
+	}
+	unrootOpcode, _, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unrootOpcode != uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT) {
+		t.Fatalf("expected SMSG_FORCE_MOVE_UNROOT (%x), got %x", uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT), unrootOpcode)
+	}
+	updateCancelOpcode, _, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updateCancelOpcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && updateCancelOpcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected SMSG_UPDATE_OBJECT (%x) or SMSG_COMPRESSED_UPDATE_OBJECT (%x), got %x", uint16(protocol.OpcodeSMSG_UPDATE_OBJECT), uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT), updateCancelOpcode)
 	}
 	cancelOpcode, cancelPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {

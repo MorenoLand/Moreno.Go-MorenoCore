@@ -1220,7 +1220,22 @@ func (s *session) handleComplain(ctx context.Context, payload []byte) bool {
 const (
 	logoutDelay       = 20 * time.Second
 	playerFlagResting = uint32(0x00000020)
+	unitFlagStunned   = uint32(0x00040000)
 )
+
+func (s *session) setRooted(root bool) {
+	if s.player == nil {
+		return
+	}
+	buf := protocol.NewBuffer(16)
+	buf.WritePackedGUID(s.playerGUID)
+	buf.WriteU32(0) // movement counter
+	if root {
+		_ = s.write(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT), buf.Bytes(), true)
+	} else {
+		_ = s.write(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT), buf.Bytes(), true)
+	}
+}
 
 func (s *session) handleLogoutRequest(ctx context.Context) bool {
 	if !s.playerLoaded {
@@ -1244,6 +1259,18 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 		return true
 	}
 	s.logoutAt = time.Now().Add(logoutDelay)
+
+	// Reference MiscHandler.cpp:446-453:
+	// SetStandState(UNIT_STAND_STATE_SIT), SetRooted(true), SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
+	if s.player != nil {
+		if s.player.StandState == 0 { // UNIT_STAND_STATE_STAND
+			s.player.StandState = 1 // UNIT_STAND_STATE_SIT
+		}
+		s.player.UnitFlags |= unitFlagStunned
+		s.setRooted(true)
+		s.sendPlayerUpdate()
+	}
+
 	s.debug("player logout pending", "account", s.accountName, "delay_seconds", int(logoutDelay/time.Second))
 	return true
 }
@@ -1253,6 +1280,16 @@ func (s *session) handleLogoutCancel() bool {
 		return true
 	}
 	s.logoutAt = time.Time{}
+
+	// Reference MiscHandler.cpp:471-483:
+	// SetRooted(false), SetStandState(UNIT_STAND_STATE_STAND), RemoveFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_STUNNED)
+	if s.player != nil {
+		s.player.StandState = 0 // UNIT_STAND_STATE_STAND
+		s.player.UnitFlags &^= unitFlagStunned
+		s.setRooted(false)
+		s.sendPlayerUpdate()
+	}
+
 	s.debug("player logout cancelled", "account", s.accountName)
 	return s.write(uint16(protocol.OpcodeSMSG_LOGOUT_CANCEL_ACK), nil, true) == nil
 }

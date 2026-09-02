@@ -138,6 +138,74 @@ func TestTutorialFlags(t *testing.T) {
 	}
 }
 
+func TestLogoutSitRootStunAndCancel(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	srv := &Server{}
+	sess := &session{server: srv, conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, StandState: 0, UnitFlags: 0}}
+	ctx := context.Background()
+
+	// Handle logout request
+	go func() {
+		sess.handleLogoutRequest(ctx)
+	}()
+
+	// 1. Read SMSG_LOGOUT_RESPONSE
+	op1, _, err := readServerFrame(clientConn, nil)
+	if err != nil || op1 != uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE) {
+		t.Fatalf("expected SMSG_LOGOUT_RESPONSE, got op=%x err=%v", op1, err)
+	}
+	// 2. Read SMSG_FORCE_MOVE_ROOT
+	op2, _, err := readServerFrame(clientConn, nil)
+	if err != nil || op2 != uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT) {
+		t.Fatalf("expected SMSG_FORCE_MOVE_ROOT, got op=%x err=%v", op2, err)
+	}
+	// 3. Read SMSG_UPDATE_OBJECT / SMSG_COMPRESSED_UPDATE_OBJECT
+	op3, _, err := readServerFrame(clientConn, nil)
+	if err != nil || (op3 != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && op3 != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT)) {
+		t.Fatalf("expected update object, got op=%x err=%v", op3, err)
+	}
+
+	// Verify player state is sitting and stunned
+	if sess.player.StandState != 1 {
+		t.Fatalf("expected player StandState=1 (sit), got %d", sess.player.StandState)
+	}
+	if sess.player.UnitFlags&unitFlagStunned == 0 {
+		t.Fatalf("expected player UnitFlags to have UNIT_FLAG_STUNNED (%x), got %x", unitFlagStunned, sess.player.UnitFlags)
+	}
+
+	// Handle logout cancel
+	go func() {
+		sess.handleLogoutCancel()
+	}()
+
+	// 4. Read SMSG_FORCE_MOVE_UNROOT
+	op4, _, err := readServerFrame(clientConn, nil)
+	if err != nil || op4 != uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT) {
+		t.Fatalf("expected SMSG_FORCE_MOVE_UNROOT, got op=%x err=%v", op4, err)
+	}
+	// 5. Read update object
+	op5, _, err := readServerFrame(clientConn, nil)
+	if err != nil || (op5 != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && op5 != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT)) {
+		t.Fatalf("expected update object, got op=%x err=%v", op5, err)
+	}
+	// 6. Read SMSG_LOGOUT_CANCEL_ACK
+	op6, _, err := readServerFrame(clientConn, nil)
+	if err != nil || op6 != uint16(protocol.OpcodeSMSG_LOGOUT_CANCEL_ACK) {
+		t.Fatalf("expected SMSG_LOGOUT_CANCEL_ACK, got op=%x err=%v", op6, err)
+	}
+
+	// Verify player state restored: standing and not stunned
+	if sess.player.StandState != 0 {
+		t.Fatalf("expected player StandState=0 (stand), got %d", sess.player.StandState)
+	}
+	if sess.player.UnitFlags&unitFlagStunned != 0 {
+		t.Fatalf("expected player UnitFlags to clear UNIT_FLAG_STUNNED, got %x", sess.player.UnitFlags)
+	}
+}
+
 func makeMemoryStores(t *testing.T, root string) *database.Set {
 	t.Helper()
 	open := func(name string) *database.Store {
