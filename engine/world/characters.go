@@ -376,7 +376,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	// so the client world is loaded when the cinematic begins.
 	sendCinematic := false
 	if state.Cinematic == 0 {
-		cinematicID := getStartingCinematicID(state.Race, state.Class)
+		cinematicID := s.getStartingCinematicID(state.Race, state.Class)
 		if cinematicID > 0 {
 			sendCinematic = true
 		}
@@ -465,7 +465,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	// Send starting cinematic AFTER player is fully spawned (TC: SendInitialPacketsAfterAddToMap)
 	if sendCinematic {
-		cinematicID := getStartingCinematicID(state.Race, state.Class)
+		cinematicID := s.getStartingCinematicID(state.Race, state.Class)
 		if cinematicID > 0 {
 			cinematicBuf := protocol.NewBuffer(4)
 			cinematicBuf.WriteU32(cinematicID)
@@ -484,7 +484,7 @@ func (s *session) handleOpeningCinematic() bool {
 	if !s.playerLoaded || s.player == nil || s.player.XP != 0 {
 		return true
 	}
-	cinematicID := getStartingCinematicID(s.player.Race, s.player.Class)
+	cinematicID := s.getStartingCinematicID(s.player.Race, s.player.Class)
 	if cinematicID == 0 {
 		return true
 	}
@@ -775,7 +775,15 @@ func (s *session) LearnMountSpell(ctx context.Context, guid uint64, spellID uint
 	return nil
 }
 
-func getStartingCinematicID(race, class uint8) uint32 {
+func (s *session) getStartingCinematicID(race, class uint8) uint32 {
+	if s != nil && s.server != nil && s.server.Data != nil {
+		if cls, ok, _ := s.server.Data.Class(uint32(class)); ok && cls.CinematicSequence > 0 {
+			return cls.CinematicSequence
+		}
+		if rc, ok, _ := s.server.Data.Race(uint32(race)); ok && rc.CinematicSequence > 0 {
+			return rc.CinematicSequence
+		}
+	}
 	if class == 6 { // Death Knight
 		return 165
 	}

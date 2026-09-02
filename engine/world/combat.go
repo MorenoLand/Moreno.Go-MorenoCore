@@ -61,8 +61,8 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	}
 	target, ok := s.getCombatTarget(ctx, victim)
 	if !ok {
-		s.attackTarget = 0
-		return s.sendAttackStop(0, false) == nil
+		s.debug("attack target not found", "account", s.accountName, "victim", victim)
+		return true
 	}
 	if target.Health == 0 {
 		s.attackTarget = 0
@@ -227,7 +227,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 			motion.Health = target.Health
 		}
 	} else {
-		s.server.creatureMotion[target.GUID] = &creatureMotion{
+		motion := &creatureMotion{
 			GUID:       target.GUID,
 			Entry:      uint32(entry),
 			Map:        target.Map,
@@ -244,6 +244,10 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 			Health:     target.Health,
 			MaxHealth:  target.Health,
 			Refreshed:  time.Now(),
+		}
+		s.server.creatureMotion[target.GUID] = motion
+		if guid != target.GUID {
+			s.server.creatureMotion[guid] = motion
 		}
 	}
 	s.server.motionMu.Unlock()
