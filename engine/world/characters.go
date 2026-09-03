@@ -1362,9 +1362,18 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 	if !s.playerLoaded {
 		return true
 	}
-	instant := s.player != nil && s.player.PlayerFlags&playerFlagResting != 0
+	s.activeLoot = nil
+	inCombat := s.attackTarget != 0 && (s.player == nil || s.player.PlayerFlags&playerFlagResting == 0)
+	if inCombat && s.security == 0 {
+		response := protocol.NewBuffer(5)
+		response.WriteU32(1) // reason 1 = InCombat (ERR_LOGOUT_IN_COMBAT)
+		response.WriteU8(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE), response.Bytes(), true)
+		return true
+	}
+	instant := (s.player != nil && s.player.PlayerFlags&playerFlagResting != 0) || s.security > 0
 	response := protocol.NewBuffer(5)
-	response.WriteU32(0)
+	response.WriteU32(0) // reason 0 = OK
 	if instant {
 		response.WriteU8(1)
 	} else {
