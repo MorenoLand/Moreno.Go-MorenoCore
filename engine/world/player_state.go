@@ -135,6 +135,7 @@ type playerState struct {
 	HairStyle        uint8
 	HairColor        uint8
 	FacialStyle      uint8
+	BankBagSlots     uint8
 	Level            uint8
 	XP               uint32
 	Money            uint32
@@ -615,6 +616,9 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		state.MaxPowers[i] = uint32(power)
 	}
 	state.Cinematic, state.KnownCurrency, state.WatchedFaction, state.AmmoID, state.ActionBars = uint32(cinematic), uint32(knownCurrency), uint32(watchedFaction), uint32(ammoID), uint32(actionBars)
+	var bankSlots int64
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= 67 AND slot <= 73", state.GUID).Scan(&bankSlots)
+	state.BankBagSlots = uint8(bankSlots)
 	return nil
 }
 
@@ -832,7 +836,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldPlayerFieldBytes] = state.PlayerFieldBytes
 	values[unitFieldPlayerSelfResSpell] = state.SelfResSpell
 	values[unitFieldPlayerBytes] = uint32(state.Skin) | uint32(state.Face)<<8 | uint32(state.HairStyle)<<16 | uint32(state.HairColor)<<24
-	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.SheathState)<<8
+	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.SheathState)<<8 | uint32(state.BankBagSlots)<<16
 	values[unitFieldGuildID] = state.GuildID
 	values[unitFieldGuildRank] = uint32(state.GuildRank)
 	values[unitFieldXP] = state.XP
@@ -1244,8 +1248,9 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			continue
 		}
 		items = append(items, item)
-		if item.bag == 0 && item.slot >= 19 && item.slot <= 22 {
+		if item.bag == 0 && ((item.slot >= 19 && item.slot <= 22) || (item.slot >= 67 && item.slot <= 73)) {
 			bagItems[item.itemGUID] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
+			bagItems[item.slot] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1303,8 +1308,8 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			slotItems[int(slot)] = fullGUID
 		}
 	}
-	// TrinityCore: populate slots 0..66 so unequipped/empty slots are cleared to 0
-	for sl := 0; sl <= 66; sl++ {
+	// TrinityCore: populate slots 0..73 so unequipped/empty slots are cleared to 0 (including bank bags)
+	for sl := 0; sl <= 73; sl++ {
 		invField := 324 + sl*2
 		guid := slotItems[sl]
 		fields[invField] = uint32(guid)
