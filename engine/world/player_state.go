@@ -201,6 +201,8 @@ type playerState struct {
 	MaxRangedDamage   float32
 	RangedAttackTime  uint32
 	CombatRatings     [25]uint32
+	DungeonDifficulty uint8
+	RaidDifficulty    uint8
 }
 
 type playerReputation struct {

@@ -932,6 +932,8 @@ func (s *session) handleResetInstances(ctx context.Context, payload []byte) bool
 
 // handleSetDungeonDifficulty processes MSG_SET_DUNGEON_DIFFICULTY (0x329).
 // Reference: WorldSession::HandleSetDungeonDifficultyOpcode (MiscHandler.cpp:1268).
+// Protocol: Player::SendDungeonDifficulty (Player.cpp:20615):
+// uint32 difficulty, uint32 1, uint32 isInGroup
 func (s *session) handleSetDungeonDifficulty(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -941,15 +943,34 @@ func (s *session) handleSetDungeonDifficulty(ctx context.Context, payload []byte
 	if err != nil {
 		return false
 	}
+	if mode >= 2 { // MAX_DUNGEON_DIFFICULTY = 2 (0=Normal, 1=Heroic)
+		mode = 0
+	}
+	s.player.DungeonDifficulty = uint8(mode)
 
-	buf := protocol.NewBuffer(4)
+	isInGroup := uint32(0)
+	if s.groupID != 0 {
+		isInGroup = 1
+	}
+
+	buf := protocol.NewBuffer(12)
 	buf.WriteU32(mode)
-	_ = s.write(uint16(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY), buf.Bytes(), true)
+	buf.WriteU32(1)
+	buf.WriteU32(isInGroup)
+
+	if s.groupID != 0 && s.server != nil {
+		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY), buf.Bytes())
+	} else {
+		_ = s.write(uint16(protocol.OpcodeMSG_SET_DUNGEON_DIFFICULTY), buf.Bytes(), true)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficulty(mode), true)
 	return true
 }
 
 // handleSetRaidDifficulty processes MSG_SET_RAID_DIFFICULTY (0x4EB).
 // Reference: WorldSession::HandleSetRaidDifficultyOpcode (MiscHandler.cpp:1323).
+// Protocol: Player::SendRaidDifficulty (Player.cpp:20625):
+// uint32 difficulty, uint32 1, uint32 isInGroup
 func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -959,10 +980,27 @@ func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) b
 	if err != nil {
 		return false
 	}
+	if mode >= 4 { // MAX_RAID_DIFFICULTY = 4 (0=10N, 1=25N, 2=10H, 3=25H)
+		mode = 0
+	}
+	s.player.RaidDifficulty = uint8(mode)
 
-	buf := protocol.NewBuffer(4)
+	isInGroup := uint32(0)
+	if s.groupID != 0 {
+		isInGroup = 1
+	}
+
+	buf := protocol.NewBuffer(12)
 	buf.WriteU32(mode)
-	_ = s.write(uint16(protocol.OpcodeMSG_SET_RAID_DIFFICULTY), buf.Bytes(), true)
+	buf.WriteU32(1)
+	buf.WriteU32(isInGroup)
+
+	if s.groupID != 0 && s.server != nil {
+		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_SET_RAID_DIFFICULTY), buf.Bytes())
+	} else {
+		_ = s.write(uint16(protocol.OpcodeMSG_SET_RAID_DIFFICULTY), buf.Bytes(), true)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficulty(mode), true)
 	return true
 }
 
