@@ -670,16 +670,45 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 	r := protocol.NewReader(payload)
 	wipeGUID, _ := r.ReadU64()
 
-	// Clear player talents
-	s.player.Talents = make(map[uint32]uint8)
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ?", s.playerGUID)
+	// Clear player talents and unlearn all talent spells
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		rows, err := cdb.QueryContext(ctx, "SELECT spell FROM character_talent WHERE guid = ?", s.playerGUID)
+		if err == nil {
+			var unlearnSpells []uint32
+			for rows.Next() {
+				var sp int64
+				if rows.Scan(&sp) == nil && sp > 0 {
+					unlearnSpells = append(unlearnSpells, uint32(sp))
+				}
+			}
+			rows.Close()
+			for _, sp := range unlearnSpells {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, sp)
+				unlearnBuf := protocol.NewBuffer(4)
+				unlearnBuf.WriteU32(sp)
+				_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), unlearnBuf.Bytes(), true)
+			}
+		}
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ?", s.playerGUID)
 	}
+	s.player.Talents = make(map[uint32]uint8)
 
 	buf := protocol.NewBuffer(12)
 	buf.WriteU64(wipeGUID)
 	buf.WriteU32(0) // free or cost
 	_ = s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), buf.Bytes(), true)
+
+	// Cast visual untalent effect 14867 from trainer to player
+	castPkt := protocol.NewBuffer(16)
+	castPkt.WritePackedGUID(wipeGUID)
+	castPkt.WritePackedGUID(s.playerGUID)
+	castPkt.WriteU8(1)
+	castPkt.WriteU32(14867)
+	castPkt.WriteU32(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), true)
+	_ = s.sendTalentsInfo(false)
+	s.sendPlayerUpdate()
 	return true
 }
 

@@ -50,9 +50,16 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 		return false
 	}
 
+	var oldSpellID uint32
+	if has && s.server != nil && s.server.Data != nil {
+		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && uint32(curRank) < uint32(len(tEntry.SpellRank)) {
+			oldSpellID = tEntry.SpellRank[curRank]
+		}
+	}
+
 	var spellID uint32
 	if s.server != nil && s.server.Data != nil {
-		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok {
+		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && requestedRank < uint32(len(tEntry.SpellRank)) {
 			spellID = tEntry.SpellRank[requestedRank]
 		}
 	}
@@ -64,6 +71,10 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
+		if oldSpellID > 0 {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND spell = ?", s.playerGUID, oldSpellID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, oldSpellID)
+		}
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_talent (guid, spell, talentGroup) VALUES (?, ?, 0)", s.playerGUID, spellID)
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
 	}
