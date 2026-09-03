@@ -531,8 +531,12 @@ func (s *session) loadCorpse(ctx context.Context) (corpseRecord, bool) {
 // guard has no Go arena system yet.
 func (s *session) handleReclaimCorpse(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	if _, err := reader.ReadPackedGUID(); err != nil {
-		return false
+	_, err := reader.ReadU64()
+	if err != nil {
+		reader = protocol.NewReader(payload)
+		if _, err = reader.ReadPackedGUID(); err != nil {
+			return false
+		}
 	}
 	if !s.playerLoaded || s.player == nil {
 		return true
