@@ -1002,7 +1002,12 @@ func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []by
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_instance SET extended = ? WHERE guid = ? AND instance IN (SELECT id FROM instance WHERE map = ? AND difficulty = ?)", extend, s.playerGUID, mapID, difficulty)
+		var extendState int = 0
+		if extend != 0 {
+			extendState = 2 // EXTEND_STATE_EXTENDED
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_instance SET extendState = ? WHERE guid = ? AND instance IN (SELECT id FROM instance WHERE map = ? AND difficulty = ?)", extendState, s.playerGUID, mapID, difficulty)
+		_ = s.handleRequestRaidInfo(ctx)
 	}
 	return true
 }

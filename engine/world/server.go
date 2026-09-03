@@ -861,7 +861,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_REQUEST_RAID_INFO):
-			if !state.authed || !state.handleRequestRaidInfo() {
+			if !state.authed || !state.handleRequestRaidInfo(ctx) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_READY_FOR_ACCOUNT_DATA_TIMES):
@@ -2657,9 +2657,71 @@ func (s *session) handleWorldStateUITimer() bool {
 	return s.write(uint16(protocol.OpcodeSMSG_WORLD_STATE_UI_TIMER_UPDATE), packet.Bytes(), true) == nil
 }
 
-func (s *session) handleRequestRaidInfo() bool {
-	packet := protocol.NewBuffer(4)
-	packet.WriteU32(0)
+func (s *session) handleRequestRaidInfo(ctx context.Context) bool {
+	if !s.playerLoaded || s.player == nil {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(0)
+		return s.write(uint16(protocol.OpcodeSMSG_RAID_INSTANCE_INFO), packet.Bytes(), true) == nil
+	}
+
+	type raidLock struct {
+		mapID      uint32
+		difficulty uint32
+		instanceID uint64
+		expired    uint8
+		extended   uint8
+		resetTime  uint32
+	}
+	var locks []raidLock
+
+	now := time.Now().Unix()
+	rows, err := cdb.QueryContext(ctx, `SELECT i.map, i.difficulty, i.id, COALESCE(ci.extendState, 0), i.resettime
+		FROM character_instance ci
+		JOIN instance i ON i.id = ci.instance
+		WHERE ci.guid = ? AND ci.permanent = 1`, s.playerGUID)
+	if err == nil {
+		for rows.Next() {
+			var mapID, diff, instID, extendState, resetTime int64
+			if err := rows.Scan(&mapID, &diff, &instID, &extendState, &resetTime); err == nil {
+				rem := int64(0)
+				if resetTime > now {
+					rem = resetTime - now
+				}
+				expired := uint8(0)
+				if rem == 0 && extendState != 2 { // 2 = EXTEND_STATE_EXTENDED
+					expired = 1
+				}
+				extended := uint8(0)
+				if extendState == 2 {
+					extended = 1
+				}
+				locks = append(locks, raidLock{
+					mapID:      uint32(mapID),
+					difficulty: uint32(diff),
+					instanceID: uint64(instID),
+					expired:    expired,
+					extended:   extended,
+					resetTime:  uint32(rem),
+				})
+			}
+		}
+		rows.Close()
+	}
+
+	packet := protocol.NewBuffer(4 + len(locks)*22)
+	packet.WriteU32(uint32(len(locks)))
+	for _, l := range locks {
+		packet.WriteU32(l.mapID)
+		packet.WriteU32(l.difficulty)
+		packet.WriteU64(l.instanceID)
+		packet.WriteU8(1 - l.expired) // 1 = not expired, 0 = expired (Player.cpp:19231)
+		packet.WriteU8(l.extended)
+		packet.WriteU32(l.resetTime)
+	}
 	return s.write(uint16(protocol.OpcodeSMSG_RAID_INSTANCE_INFO), packet.Bytes(), true) == nil
 }
 
