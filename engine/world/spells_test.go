@@ -319,3 +319,83 @@ func TestIsSelfCastOnly(t *testing.T) {
 		t.Error("expected enemySpell to NOT be identified as self-cast only")
 	}
 }
+
+func TestSpellCastPowerDeductionAndBroadcast(t *testing.T) {
+	casterServerConn, casterClientConn := net.Pipe()
+	defer casterServerConn.Close()
+	defer casterClientConn.Close()
+
+	observerServerConn, observerClientConn := net.Pipe()
+	defer observerServerConn.Close()
+	defer observerClientConn.Close()
+
+	srv := &Server{sessions: make(map[*session]struct{})}
+
+	casterSess := &session{
+		conn:         casterServerConn,
+		authed:       true,
+		playerLoaded: true,
+		server:       srv,
+		playerGUID:   100,
+		player:       &playerState{GUID: 100, Powers: [7]uint32{200}, MaxPowers: [7]uint32{200}, Map: 0, X: 10, Y: 10, Z: 0},
+	}
+	observerSess := &session{
+		conn:         observerServerConn,
+		authed:       true,
+		playerLoaded: true,
+		server:       srv,
+		playerGUID:   200,
+		player:       &playerState{GUID: 200, Map: 0, X: 12, Y: 10, Z: 0},
+	}
+	srv.sessions[casterSess] = struct{}{}
+	srv.sessions[observerSess] = struct{}{}
+
+	spell := wotlk.Spell{
+		ID:        133,
+		PowerType: 0,  // Mana
+		ManaCost:  45, // costs 45 mana
+	}
+	target := protocol.SpellTargetData{
+		Flags:    protocol.SpellTargetFlagUnit,
+		UnitGUID: 100,
+	}
+
+	done := make(chan struct{})
+	go func() {
+		casterSess.finishSpellCast(context.Background(), 1, 133, spell, target)
+		close(done)
+	}()
+
+	// 1. Caster reads SMSG_SPELL_GO, then SMSG_UPDATE_OBJECT with power delta
+	_ = casterClientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	op1, _, err := readServerFrame(casterClientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op1 != uint16(protocol.OpcodeSMSG_SPELL_GO) {
+		t.Fatalf("expected SMSG_SPELL_GO, got 0x%x", op1)
+	}
+	op2, _, err := readServerFrame(casterClientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op2 != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && op2 != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected SMSG_UPDATE_OBJECT or SMSG_COMPRESSED_UPDATE_OBJECT, got 0x%x", op2)
+	}
+
+	// 2. Observer receives broadcast of power update
+	_ = observerClientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	obsOp, _, err := readServerFrame(observerClientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obsOp != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && obsOp != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected observer to receive SMSG_UPDATE_OBJECT or SMSG_COMPRESSED_UPDATE_OBJECT, got 0x%x", obsOp)
+	}
+
+	<-done
+
+	if casterSess.player.Powers[0] != 200-45 {
+		t.Fatalf("expected caster mana 155, got %d", casterSess.player.Powers[0])
+	}
+}
