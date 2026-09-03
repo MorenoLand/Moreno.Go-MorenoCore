@@ -319,7 +319,12 @@ func (s *session) handleInspect(ctx context.Context, payload []byte) bool {
 		}
 		buf.WriteU8(maxGlyphSlotIndex)
 		for i := uint8(0); i < maxGlyphSlotIndex; i++ {
-			buf.WriteU16(0)
+			glyphID := uint16(0)
+			spec := target.ActiveTalentGroup
+			if int(spec) < len(target.Glyphs) && int(i) < len(target.Glyphs[spec]) {
+				glyphID = target.Glyphs[spec][i]
+			}
+			buf.WriteU16(glyphID)
 		}
 	} else {
 		buf.WriteU32(0) // unspentTalentPoints

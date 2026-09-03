@@ -130,6 +130,7 @@ type session struct {
 	arenaTeamInvited   uint32
 	bgQueues           [2]bgQueueEntry
 	afkReporters       map[uint64]struct{}
+	targetGlyphSlot    uint8
 }
 
 type bgQueueEntry struct {

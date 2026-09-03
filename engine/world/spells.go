@@ -256,6 +256,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					targetSpec = 1
 				}
 				s.activateSpec(effCtx, targetSpec)
+			case 74: // SPELL_EFFECT_APPLY_GLYPH
+				glyphPropID := uint16(eff.MiscValue)
+				s.applyGlyph(effCtx, s.targetGlyphSlot, glyphPropID)
 			}
 		}
 		if spellID == 63645 {
@@ -852,18 +855,40 @@ func (s *session) handleRemoveGlyph(ctx context.Context, payload []byte) bool {
 	if slot >= 6 {
 		return true
 	}
+	spec := s.player.ActiveTalentGroup
+	if spec >= 2 {
+		spec = 0
+	}
+	s.player.Glyphs[spec][slot] = 0
+
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		col := fmt.Sprintf("glyph%d", slot+1)
-		var current int64
-		_ = cdb.QueryRowContext(ctx, "SELECT "+col+" FROM character_glyphs WHERE guid = ?", s.playerGUID).Scan(&current)
-		if current == 0 {
-			return true
-		}
-		_, _ = cdb.ExecContext(ctx, fmt.Sprintf("UPDATE character_glyphs SET %s = 0 WHERE guid = ?", col), s.playerGUID)
+		_, _ = cdb.ExecContext(ctx, fmt.Sprintf("UPDATE character_glyphs SET %s = 0 WHERE guid = ? AND talentGroup = ?", col), s.playerGUID, spec)
 	}
 	_ = s.sendTalentsInfo(false)
 	return true
+}
+
+// applyGlyph sockets a glyph into the specified slot for the active talent group.
+// Reference: Spell::EffectApplyGlyph (SpellEffects.cpp:4018).
+func (s *session) applyGlyph(ctx context.Context, slot uint8, glyphPropID uint16) {
+	if s.player == nil || slot >= 6 || glyphPropID == 0 {
+		return
+	}
+	spec := s.player.ActiveTalentGroup
+	if spec >= 2 {
+		spec = 0
+	}
+	s.player.Glyphs[spec][slot] = glyphPropID
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		col := fmt.Sprintf("glyph%d", slot+1)
+		_, _ = cdb.ExecContext(ctx, "INSERT OR IGNORE INTO character_glyphs (guid, talentGroup, glyph1, glyph2, glyph3, glyph4, glyph5, glyph6) VALUES (?, ?, 0, 0, 0, 0, 0, 0)", s.playerGUID, spec)
+		_, _ = cdb.ExecContext(ctx, fmt.Sprintf("UPDATE character_glyphs SET %s = ? WHERE guid = ? AND talentGroup = ?", col), glyphPropID, s.playerGUID, spec)
+	}
+	_ = s.sendTalentsInfo(false)
 }
 
 // handleUpdateMissileTrajectory processes CMSG_UPDATE_MISSILE_TRAJECTORY (0x462).
