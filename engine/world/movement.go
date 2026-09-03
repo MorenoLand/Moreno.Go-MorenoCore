@@ -349,7 +349,10 @@ func (s *Server) broadcastToNearby(opcode uint16, payload []byte, source *sessio
 	s.sessionsMu.RLock()
 	defer s.sessionsMu.RUnlock()
 	for target := range s.sessions {
-		if !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != source.player.Map {
+		if !target.authed || !target.playerLoaded || target.player == nil {
+			continue
+		}
+		if source != nil && (target == source || target.player.Map != source.player.Map) {
 			continue
 		}
 		_ = target.write(opcode, payload, true)

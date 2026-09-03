@@ -38,6 +38,8 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldBytes1:            uint32(s.player.StandState),
 		unitFieldPlayerFlags:       s.player.PlayerFlags,
 		unitFieldPlayerFieldBytes:  s.player.PlayerFieldBytes,
+		unitFieldPlayerBytes2:      uint32(s.player.FacialStyle) | uint32(s.player.SheathState)<<8 | uint32(s.player.BankBagSlots)<<16,
+		unitFieldChosenTitle:       s.player.ChosenTitle,
 		unitFieldXP:                s.player.XP,
 		unitFieldNextLevelXP:       xpCurve[s.player.Level],
 		unitFieldCoinage:           s.player.Money,
@@ -74,6 +76,7 @@ func (s *session) sendPlayerUpdate() {
 	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
 	if err == nil && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
 	}
 }
 
