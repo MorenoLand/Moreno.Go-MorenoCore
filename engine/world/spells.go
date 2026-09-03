@@ -250,7 +250,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					}
 					s.teleportTo(hbMap, hbX, hbY, hbZ, 0)
 				}
+			case 162: // SPELL_EFFECT_TALENT_SPEC_SELECT
+				targetSpec := uint8(0)
+				if eff.BasePoints+1 >= 2 {
+					targetSpec = 1
+				}
+				s.activateSpec(effCtx, targetSpec)
 			}
+		}
+		if spellID == 63645 {
+			s.activateSpec(effCtx, 0)
+		} else if spellID == 63644 {
+			s.activateSpec(effCtx, 1)
+		} else if (spellID == 63624 || spellID == 63680) && s.player != nil && s.player.TalentGroupsCount < 2 {
+			s.player.TalentGroupsCount = 2
+			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(effCtx, "UPDATE characters SET talentGroupsCount = 2 WHERE guid = ?", s.playerGUID)
+			}
+			_ = s.sendTalentsInfo(false)
 		}
 	}
 
@@ -873,4 +890,77 @@ func (s *session) handleUpdateProjectilePosition(ctx context.Context, payload []
 	spellID, _ := r.ReadU32()
 	s.debug("update projectile position", "account", s.accountName, "guid", guid, "spell", spellID)
 	return true
+}
+
+func (s *session) sendActionButtons() {
+	if s.player == nil {
+		return
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_ACTION_BUTTONS), buildActionButtons(s.player.Actions), true)
+}
+
+// activateSpec mirrors Player::ActivateSpec (Player.cpp:26292).
+func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
+	if s.player == nil || targetSpec >= s.player.TalentGroupsCount || targetSpec == s.player.ActiveTalentGroup {
+		return
+	}
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+
+	// 1. Unlearn talents of current spec
+	rows, err := cdb.QueryContext(ctx, "SELECT spell FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup)
+	if err == nil {
+		var oldSpells []uint32
+		for rows.Next() {
+			var sp int64
+			if rows.Scan(&sp) == nil && sp > 0 {
+				oldSpells = append(oldSpells, uint32(sp))
+			}
+		}
+		rows.Close()
+		for _, sp := range oldSpells {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, sp)
+			unlearnBuf := protocol.NewBuffer(4)
+			unlearnBuf.WriteU32(sp)
+			_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), unlearnBuf.Bytes(), true)
+		}
+	}
+
+	// 2. Set new active talent group
+	s.player.ActiveTalentGroup = targetSpec
+	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET activeTalentGroup = ? WHERE guid = ?", targetSpec, s.playerGUID)
+
+	// 3. Load talents for new spec
+	s.loadPlayerTalents(ctx, s.player)
+
+	// 4. Teach spells for new spec
+	var newSpells []uint32
+	tRows, err := cdb.QueryContext(ctx, "SELECT spell FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, targetSpec)
+	if err == nil {
+		for tRows.Next() {
+			var sp int64
+			if tRows.Scan(&sp) == nil && sp > 0 {
+				newSpells = append(newSpells, uint32(sp))
+			}
+		}
+		tRows.Close()
+		for _, sp := range newSpells {
+			_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, sp)
+			learnBuf := protocol.NewBuffer(6)
+			learnBuf.WriteU32(sp)
+			learnBuf.WriteU16(0)
+			_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), learnBuf.Bytes(), true)
+		}
+	}
+
+	// 5. Load and send action buttons for new spec
+	if actions, err := s.loadActionButtons(ctx, s.playerGUID, s.player.Race, s.player.Class); err == nil {
+		s.player.Actions = actions
+		s.sendActionButtons()
+	}
+
+	// 6. Send talents info update
+	_ = s.sendTalentsInfo(false)
 }

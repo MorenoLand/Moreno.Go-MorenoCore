@@ -99,6 +99,8 @@ func newSkillsTestSession(t *testing.T, player *playerState) (*session, net.Conn
 	db.SetMaxOpenConns(1)
 
 	for _, stmt := range []string{
+		"CREATE TABLE IF NOT EXISTS characters (guid INTEGER PRIMARY KEY, account INTEGER, talentGroupsCount INTEGER, activeTalentGroup INTEGER)",
+		"CREATE TABLE IF NOT EXISTS character_action (guid INTEGER, spec INTEGER, button INTEGER, action INTEGER, type INTEGER, PRIMARY KEY (guid, spec, button))",
 		"CREATE TABLE IF NOT EXISTS character_talent (guid INTEGER, spell INTEGER, talentGroup INTEGER, PRIMARY KEY(guid, spell, talentGroup))",
 		"CREATE TABLE IF NOT EXISTS character_spell (guid INTEGER, spell INTEGER, active INTEGER, disabled INTEGER, PRIMARY KEY(guid, spell))",
 		"CREATE TABLE IF NOT EXISTS character_skills (guid INTEGER, skill INTEGER, value INTEGER, max INTEGER, PRIMARY KEY(guid, skill))",
@@ -106,6 +108,9 @@ func newSkillsTestSession(t *testing.T, player *playerState) (*session, net.Conn
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if player != nil {
+		_, _ = db.Exec("INSERT OR IGNORE INTO characters (guid, account, talentGroupsCount, activeTalentGroup) VALUES (?, 1, ?, ?)", player.GUID, player.TalentGroupsCount, player.ActiveTalentGroup)
 	}
 
 	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
@@ -395,5 +400,82 @@ func TestDualSpecTalentPersistenceAndWipe(t *testing.T) {
 	_ = server.CharactersStore.DB.QueryRow("SELECT COUNT(1) FROM character_talent WHERE guid = 10 AND talentGroup = 1 AND spell = 201").Scan(&countSpec1)
 	if countSpec0 != 1 || countSpec1 != 0 {
 		t.Fatalf("expected spec0=1 spec1=0 after wipe, got spec0=%d spec1=%d", countSpec0, countSpec1)
+	}
+}
+
+func TestActivateSpecFlow(t *testing.T) {
+	dbcDir := t.TempDir()
+	writeMultipleTalentDBC(t, dbcDir, []talentDBCRecord{
+		{id: 1, tabID: 10, tierID: 0, col: 0, ranks: [5]uint32{101, 102, 103, 104, 105}},
+		{id: 2, tabID: 10, tierID: 0, col: 1, ranks: [5]uint32{201, 202, 203, 204, 205}},
+	})
+
+	player := &playerState{
+		GUID:              10,
+		Name:              "Hero",
+		Level:             80,
+		TalentGroupsCount: 2,
+		ActiveTalentGroup: 0,
+		Talents:           make(map[uint32]uint8),
+	}
+	s, clientConn, server := newSkillsTestSession(t, player)
+	server.Data = wotlk.NewStore(dbcDir)
+
+	ctx := context.Background()
+
+	// Set action buttons for spec 0 and spec 1
+	_, _ = server.CharactersStore.DB.Exec("INSERT INTO character_action VALUES (10, 0, 1, 1001, 0), (10, 1, 1, 2002, 0)")
+	// Learn talent 1 in spec 0
+	_ = s.learnTalent(ctx, 1, 0)
+	// Learn talent 2 in spec 1
+	player.ActiveTalentGroup = 1
+	_ = s.learnTalent(ctx, 2, 0)
+	player.ActiveTalentGroup = 0
+	s.loadPlayerTalents(ctx, player)
+
+	// Now activate spec 1
+	drainDone := make(chan struct{})
+	receivedOpcodes := make(map[uint16]bool)
+	go func() {
+		defer close(drainDone)
+		for {
+			_ = clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			opcode, _, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+			receivedOpcodes[opcode] = true
+		}
+	}()
+
+	s.activateSpec(ctx, 1)
+	<-drainDone
+
+	if player.ActiveTalentGroup != 1 {
+		t.Fatalf("expected ActiveTalentGroup=1, got %d", player.ActiveTalentGroup)
+	}
+	if !receivedOpcodes[uint16(protocol.OpcodeSMSG_REMOVED_SPELL)] {
+		t.Error("expected SMSG_REMOVED_SPELL when unlearning spec 0 talents")
+	}
+	if !receivedOpcodes[uint16(protocol.OpcodeSMSG_LEARNED_SPELL)] {
+		t.Error("expected SMSG_LEARNED_SPELL when learning spec 1 talents")
+	}
+	if !receivedOpcodes[uint16(protocol.OpcodeSMSG_ACTION_BUTTONS)] {
+		t.Error("expected SMSG_ACTION_BUTTONS when swapping action bars")
+	}
+	if !receivedOpcodes[uint16(protocol.OpcodeSMSG_TALENTS_INFO)] {
+		t.Error("expected SMSG_TALENTS_INFO when switching specs")
+	}
+
+	// Verify action bar was swapped in memory
+	if player.Actions[1] != 2002 {
+		t.Fatalf("expected action button 1 to be 2002 for spec 1, got %d", player.Actions[1])
+	}
+
+	// Verify DB was updated
+	var dbActiveSpec int
+	_ = server.CharactersStore.DB.QueryRow("SELECT activeTalentGroup FROM characters WHERE guid = 10").Scan(&dbActiveSpec)
+	if dbActiveSpec != 1 {
+		t.Fatalf("expected db activeTalentGroup=1, got %d", dbActiveSpec)
 	}
 }

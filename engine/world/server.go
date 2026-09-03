@@ -2535,27 +2535,36 @@ func (s *session) handleSetActionButton(ctx context.Context, payload []byte) boo
 	if err != nil {
 		return false
 	}
-	if button >= 144 || !s.playerLoaded {
+	if button >= 144 || !s.playerLoaded || s.player == nil {
 		return true
 	}
-	var spec int64
-	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT activeTalentGroup FROM characters WHERE guid = ? AND account = ?", s.playerGUID, s.accountID).Scan(&spec); err != nil {
-		s.debug("action button spec query failed", "account", s.accountName, "error", err)
-		return false
-	}
+	s.player.Actions[button] = data
+	spec := int64(s.player.ActiveTalentGroup)
 	if data == 0 {
 		_, err = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CHAR_ACTION_BY_BUTTON_SPEC", s.playerGUID, button, spec)
+		if err != nil && s.server.CharactersStore.DB != nil {
+			_, err = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_action WHERE guid = ? AND button = ? AND spec = ?", s.playerGUID, button, spec)
+		}
 	} else {
 		var action, kind int64
 		action = int64(data & 0x00FFFFFF)
 		kind = int64(data >> 24)
 		result, updateErr := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ACTION", action, kind, s.playerGUID, button, spec)
 		err = updateErr
-		if err == nil {
+		if err == nil && result != nil {
 			var affected int64
 			affected, err = result.RowsAffected()
 			if err == nil && affected == 0 {
 				_, err = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CHAR_ACTION", s.playerGUID, spec, button, action, kind)
+			}
+		} else if s.server.CharactersStore.DB != nil {
+			res, dErr := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_action SET action = ?, type = ? WHERE guid = ? AND button = ? AND spec = ?", action, kind, s.playerGUID, button, spec)
+			if dErr == nil {
+				if aff, _ := res.RowsAffected(); aff == 0 {
+					_, err = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT INTO character_action (guid, spec, button, action, type) VALUES (?, ?, ?, ?, ?)", s.playerGUID, spec, button, action, kind)
+				}
+			} else {
+				err = dErr
 			}
 		}
 	}
