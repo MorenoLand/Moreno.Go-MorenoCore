@@ -765,17 +765,26 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 }
 
 // handleCorpseQuery processes MSG_CORPSE_QUERY (0x216).
-// Reference: WorldSession::HandleCorpseQueryOpcode (CorpseHandler.cpp:25).
+// Reference: WorldSession::HandleCorpseQueryOpcode (QueryHandler.cpp:144).
 func (s *session) handleCorpseQuery(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	buf := protocol.NewBuffer(20)
-	buf.WriteU32(s.player.Map)
-	buf.WriteF32(s.player.X)
-	buf.WriteF32(s.player.Y)
-	buf.WriteF32(s.player.Z)
-	buf.WriteU32(s.player.Map)
+	corpse, ok := s.loadCorpse(ctx)
+	if !ok {
+		buf := protocol.NewBuffer(1)
+		buf.WriteU8(0) // corpse not found
+		_ = s.write(uint16(protocol.OpcodeMSG_CORPSE_QUERY), buf.Bytes(), true)
+		return true
+	}
+	buf := protocol.NewBuffer(25)
+	buf.WriteU8(1) // corpse found
+	buf.WriteU32(corpse.MapID)
+	buf.WriteF32(corpse.X)
+	buf.WriteF32(corpse.Y)
+	buf.WriteF32(corpse.Z)
+	buf.WriteU32(corpse.MapID)
+	buf.WriteU32(0) // unknown
 	_ = s.write(uint16(protocol.OpcodeMSG_CORPSE_QUERY), buf.Bytes(), true)
 	return true
 }
