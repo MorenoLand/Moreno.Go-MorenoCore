@@ -68,6 +68,9 @@ type Server struct {
 	creatureRespawns  map[uint32]creatureRespawn
 	lootMu            sync.Mutex
 	creatureLoot      map[uint64]*activeLootState
+	spiritWaveMu      sync.Mutex
+	lastSpiritWave    time.Time
+	spiritReviveQueue map[uint64]uint64 // playerGUID -> spiritGuideGUID
 }
 
 type session struct {
@@ -185,6 +188,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updatePlayerCombat(ctx)
 			s.processCreatureRespawns(ctx, time.Now())
 			s.updatePlayerDeathTimers(ctx, time.Now())
+			s.updateSpiritHealerResurrectWaves(ctx, time.Now())
 		}
 	}
 }
