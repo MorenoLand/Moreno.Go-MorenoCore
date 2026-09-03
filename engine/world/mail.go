@@ -244,6 +244,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(uint32(nextMailID), 0, 0), true) // MAIL_OK = 0
 	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()
 	// Notify receiver if online
 	targetSess := s.server.findSessionByGUID(uint64(receiverGUID))
@@ -279,6 +280,7 @@ func (s *session) handleMailTakeMoney(ctx context.Context, payload []byte) bool 
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE mail SET money = 0 WHERE id = ?", mailID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, 1, 0), true) // MAIL_MONEY_TAKEN = 1, MAIL_OK = 0
+	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()
 	s.debug("mail money collected", "account", s.accountName, "mail_id", mailID, "money", money)
 	return true
@@ -302,10 +304,21 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	if cdb == nil {
 		return true
 	}
-	var itemEntry int64
-	err = cdb.QueryRowContext(ctx, "SELECT item_template FROM mail_items WHERE mail_id = ? AND item_guid = ? LIMIT 1", mailID, attachID).Scan(&itemEntry)
+	var itemEntry, senderGUID, cod int64
+	var subject string
+	err = cdb.QueryRowContext(ctx, `SELECT m.sender, m.subject, m.cod, i.item_template
+		FROM mail_items AS i
+		JOIN mail AS m ON m.id = i.mail_id
+		WHERE i.mail_id = ? AND i.item_guid = ? LIMIT 1`, mailID, attachID).Scan(&senderGUID, &subject, &cod, &itemEntry)
 	if err != nil || itemEntry == 0 {
 		return true
+	}
+	// Check COD (Cash On Delivery) payment
+	if cod > 0 {
+		if s.player.Money < uint32(cod) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, 2, 3), true) // MAIL_ITEM_TAKEN = 2, MAIL_ERR_NOT_ENOUGH_MONEY = 3
+			return true
+		}
 	}
 	// Find free backpack slot
 	usedSlots := make(map[uint8]bool)
@@ -329,6 +342,27 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	if freeSlot == 0xFF {
 		return true
 	}
+
+	// If mail has COD, charge player and send payment mail to sender (TC: MailDraft::SendMailTo with MAIL_CHECK_MASK_COD_PAYMENT)
+	if cod > 0 {
+		s.player.Money -= uint32(cod)
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET cod = 0 WHERE id = ?", mailID)
+
+		now := time.Now().Unix()
+		var nextMailID int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&nextMailID)
+		if nextMailID <= 0 {
+			nextMailID = 1
+		}
+		codSubject := "COD Payment: " + subject
+		_, _ = cdb.ExecContext(ctx, `INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked)
+			VALUES (?, 0, 41, 0, ?, ?, ?, '', 0, ?, ?, ?, 0, 0x04)`,
+			nextMailID, s.playerGUID, senderGUID, codSubject, now+30*86400, now, cod)
+		s.sendMailNotify(uint64(senderGUID))
+		s.sendPlayerMoneyUpdate()
+	}
+
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, attachID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ? AND item_guid = ?", mailID, attachID)
 	// Check if any items left
