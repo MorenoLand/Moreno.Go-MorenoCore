@@ -116,3 +116,24 @@ func (s *session) handleSetFactionAtWar(ctx context.Context, payload []byte) boo
 	}
 	return true
 }
+
+func (s *session) giveReputation(ctx context.Context, factionID uint32, amount int32) {
+	if s.player == nil || factionID == 0 || amount == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	for i := range s.player.Reputations {
+		if s.player.Reputations[i].FactionID == factionID {
+			s.player.Reputations[i].Standing += amount
+			_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET standing = ? WHERE guid = ? AND faction = ?", s.player.Reputations[i].Standing, s.playerGUID, factionID)
+			return
+		}
+	}
+	rep := playerReputation{
+		FactionID: factionID,
+		Standing:  amount,
+		Flags:     factionFlagVisible,
+	}
+	s.player.Reputations = append(s.player.Reputations, rep)
+	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_reputation (guid, faction, standing, flags) VALUES (?, ?, ?, ?)", s.playerGUID, factionID, amount, factionFlagVisible)
+}
