@@ -861,7 +861,7 @@ func (s *session) handleInspectArenaTeams(ctx context.Context, payload []byte) b
 }
 
 // handleInspectHonorStats processes MSG_INSPECT_HONOR_STATS (0x2D6).
-// Reference: WorldSession::HandleInspectHonorStatsOpcode (MiscHandler.cpp:749).
+// Reference: WorldSession::HandleInspectHonorStatsOpcode (MiscHandler.cpp:1060).
 func (s *session) handleInspectHonorStats(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -869,14 +869,28 @@ func (s *session) handleInspectHonorStats(ctx context.Context, payload []byte) b
 	r := protocol.NewReader(payload)
 	targetGUID, _ := r.ReadU64()
 
-	buf := protocol.NewBuffer(8 + 6*4)
+	var honorPoints uint8
+	var killsToday, todayContrib, yestContrib, lifetimeHK uint32
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		charLow := uint32(targetGUID & 0x00FFFFFF)
+		var hp, tk, hk, thp, yhp int64
+		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT totalHonorPoints, todayKills, totalKills, todayHonorPoints, yesterdayHonorPoints FROM characters WHERE guid = ?`, charLow).Scan(&hp, &tk, &hk, &thp, &yhp); err == nil {
+			honorPoints = uint8(hp)
+			killsToday = uint32(tk)
+			lifetimeHK = uint32(hk)
+			todayContrib = uint32(thp)
+			yestContrib = uint32(yhp)
+		}
+	}
+
+	// TrinityCore MiscHandler.cpp:1060: data(MSG_INSPECT_HONOR_STATS, 8+1+4*4)
+	buf := protocol.NewBuffer(8 + 1 + 4*4)
 	buf.WriteU64(targetGUID)
-	buf.WriteU32(0) // honorPoints
-	buf.WriteU32(0) // killsToday
-	buf.WriteU32(0) // killsYesterday
-	buf.WriteU32(0) // lifetimeHK
-	buf.WriteU32(0) // honorToday
-	buf.WriteU32(0) // honorYesterday
+	buf.WriteU8(honorPoints)
+	buf.WriteU32(killsToday)
+	buf.WriteU32(todayContrib)
+	buf.WriteU32(yestContrib)
+	buf.WriteU32(lifetimeHK)
 	_ = s.write(uint16(protocol.OpcodeMSG_INSPECT_HONOR_STATS), buf.Bytes(), true)
 	return true
 }
