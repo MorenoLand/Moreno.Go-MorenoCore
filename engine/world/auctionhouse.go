@@ -152,6 +152,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	_, _ = cdb.ExecContext(ctx, `INSERT INTO auctionhouse (id, houseid, itemguid, item_template, itemCount, itemowner, buyoutprice, time, buyguid, lastbid, startbid, deposit)
 		VALUES (?, 1, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`, nextID, itemGUID, itemEntry, stackCount, s.playerGUID, buyout, expire, bid, deposit)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(uint32(nextID), 0, 0), true) // AUCTION_SELL_ITEM = 0, ERR_AUCTION_OK = 0
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("auction created", "account", s.accountName, "auction_id", nextID, "item", itemEntry)
 	return true
@@ -197,11 +198,13 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 			nextMailID, ownerGUID, s.playerGUID, now+30*86400, now)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, itemGUID, itemEntry, s.playerGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, itemGUID)
+		s.sendMailNotify(uint64(s.playerGUID))
 		// Send profit mail to seller
 		var sellerMailID int64
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&sellerMailID)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, 2, 41, 0, ?, ?, 'Auction successful: Item', '', 0, ?, ?, ?, 0, 0)",
 			sellerMailID, s.playerGUID, ownerGUID, now+30*86400, now, price)
+		s.sendMailNotify(uint64(ownerGUID))
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, 1, 0), true)
 	} else {
 		// Outbid
@@ -212,6 +215,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&refundMailID)
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, 2, 41, 0, ?, ?, 'Auction outbid', '', 0, ?, ?, ?, 0, 0)",
 				refundMailID, ownerGUID, bidderGUID, now+30*86400, now, lastBid)
+			s.sendMailNotify(uint64(bidderGUID))
 		}
 		_, _ = cdb.ExecContext(ctx, "UPDATE auctionhouse SET buyguid = ?, lastbid = ? WHERE id = ?", s.playerGUID, price, auctionID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, 1, 0), true)
@@ -340,8 +344,21 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, 2, 41, 0, ?, ?, 'Auction cancelled', '', 1, ?, ?, 0, 0, 0)",
 		nextMailID, ownerGUID, ownerGUID, now+30*86400, now)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, itemGUID, itemEntry, ownerGUID)
+	s.sendMailNotify(uint64(ownerGUID))
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, 2, 0), true) // AUCTION_CANCEL = 2, ERR_AUCTION_OK = 0
 	return true
+}
+
+func (s *session) sendMailNotify(receiverGUID uint64) {
+	if s.server == nil {
+		return
+	}
+	targetSess := s.server.findSessionByGUID(receiverGUID)
+	if targetSess != nil {
+		recvPacket := protocol.NewBuffer(4)
+		recvPacket.WriteF32(0) // time remaining
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_RECEIVED_MAIL), recvPacket.Bytes(), true)
+	}
 }
 
 func writeAuctionInfo(buf *protocol.Buffer, a auctionRecord) {
