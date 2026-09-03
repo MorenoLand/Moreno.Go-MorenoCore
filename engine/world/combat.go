@@ -322,6 +322,11 @@ func (s *session) handleDuelAccepted(ctx context.Context, payload []byte) bool {
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(3000) // 3000ms duel countdown
 	_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_COUNTDOWN), buf.Bytes(), true)
+	if s.duelPartner != 0 && s.server != nil {
+		if partner := s.server.findSessionByGUID(s.duelPartner); partner != nil {
+			_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COUNTDOWN), buf.Bytes(), true)
+		}
+	}
 	return true
 }
 
@@ -334,5 +339,12 @@ func (s *session) handleDuelCancelled(ctx context.Context, payload []byte) bool 
 	buf := protocol.NewBuffer(1)
 	buf.WriteU8(0) // interrupted
 	_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
+	if s.duelPartner != 0 && s.server != nil {
+		if partner := s.server.findSessionByGUID(s.duelPartner); partner != nil {
+			partner.duelPartner = 0
+			_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
+		}
+		s.duelPartner = 0
+	}
 	return true
 }

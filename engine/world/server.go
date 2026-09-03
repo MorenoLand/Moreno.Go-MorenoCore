@@ -100,6 +100,7 @@ type session struct {
 	playerLocked       bool
 	rooted             bool
 	attackTarget       uint64
+	duelPartner        uint64
 	lastSwing          time.Time
 	lastRegenTick      time.Time
 	lastCastTime       time.Time
