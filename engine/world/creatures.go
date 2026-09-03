@@ -170,7 +170,7 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	values[1] = uint32(rawGUID >> 32)
 	values[2] = creatureTypeMask
 	values[objectFieldEntry] = spawn.Entry
-	values[unitFieldHealth] = maxUint32(spawn.Health, 1)
+	values[unitFieldHealth] = spawn.Health
 	values[unitFieldLevel] = maxUint32(spawn.Level, 1)
 	values[unitFieldFaction] = spawn.Faction
 	if spawn.Item1 != 0 {
@@ -184,6 +184,9 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	}
 	values[unitFieldFlags] = spawn.UnitFlags
 	values[unitFieldDynamicFlags] = spawn.DynamicFlags
+	if spawn.Health == 0 {
+		values[unitFieldDynamicFlags] = 1 // UNIT_DYNFLAG_LOOTABLE
+	}
 	values[unitFieldNPCFlags] = spawn.NPCFlags
 	values[unitFieldAttackTime] = maxUint32(spawn.AttackTime, 2000)
 	values[unitFieldAttackTimeOffhand] = maxUint32(spawn.AttackTime, 2000)
@@ -203,7 +206,11 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	if spawn.Bytes2 != 0 {
 		values[unitFieldBytes2] = spawn.Bytes2
 	}
-	values[unitFieldMaxHealth] = maxUint32(spawn.Health, 1)
+	if spawn.Health > 0 {
+		values[unitFieldMaxHealth] = spawn.Health
+	} else {
+		values[unitFieldMaxHealth] = maxUint32(spawn.Level*30, 100)
+	}
 	values[unitFieldHealth+1] = spawn.Mana
 	values[unitFieldMaxPower1] = spawn.Mana
 	if spawn.Scale > 0 {
