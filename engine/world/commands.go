@@ -39,6 +39,7 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldPlayerFlags:       s.player.PlayerFlags,
 		unitFieldPlayerFieldBytes:  s.player.PlayerFieldBytes,
 		unitFieldXP:                s.player.XP,
+		unitFieldNextLevelXP:       xpCurve[s.player.Level],
 		unitFieldCoinage:           s.player.Money,
 		unitFieldMountDisplayID:    s.player.MountDisplayID,
 		unitFieldAttackTime:        s.player.AttackTime,
