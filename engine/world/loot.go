@@ -35,6 +35,91 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	if wdb == nil {
 		return true
 	}
+	high := uint16(targetGUID >> 48)
+
+	if high == 0xF110 {
+		lowGUID := uint32(targetGUID & 0x00FFFFFF)
+		entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+
+		var goMap uint32
+		var goX, goY, goZ float32
+		var data1 int64
+		err := wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0)
+			FROM gameobject AS g
+			JOIN gameobject_template AS t ON t.entry = g.id
+			WHERE g.guid = ? AND g.id = ? LIMIT 1`, lowGUID, entry).Scan(&goMap, &goX, &goY, &goZ, &data1)
+		if err != nil {
+			_ = wdb.QueryRowContext(ctx, `SELECT g.map, g.position_x, g.position_y, g.position_z, COALESCE(t.data1, 0)
+				FROM gameobject AS g
+				JOIN gameobject_template AS t ON t.entry = g.id
+				WHERE g.guid = ? LIMIT 1`, lowGUID).Scan(&goMap, &goX, &goY, &goZ, &data1)
+		}
+		if goMap != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goX, goY, goZ) > 10.0 {
+			return s.sendLootError(targetGUID, 4) == nil
+		}
+		lootID := data1
+		if lootID == 0 {
+			lootID = int64(entry)
+		}
+
+		s.server.lootMu.Lock()
+		if s.server.creatureLoot == nil {
+			s.server.creatureLoot = make(map[uint64]*activeLootState)
+		}
+		loot := s.server.creatureLoot[targetGUID]
+		newLoot := loot == nil
+		if newLoot {
+			loot = &activeLootState{TargetGUID: targetGUID, MapID: goMap, LootType: 1, Items: make(map[uint8]lootItem)}
+			s.server.creatureLoot[targetGUID] = loot
+		}
+		s.server.lootMu.Unlock()
+
+		if !newLoot {
+			s.activeLoot = loot
+			return s.sendLootResponse(loot) == nil
+		}
+
+		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0)
+			FROM gameobject_loot_template AS l
+			LEFT JOIN item_template AS t ON t.entry = l.Item
+			WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, lootID)
+		if err == nil {
+			defer rows.Close()
+			var slot uint8 = 0
+			for rows.Next() {
+				var itemID int64
+				var chance float64
+				var minCount, maxCount, displayID int64
+				if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID); err != nil {
+					continue
+				}
+				roll := rand.Float64() * 100.0
+				if chance > 0 && roll > chance {
+					continue
+				}
+				count := uint32(minCount)
+				if maxCount > minCount {
+					count += uint32(rand.Intn(int(maxCount - minCount + 1)))
+				}
+				if count == 0 {
+					count = 1
+				}
+				loot.Items[slot] = lootItem{
+					Slot:          slot,
+					ItemEntry:     uint32(itemID),
+					Count:         count,
+					DisplayInfoID: uint32(displayID),
+				}
+				slot++
+				if slot >= 16 {
+					break
+				}
+			}
+		}
+		s.activeLoot = loot
+		return s.sendLootResponse(loot) == nil
+	}
+
 	target, ok := s.getCombatTarget(ctx, targetGUID)
 	if !ok || target.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
 		return s.sendLootError(targetGUID, 4) == nil
