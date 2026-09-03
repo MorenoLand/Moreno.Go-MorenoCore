@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -83,5 +84,77 @@ func TestAuctionHouseListingSellingAndBidding(t *testing.T) {
 	_ = db.QueryRow("SELECT COUNT(*) FROM auctionhouse").Scan(&count)
 	if count != 0 {
 		t.Fatalf("expected 0 active auctions after buyout, got %d", count)
+	}
+}
+
+func TestAuctionCancellationRefundsActiveBidder(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, name TEXT, money INTEGER)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, played_time INTEGER, text TEXT)",
+		"CREATE TABLE auctionhouse (id INTEGER PRIMARY KEY, houseid INTEGER, itemguid INTEGER, item_template INTEGER, itemCount INTEGER, itemowner INTEGER, buyoutprice INTEGER, time INTEGER, buyguid INTEGER, lastbid INTEGER, startbid INTEGER, deposit INTEGER)",
+		"CREATE TABLE mail (id INTEGER PRIMARY KEY, messageType INTEGER, stationery INTEGER, mailTemplateId INTEGER, sender INTEGER, receiver INTEGER, subject TEXT, body TEXT, has_items INTEGER, expire_time INTEGER, deliver_time INTEGER, money INTEGER, cod INTEGER, checked INTEGER)",
+		"CREATE TABLE mail_items (mail_id INTEGER, item_guid INTEGER, item_template INTEGER, receiver INTEGER)",
+		"INSERT INTO characters VALUES (1, 'Seller', 50000)",
+		"INSERT INTO characters VALUES (2, 'Bidder', 40000)",
+		"INSERT INTO item_instance VALUES (201, 1234, 1, 0, 1, 0, '', 0, '', 0, 100, 0, '')",
+		// Active auction 1 owned by 1, with bidder 2 and bid 2500
+		"INSERT INTO auctionhouse VALUES (1, 1, 201, 1234, 1, 1, 10000, 9999999999, 2, 2500, 1000, 100)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: charStore, sessions: make(map[*session]struct{})}
+	sessSeller := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Money: 50000}}
+	sessBidder := &session{server: srv, playerGUID: 2, playerLoaded: true, player: &playerState{GUID: 2, Money: 40000}}
+	srv.sessions[sessSeller] = struct{}{}
+	srv.sessions[sessBidder] = struct{}{}
+
+	ctx := context.Background()
+
+	// Seller cancels auction 1
+	cancelBuf := protocol.NewBuffer(16)
+	cancelBuf.WriteU64(0)
+	cancelBuf.WriteU32(1) // auction ID 1
+	if !sessSeller.handleAuctionRemoveItem(ctx, cancelBuf.Bytes()) {
+		t.Fatal("handleAuctionRemoveItem failed")
+	}
+
+	// Verify auction is deleted
+	var count int64
+	_ = db.QueryRow("SELECT COUNT(*) FROM auctionhouse WHERE id = 1").Scan(&count)
+	if count != 0 {
+		t.Fatalf("expected auction 1 deleted, got count %d", count)
+	}
+
+	// Verify bidder 2 received refund mail with money = 2500
+	var refundMoney int64
+	var refundSubject string
+	err = db.QueryRow("SELECT money, subject FROM mail WHERE receiver = 2").Scan(&refundMoney, &refundSubject)
+	if err != nil {
+		t.Fatalf("bidder refund mail not found: %v", err)
+	}
+	if refundMoney != 2500 {
+		t.Fatalf("expected refund money 2500, got %d", refundMoney)
+	}
+	if !strings.Contains(refundSubject, "refunded") {
+		t.Fatalf("unexpected subject: %s", refundSubject)
+	}
+
+	// Verify seller 1 received item mail
+	var itemReceiver int64
+	err = db.QueryRow("SELECT receiver FROM mail_items WHERE item_guid = 201").Scan(&itemReceiver)
+	if err != nil || itemReceiver != 1 {
+		t.Fatalf("seller item return mail not found or receiver mismatch: %v (receiver=%d)", err, itemReceiver)
 	}
 }

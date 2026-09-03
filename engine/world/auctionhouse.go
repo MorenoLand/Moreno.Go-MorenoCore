@@ -153,6 +153,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		VALUES (?, 1, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`, nextID, itemGUID, itemEntry, stackCount, s.playerGUID, buyout, expire, bid, deposit)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(uint32(nextID), 0, 0), true) // AUCTION_SELL_ITEM = 0, ERR_AUCTION_OK = 0
 	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()
 	s.debug("auction created", "account", s.accountName, "auction_id", nextID, "item", itemEntry)
 	return true
@@ -220,6 +221,7 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		_, _ = cdb.ExecContext(ctx, "UPDATE auctionhouse SET buyguid = ?, lastbid = ? WHERE id = ?", s.playerGUID, price, auctionID)
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, 1, 0), true)
 	}
+	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()
 	s.debug("auction bid placed", "account", s.accountName, "auction_id", auctionID, "price", price)
 	return true
@@ -331,8 +333,8 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 	if cdb == nil {
 		return true
 	}
-	var itemGUID, itemEntry, ownerGUID int64
-	err = cdb.QueryRowContext(ctx, "SELECT itemguid, item_template, itemowner FROM auctionhouse WHERE id = ? AND itemowner = ? LIMIT 1", auctionID, s.playerGUID).Scan(&itemGUID, &itemEntry, &ownerGUID)
+	var itemGUID, itemEntry, ownerGUID, bidderGUID, lastBid int64
+	err = cdb.QueryRowContext(ctx, "SELECT itemguid, item_template, itemowner, buyguid, lastbid FROM auctionhouse WHERE id = ? AND itemowner = ? LIMIT 1", auctionID, s.playerGUID).Scan(&itemGUID, &itemEntry, &ownerGUID, &bidderGUID, &lastBid)
 	if err != nil {
 		return true
 	}
@@ -345,6 +347,16 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 		nextMailID, ownerGUID, ownerGUID, now+30*86400, now)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, itemGUID, itemEntry, ownerGUID)
 	s.sendMailNotify(uint64(ownerGUID))
+
+	// If there was an active bidder, refund them their bid via mail (TC: SendAuctionCancelledToBidderMail)
+	if bidderGUID > 0 && lastBid > 0 {
+		var bidderMailID int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&bidderMailID)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, 2, 41, 0, ?, ?, 'Auction cancelled - Bid refunded', '', 0, ?, ?, ?, 0, 0)",
+			bidderMailID, ownerGUID, bidderGUID, now+30*86400, now, lastBid)
+		s.sendMailNotify(uint64(bidderGUID))
+	}
+
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, 2, 0), true) // AUCTION_CANCEL = 2, ERR_AUCTION_OK = 0
 	return true
 }
