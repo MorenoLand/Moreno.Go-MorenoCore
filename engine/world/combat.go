@@ -124,10 +124,18 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		overkill = damage - target.Health
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), buildAttackerStateUpdate(s.playerGUID, target.GUID, damage, overkill), true)
+	low := uint32(target.GUID & 0x00FFFFFF)
+	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
+	stdKey := creatureWorldGUID(low, entry)
+
 	if damage >= target.Health {
 		// Target dies
 		s.server.motionMu.Lock()
-		if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+		motion := s.server.creatureMotion[target.GUID]
+		if motion == nil {
+			motion = s.server.creatureMotion[stdKey]
+		}
+		if motion != nil {
 			motion.Health = 0
 			motion.InCombat = false
 			motion.TargetGUID = 0
@@ -147,7 +155,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 	} else {
 		newHealth := target.Health - damage
 		s.server.motionMu.Lock()
-		if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+		motion := s.server.creatureMotion[target.GUID]
+		if motion == nil {
+			motion = s.server.creatureMotion[stdKey]
+		}
+		if motion != nil {
 			motion.Health = newHealth
 		}
 		s.server.motionMu.Unlock()
