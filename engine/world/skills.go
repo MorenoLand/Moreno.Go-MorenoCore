@@ -181,6 +181,7 @@ func (s *session) handleUnlearnSkill(ctx context.Context, payload []byte) bool {
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", s.playerGUID, skillID)
 	}
+
 	s.sendPlayerUpdate()
 	return true
 }
