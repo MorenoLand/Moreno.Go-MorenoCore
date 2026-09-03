@@ -781,6 +781,19 @@ func isMissingColumn(err error) bool {
 	return strings.Contains(value, "no such column") || strings.Contains(value, "unknown column")
 }
 
+func classPowerType(class uint8) uint8 {
+	switch class {
+	case 1: // Warrior
+		return 1 // Rage
+	case 4: // Rogue
+		return 3 // Energy
+	case 6: // Death Knight
+		return 6 // Runic Power
+	default:
+		return 0 // Mana
+	}
+}
+
 func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) {
 	values := make([]uint32, playerValuesCount)
 	values[0] = uint32(state.GUID)
@@ -793,17 +806,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		lvl = 80
 	}
 	values[unitFieldLevel] = uint32(lvl)
-	var powerType uint8
-	switch state.Class {
-	case 1: // Warrior
-		powerType = 1 // Rage
-	case 4: // Rogue
-		powerType = 3 // Energy
-	case 6: // Death Knight
-		powerType = 6 // Runic Power
-	default:
-		powerType = 0 // Mana
-	}
+	powerType := classPowerType(state.Class)
 	race := state.Race
 	if race < 1 {
 		race = 1
