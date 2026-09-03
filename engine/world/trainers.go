@@ -37,12 +37,16 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return true
 	}
-	creatureEntry := uint32((trainerGUID >> 24) & 0xFFFFFF)
+	var creatureEntry uint32
+	if creature := s.luaCreature(ctx, trainerGUID); creature != nil {
+		creatureEntry = objectUint32OrZero(creature, "Entry")
+	}
 	if creatureEntry == 0 {
-		spawnGUID := uint32(trainerGUID & 0xFFFFFF)
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry); err != nil || creatureEntry == 0 {
-			creatureEntry = spawnGUID
-		}
+		creatureEntry = uint32((trainerGUID >> 24) & 0x00FFFFFF)
+	}
+	if creatureEntry == 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		spawnGUID := uint32(trainerGUID & 0x00FFFFFF)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry)
 	}
 
 	var spells []trainerSpellRecord
@@ -206,36 +210,38 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	if wdb == nil || cdb == nil {
 		return true
 	}
-	creatureEntry := uint32((trainerGUID >> 24) & 0xFFFFFF)
+	var creatureEntry uint32
+	if creature := s.luaCreature(ctx, trainerGUID); creature != nil {
+		creatureEntry = objectUint32OrZero(creature, "Entry")
+	}
 	if creatureEntry == 0 {
-		spawnGUID := uint32(trainerGUID & 0xFFFFFF)
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry); err != nil || creatureEntry == 0 {
-			creatureEntry = spawnGUID
-		}
+		creatureEntry = uint32((trainerGUID >> 24) & 0x00FFFFFF)
+	}
+	if creatureEntry == 0 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		spawnGUID := uint32(trainerGUID & 0x00FFFFFF)
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry)
 	}
 
 	var moneyCost, reqLevel int64
 	err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0)
 		FROM trainer_spell AS ts
-		WHERE (ts.TrainerId = (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ? LIMIT 1)
-		   OR ts.TrainerId = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)
-		   OR ts.TrainerId = (SELECT trainer_spell FROM creature_template WHERE entry = ? LIMIT 1)
+		WHERE (ts.TrainerId IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
 		   OR ts.TrainerId = ?) AND ts.SpellId = ? LIMIT 1`,
-		creatureEntry, creatureEntry, creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel)
+		creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel)
+	if err != nil && s.player != nil && s.player.Class > 0 {
+		// Fallback to class trainer
+		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0)
+			FROM trainer_spell AS ts
+			JOIN trainer AS t ON t.Id = ts.TrainerId
+			WHERE t.Type = 0 AND t.Requirement = ? AND ts.SpellId = ? LIMIT 1`,
+			s.player.Class, spellID).Scan(&moneyCost, &reqLevel)
+	}
 	if err != nil {
-		// Fallback to legacy npc_trainer
+		// Global fallback for any trainer offering this spell
 		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(MoneyCost, 0), COALESCE(ReqLevel, 0)
-			FROM npc_trainer WHERE (ID = ? OR ID = (SELECT trainer_id FROM creature_template WHERE entry = ? LIMIT 1)) AND SpellID = ? LIMIT 1`,
-			creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel)
-		if err != nil && s.player != nil && s.player.Class > 0 {
-			// Fallback to class trainer
-			err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0)
-				FROM trainer_spell AS ts
-				JOIN trainer AS t ON t.Id = ts.TrainerId
-				WHERE t.Type = 0 AND t.Requirement = ? AND ts.SpellId = ? LIMIT 1`,
-				s.player.Class, spellID).Scan(&moneyCost, &reqLevel)
-		}
+			FROM trainer_spell WHERE SpellId = ? LIMIT 1`, spellID).Scan(&moneyCost, &reqLevel)
 		if err != nil {
+			s.debug("trainer spell not found", "account", s.accountName, "trainer", trainerGUID, "entry", creatureEntry, "spell", spellID)
 			return true
 		}
 	}
