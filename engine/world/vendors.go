@@ -241,6 +241,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	}
 	s.syncEquipmentCache(ctx)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SELL_ITEM), buildSellResult(vendorGUID, itemGUID, 0), true)
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("item sold to vendor", "account", s.accountName, "item", itemEntry, "guid", itemGUID, "count", count, "earned", earned)
 	return true
