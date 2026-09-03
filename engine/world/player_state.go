@@ -1119,6 +1119,10 @@ func buildItemCreateBlockWithContents(fullGUID uint64, itemEntry, count uint32, 
 }
 
 func buildItemCreateBlockForLocation(fullGUID uint64, itemEntry, count uint32, ownerGUID, containedGUID uint64, containerSlots uint32, contents map[uint32]uint64) []byte {
+	return buildItemCreateBlockForLocationWithDurability(fullGUID, itemEntry, count, ownerGUID, containedGUID, containerSlots, contents, 0, 0)
+}
+
+func buildItemCreateBlockForLocationWithDurability(fullGUID uint64, itemEntry, count uint32, ownerGUID, containedGUID uint64, containerSlots uint32, contents map[uint32]uint64, curDurability, maxDurability uint32) []byte {
 	if containerSlots > 36 {
 		containerSlots = 36
 	}
@@ -1150,8 +1154,16 @@ func buildItemCreateBlockForLocation(fullGUID uint64, itemEntry, count uint32, o
 	values[8] = uint32(containedGUID)
 	values[9] = uint32(containedGUID >> 32)
 	values[14] = count
-	values[60] = 100 // ITEM_FIELD_DURABILITY = 60
-	values[61] = 100 // ITEM_FIELD_MAXDURABILITY = 61
+	if maxDurability > 0 {
+		if curDurability == 0 {
+			curDurability = maxDurability
+		}
+		values[60] = curDurability // ITEM_FIELD_DURABILITY = 60
+		values[61] = maxDurability // ITEM_FIELD_MAXDURABILITY = 61
+	} else {
+		values[60] = 0
+		values[61] = 0
+	}
 
 	mask := protocol.NewUpdateMask(len(values))
 	for idx, val := range values {
@@ -1253,18 +1265,21 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		}
 		contents[int64(bagGUID)][uint32(item.slot)] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
 	}
-	containerSlots := func(entry int64) uint32 {
+	itemTemplateInfo := func(entry int64) (uint32, uint32) {
 		if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
-			return 0
+			return 0, 0
 		}
-		var slots int64
-		if s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ContainerSlots, 0) FROM item_template WHERE entry = ?", entry).Scan(&slots) != nil || slots <= 0 {
-			return 0
-		}
+		var slots, maxD int64
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(ContainerSlots, 0), COALESCE(MaxDurability, 0) FROM item_template WHERE entry = ?", entry).Scan(&slots, &maxD)
 		if slots > 36 {
 			slots = 36
 		}
-		return uint32(slots)
+		return uint32(slots), uint32(maxD)
+	}
+	itemDurability := func(guid int64) uint32 {
+		var d int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(durability, 0) FROM item_instance WHERE guid = ?", guid).Scan(&d)
+		return uint32(d)
 	}
 	updates := protocol.NewUpdateData()
 	fields := make(map[int]uint32)
@@ -1279,7 +1294,9 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		if bag != 0 {
 			containedGUID = bagItems[bag]
 		}
-		block := buildItemCreateBlockForLocation(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID, containedGUID, containerSlots(itemEntry), contents[int64(fullGUID)])
+		cSlots, maxD := itemTemplateInfo(itemEntry)
+		curD := itemDurability(itemGUID)
+		block := buildItemCreateBlockForLocationWithDurability(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID, containedGUID, cSlots, contents[int64(fullGUID)], curD, maxD)
 		updates.AddUpdateBlock(block)
 
 		if bag == 0 && slot >= 0 && slot <= 118 {
