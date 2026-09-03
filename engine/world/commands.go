@@ -62,6 +62,15 @@ func (s *session) sendPlayerUpdate() {
 	for i := 0; i < 25; i++ {
 		fields[playerFieldCombatRating1+i] = s.player.CombatRatings[i]
 	}
+	for i, sk := range s.player.Skills {
+		if i >= playerMaxSkills {
+			break
+		}
+		idx := playerSkillInfoStart + i*3
+		fields[idx] = uint32(sk.Skill) | uint32(sk.Step)<<16
+		fields[idx+1] = uint32(sk.Value) | uint32(sk.Max)<<16
+		fields[idx+2] = uint32(sk.Bonus)
+	}
 	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
 	if err == nil && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
