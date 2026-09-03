@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"database/sql"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -161,11 +162,50 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	return true
 }
 
+func findFreeBackpackSlots(ctx context.Context, cdb *sql.DB, guid uint64, count int) ([]uint8, bool) {
+	if count == 0 {
+		return nil, true
+	}
+	usedSlots := make(map[uint8]bool)
+	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", guid)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var sl int64
+			if rows.Scan(&sl) == nil {
+				usedSlots[uint8(sl)] = true
+			}
+		}
+	}
+	var free []uint8
+	for sl := uint8(23); sl <= 38; sl++ {
+		if !usedSlots[sl] {
+			free = append(free, sl)
+			if len(free) == count {
+				return free, true
+			}
+		}
+	}
+	return free, len(free) >= count
+}
+
 func (s *session) completeTrade(ctx context.Context, partner *session) {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return
 	}
+	partnerSlots, ok1 := findFreeBackpackSlots(ctx, cdb, partner.playerGUID, len(s.trade.Items))
+	sSlots, ok2 := findFreeBackpackSlots(ctx, cdb, s.playerGUID, len(partner.trade.Items))
+	if !ok1 || !ok2 {
+		cancelBuf := protocol.NewBuffer(4)
+		cancelBuf.WriteU32(tradeStatusCloseWindow)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), cancelBuf.Bytes(), true)
+		_ = partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), cancelBuf.Bytes(), true)
+		s.trade = nil
+		partner.trade = nil
+		return
+	}
+
 	// Money transfer
 	s.player.Money = s.player.Money - s.trade.Money + partner.trade.Money
 	partner.player.Money = partner.player.Money - partner.trade.Money + s.trade.Money
@@ -174,12 +214,16 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 
 	// Items transfer
 	for _, it := range s.trade.Items {
+		targetSlot := partnerSlots[0]
+		partnerSlots = partnerSlots[1:]
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", partner.playerGUID, it.ItemGUID)
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ? WHERE item = ?", partner.playerGUID, it.ItemGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = 0, slot = ? WHERE item = ?", partner.playerGUID, targetSlot, it.ItemGUID)
 	}
 	for _, it := range partner.trade.Items {
+		targetSlot := sSlots[0]
+		sSlots = sSlots[1:]
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, it.ItemGUID)
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ? WHERE item = ?", s.playerGUID, it.ItemGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = 0, slot = ? WHERE item = ?", s.playerGUID, targetSlot, it.ItemGUID)
 	}
 
 	completeBuf := protocol.NewBuffer(4)
@@ -187,6 +231,8 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), completeBuf.Bytes(), true)
 	_ = partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), completeBuf.Bytes(), true)
 
+	_ = s.sendInventoryItems(ctx)
+	_ = partner.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	partner.sendPlayerUpdate()
 
