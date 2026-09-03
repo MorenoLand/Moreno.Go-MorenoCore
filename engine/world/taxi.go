@@ -259,28 +259,53 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	sourceNode, err := reader.ReadU32()
-	if err != nil {
-		return false
-	}
-	destNode, err := reader.ReadU32()
-	if err != nil {
-		return false
-	}
 	reply := func(code uint32) bool {
 		packet := protocol.NewBuffer(4)
 		packet.WriteU32(code)
 		_ = s.write(uint16(protocol.OpcodeSMSG_ACTIVATETAXIREPLY), packet.Bytes(), true)
 		return true
 	}
+
+	var sourceNode, destNode uint32
+	if len(payload) >= 20 {
+		// CMSG_ACTIVATETAXIEXPRESS: guid (8), nodeCount (4), nodes... (nodeCount * 4)
+		nodeCount, err := reader.ReadU32()
+		if err != nil || nodeCount < 2 || len(payload) < int(12+nodeCount*4) {
+			return reply(taxiErrNoSuchPath)
+		}
+		var nodes []uint32
+		for i := uint32(0); i < nodeCount; i++ {
+			node, err := reader.ReadU32()
+			if err != nil {
+				return reply(taxiErrNoSuchPath)
+			}
+			if !s.isTaxiMaskNodeKnown(node) && !s.isTaxiCheater() {
+				return reply(taxiErrNotVisited)
+			}
+			nodes = append(nodes, node)
+		}
+		sourceNode = nodes[0]
+		destNode = nodes[len(nodes)-1]
+	} else {
+		// CMSG_ACTIVATETAXI: guid (8), source (4), dest (4)
+		sourceNode, err = reader.ReadU32()
+		if err != nil {
+			return false
+		}
+		destNode, err = reader.ReadU32()
+		if err != nil {
+			return false
+		}
+		if !s.isTaxiMaskNodeKnown(sourceNode) && !s.isTaxiCheater() {
+			return reply(taxiErrNotVisited)
+		}
+	}
+
 	// Player::ActivateTaxiPathTo validation order: vendor/nearest node,
 	// known source node, existing path, money.
 	nearest, ok := s.nearestCreatureTaxiNode(ctx, guid)
 	if !ok {
 		return reply(taxiErrNoVendorNearby)
-	}
-	if !s.isTaxiMaskNodeKnown(sourceNode) && !s.isTaxiCheater() {
-		return reply(taxiErrNotVisited)
 	}
 	if s.server.Data == nil {
 		return reply(taxiErrUnspecified)
