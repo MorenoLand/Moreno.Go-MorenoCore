@@ -1393,9 +1393,50 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	petitionGUID := s.playerGUID + 100000
+	cost := uint32(1000) // 10 silver guild charter cost
+	if s.player.Money < cost {
+		return true
+	}
+
+	usedSlots := make(map[uint8]bool)
+	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
+	if err == nil {
+		for rows.Next() {
+			var sl int64
+			if rows.Scan(&sl) == nil {
+				usedSlots[uint8(sl)] = true
+			}
+		}
+		rows.Close()
+	}
+	freeSlot := uint8(0xFF)
+	for sl := uint8(23); sl <= 38; sl++ {
+		if !usedSlots[sl] {
+			freeSlot = sl
+			break
+		}
+	}
+	if freeSlot == 0xFF {
+		return true
+	}
+
+	var nextItemGUID int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextItemGUID)
+	if nextItemGUID <= 0 {
+		nextItemGUID = 1
+	}
+
+	petitionGUID := uint64(nextItemGUID)
+	s.player.Money -= cost
+	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, 5863, ?, ?, 1, 0, '', 0, '', 0, 0, 0, '')", nextItemGUID, s.playerGUID, s.playerGUID)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextItemGUID)
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO petition (ownerguid, petitionguid, name, type) VALUES (?, ?, ?, 9)",
 		s.playerGUID, petitionGUID, name)
+
+	_ = s.sendItemCreate(uint64(nextItemGUID), 5863, 1, 0, freeSlot)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
 	return true
 }
 
@@ -1583,9 +1624,14 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 4, '', '')", newGuildID, signerGUID)
 	}
 
-	// Clean up petition
+	// Clean up petition and charter item
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", ownerGUID, petitionGUID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", petitionGUID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition WHERE petitionguid = ?", petitionGUID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM petition_sign WHERE petitionguid = ?", petitionGUID)
+
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
 
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(0) // success
