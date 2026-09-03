@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"math"
+	"math/rand/v2"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -99,6 +100,18 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		return
 	}
 	damage := uint32(20 + int(s.player.Level)*5)
+	if s.player.MaxDamage > s.player.MinDamage && s.player.MinDamage > 0 {
+		attSpeed := float64(s.player.AttackTime) / 1000.0
+		if attSpeed <= 0 {
+			attSpeed = 2.0
+		}
+		apBonus := (float64(s.player.AttackPower) * attSpeed) / 14.0
+		baseDmg := float64(s.player.MinDamage) + rand.Float64()*float64(s.player.MaxDamage-s.player.MinDamage)
+		damage = uint32(baseDmg + apBonus)
+	}
+	if damage < 1 {
+		damage = 1
+	}
 	overkill := uint32(0)
 	if damage >= target.Health {
 		overkill = damage - target.Health

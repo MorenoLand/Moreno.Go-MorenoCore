@@ -377,6 +377,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				maxDmg = minDmg + 1
 			}
 			damage := uint32(minDmg + rand.Float64()*(maxDmg-minDmg))
+			if target.Sess.player.Armor > 0 {
+				armor := float64(target.Sess.player.Armor)
+				reduction := armor / (armor + 400.0 + 85.0*lvl)
+				if reduction > 0.75 {
+					reduction = 0.75
+				}
+				damage = uint32(float64(damage) * (1.0 - reduction))
+			}
 			if damage < 1 {
 				damage = 1
 			}

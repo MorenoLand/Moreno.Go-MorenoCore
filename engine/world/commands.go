@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,21 +30,36 @@ func (s *session) sendPlayerUpdate() {
 		return
 	}
 	fields := map[int]uint32{
-		unitFieldHealth:           s.player.Health,
-		unitFieldMaxHealth:        s.player.MaxHealth,
-		unitFieldLevel:            uint32(s.player.Level),
-		unitFieldFaction:          s.server.raceFaction(s.player.Race),
-		unitFieldFlags:            unitFlagPlayerControlled | s.player.UnitFlags,
-		unitFieldBytes1:           uint32(s.player.StandState),
-		unitFieldPlayerFlags:      s.player.PlayerFlags,
-		unitFieldPlayerFieldBytes: s.player.PlayerFieldBytes,
-		unitFieldXP:               s.player.XP,
-		unitFieldCoinage:          s.player.Money,
-		unitFieldMountDisplayID:   s.player.MountDisplayID,
+		unitFieldHealth:            s.player.Health,
+		unitFieldMaxHealth:         s.player.MaxHealth,
+		unitFieldLevel:             uint32(s.player.Level),
+		unitFieldFaction:           s.server.raceFaction(s.player.Race),
+		unitFieldFlags:             unitFlagPlayerControlled | s.player.UnitFlags,
+		unitFieldBytes1:            uint32(s.player.StandState),
+		unitFieldPlayerFlags:       s.player.PlayerFlags,
+		unitFieldPlayerFieldBytes:  s.player.PlayerFieldBytes,
+		unitFieldXP:                s.player.XP,
+		unitFieldCoinage:           s.player.Money,
+		unitFieldMountDisplayID:    s.player.MountDisplayID,
+		unitFieldAttackTime:        s.player.AttackTime,
+		unitFieldAttackTimeOffhand: s.player.OffhandAttackTime,
+		unitFieldRangedAttackTime:  s.player.RangedAttackTime,
+		unitFieldMinDamage:         math.Float32bits(s.player.MinDamage),
+		unitFieldMaxDamage:         math.Float32bits(s.player.MaxDamage),
+		unitFieldAttackPower:       s.player.AttackPower,
+		unitFieldRangedAttackPower: s.player.RangedAttackPower,
+		unitFieldResistances:       s.player.Armor,
+	}
+	for i := 0; i < 5; i++ {
+		fields[unitFieldStat0+i] = s.player.Stats[i]
+		fields[unitFieldPosStat0+i] = s.player.Stats[i]
 	}
 	for i, p := range s.player.Powers {
 		fields[unitFieldPower1+i] = p
 		fields[unitFieldMaxPower1+i] = s.player.MaxPowers[i]
+	}
+	for i := 0; i < 25; i++ {
+		fields[playerFieldCombatRating1+i] = s.player.CombatRatings[i]
 	}
 	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
 	if err == nil && packet != nil {
