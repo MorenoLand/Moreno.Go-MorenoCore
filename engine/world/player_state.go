@@ -1264,6 +1264,7 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 	}
 	updates := protocol.NewUpdateData()
 	fields := make(map[int]uint32)
+	slotItems := make(map[int]uint64)
 	for _, item := range items {
 		bag, slot, itemGUID, itemEntry, count := item.bag, item.slot, item.itemGUID, item.itemEntry, item.count
 		if count <= 0 {
@@ -1277,11 +1278,16 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		block := buildItemCreateBlockForLocation(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID, containedGUID, containerSlots(itemEntry), contents[int64(fullGUID)])
 		updates.AddUpdateBlock(block)
 
-		if bag == 0 {
-			invField := 324 + int(slot)*2
-			fields[invField] = uint32(fullGUID)
-			fields[invField+1] = uint32(fullGUID >> 32)
+		if bag == 0 && slot >= 0 && slot <= 118 {
+			slotItems[int(slot)] = fullGUID
 		}
+	}
+	// TrinityCore: populate slots 0..66 so unequipped/empty slots are cleared to 0
+	for sl := 0; sl <= 66; sl++ {
+		invField := 324 + sl*2
+		guid := slotItems[sl]
+		fields[invField] = uint32(guid)
+		fields[invField+1] = uint32(guid >> 32)
 	}
 	if updates.HasData() {
 		packet, err := updates.BuildPacket(0)
