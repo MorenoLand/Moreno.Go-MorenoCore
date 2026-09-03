@@ -1082,7 +1082,70 @@ func (s *session) handleEquipmentSetSave(ctx context.Context, payload []byte) bo
 		query := fmt.Sprintf("REPLACE INTO character_equipmentsets (%s) VALUES (%s)", cols, placeholders)
 		_, _ = cdb.ExecContext(ctx, query, args...)
 	}
+
+	// Send SMSG_EQUIPMENT_SET_SAVED (0x137)
+	savedBuf := protocol.NewBuffer(16)
+	savedBuf.WriteU32(index)
+	savedBuf.WritePackedGUID(setGuid)
+	_ = s.write(uint16(protocol.OpcodeSMSG_EQUIPMENT_SET_SAVED), savedBuf.Bytes(), true)
 	return true
+}
+
+func (s *session) sendEquipmentSetList(ctx context.Context) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	rows, err := cdb.QueryContext(ctx, `SELECT setguid, setindex, name, iconname, ignore_mask,
+		item0, item1, item2, item3, item4, item5, item6, item7, item8, item9,
+		item10, item11, item12, item13, item14, item15, item16, item17, item18
+		FROM character_equipmentsets WHERE guid = ? ORDER BY setindex`, s.playerGUID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type eqSetEntry struct {
+		setGUID    uint64
+		setIndex   uint32
+		name       string
+		iconName   string
+		ignoreMask uint32
+		items      [19]uint64
+	}
+	var sets []eqSetEntry
+	for rows.Next() {
+		var entry eqSetEntry
+		var itemCols [19]int64
+		scanArgs := []any{&entry.setGUID, &entry.setIndex, &entry.name, &entry.iconName, &entry.ignoreMask}
+		for i := 0; i < 19; i++ {
+			scanArgs = append(scanArgs, &itemCols[i])
+		}
+		if err := rows.Scan(scanArgs...); err != nil {
+			continue
+		}
+		for i := 0; i < 19; i++ {
+			entry.items[i] = uint64(itemCols[i])
+		}
+		sets = append(sets, entry)
+	}
+
+	buf := protocol.NewBuffer(4 + len(sets)*128)
+	buf.WriteU32(uint32(len(sets)))
+	for _, set := range sets {
+		buf.WritePackedGUID(set.setGUID)
+		buf.WriteU32(set.setIndex)
+		buf.WriteCString(set.name)
+		buf.WriteCString(set.iconName)
+		for i := uint32(0); i < 19; i++ {
+			if set.ignoreMask&(1<<i) != 0 {
+				buf.WritePackedGUID(1)
+			} else {
+				buf.WritePackedGUID(set.items[i])
+			}
+		}
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_EQUIPMENT_SET_LIST), buf.Bytes(), true)
 }
 
 // handleEquipmentSetDelete processes CMSG_DELETEEQUIPMENT_SET (0x13E).
