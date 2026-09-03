@@ -219,6 +219,10 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		state.ExtraFlags &= ^playerExtraGMOn
 		state.PlayerFlags &= ^playerFlagGM
 	}
+	if (state.ExtraFlags&playerExtraGMChat != 0) || (state.ExtraFlags&playerExtraGMOn != 0) || s.security > 0 {
+		s.gmChat = true
+		state.ExtraFlags |= playerExtraGMChat
+	}
 	var homeMap, homeZone int64
 	var homeX, homeY, homeZ float32
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
