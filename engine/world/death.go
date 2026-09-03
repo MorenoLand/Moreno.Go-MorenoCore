@@ -334,6 +334,42 @@ func (s *Server) updatePlayerDeathTimers(ctx context.Context, now time.Time) {
 	}
 }
 
+// updateSpiritHealerResurrectWaves pulses every 30 seconds to resurrect ghosts
+// queued at spirit guides / battleground spirit healers.
+// Reference: Battleground::HandleTrigger / Battleground.cpp:310-340.
+func (s *Server) updateSpiritHealerResurrectWaves(ctx context.Context, now time.Time) {
+	s.spiritWaveMu.Lock()
+	if s.lastSpiritWave.IsZero() {
+		s.lastSpiritWave = now
+	}
+	if now.Sub(s.lastSpiritWave) < 30*time.Second {
+		s.spiritWaveMu.Unlock()
+		return
+	}
+	s.lastSpiritWave = now
+	if s.spiritReviveQueue == nil || len(s.spiritReviveQueue) == 0 {
+		s.spiritWaveMu.Unlock()
+		return
+	}
+	queued := make(map[uint64]uint64, len(s.spiritReviveQueue))
+	for pGUID, sGUID := range s.spiritReviveQueue {
+		queued[pGUID] = sGUID
+	}
+	s.spiritReviveQueue = make(map[uint64]uint64)
+	s.spiritWaveMu.Unlock()
+
+	for playerGUID, spiritGUID := range queued {
+		sess := s.findSessionByGUID(playerGUID)
+		if sess != nil && sess.playerLoaded && sess.player != nil && sess.player.PlayerFlags&playerFlagGhost != 0 {
+			sess.resurrectPlayer(ctx, 1.0)
+			sess.removeAura(2584) // SPELL_WAITING_FOR_RESURRECT
+			sess.applyAura(22012) // SPELL_SPIRIT_HEAL_MANA
+			sess.spawnCorpseBones(ctx)
+			sess.debug("spirit wave resurrected ghost", "account", sess.accountName, "guid", playerGUID, "spirit", spiritGUID)
+		}
+	}
+}
+
 // spawnCorpseBones converts an existing corpse record into bones, mirroring
 // Player::SpawnCorpseBones for the resurrect-at-graveyard path.
 func (s *session) spawnCorpseBones(ctx context.Context) {
@@ -619,9 +655,7 @@ func (s *session) sendAreaSpiritHealerTime(guid uint64, timeLeft uint32) {
 }
 
 // handleAreaSpiritHealerQuery mirrors WorldSession::HandleAreaSpiritHealerQueryOpcode:
-// the creature must exist and be a spirit service; the actual timer answer is
-// sent by the battleground or battlefield managers, which have no Go systems,
-// so outside those contexts the reference also sends nothing.
+// Reference: BattlegroundMgr::SendAreaSpiritHealerQueryOpcode / BattlegroundHandler.cpp:80.
 func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
@@ -634,12 +668,20 @@ func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byt
 	if !s.creatureIsSpiritService(ctx, guid) {
 		return true
 	}
+	now := time.Now()
+	s.server.spiritWaveMu.Lock()
+	elapsed := now.Sub(s.server.lastSpiritWave)
+	s.server.spiritWaveMu.Unlock()
+	timeLeftMs := uint32(30000)
+	if elapsed < 30*time.Second {
+		timeLeftMs = uint32((30*time.Second - elapsed).Milliseconds())
+	}
+	s.sendAreaSpiritHealerTime(guid, timeLeftMs)
 	return true
 }
 
 // handleAreaSpiritHealerQueue mirrors WorldSession::HandleAreaSpiritHealerQueueOpcode:
-// validate the spirit service creature; the resurrect queue only exists inside
-// battlegrounds and battlefields, which have no Go systems yet.
+// Reference: Battleground::AddPlayerToResurrectQueue / Battleground.cpp:1240.
 func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
@@ -652,6 +694,20 @@ func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byt
 	if !s.creatureIsSpiritService(ctx, guid) {
 		return true
 	}
+	s.server.spiritWaveMu.Lock()
+	if s.server.spiritReviveQueue == nil {
+		s.server.spiritReviveQueue = make(map[uint64]uint64)
+	}
+	s.server.spiritReviveQueue[s.playerGUID] = guid
+	elapsed := time.Since(s.server.lastSpiritWave)
+	s.server.spiritWaveMu.Unlock()
+
+	s.applyAura(2584) // SPELL_WAITING_FOR_RESURRECT
+	timeLeftMs := uint32(30000)
+	if elapsed < 30*time.Second {
+		timeLeftMs = uint32((30*time.Second - elapsed).Milliseconds())
+	}
+	s.sendAreaSpiritHealerTime(guid, timeLeftMs)
 	return true
 }
 
