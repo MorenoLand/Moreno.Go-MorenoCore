@@ -362,7 +362,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES), buildLearnedDanceMoves(), true); err != nil {
 		return false
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficulty(), true); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY), buildInstanceDifficulty(uint32(state.DungeonDifficulty)), true); err != nil {
 		return false
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_INITIAL_SPELLS), buildInitialSpells(state), true); err != nil {
@@ -1559,9 +1559,9 @@ func buildInitWorldStates(state playerState) []byte {
 	return packet.Bytes()
 }
 
-func buildInstanceDifficulty() []byte {
+func buildInstanceDifficulty(difficulty uint32) []byte {
 	packet := protocol.NewBuffer(8)
-	packet.WriteU32(0)
+	packet.WriteU32(difficulty)
 	packet.WriteU32(0)
 	return packet.Bytes()
 }

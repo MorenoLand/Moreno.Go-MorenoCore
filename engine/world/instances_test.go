@@ -23,12 +23,18 @@ func TestInstancesAndDifficulty(t *testing.T) {
 	if !sess.handleSetDungeonDifficulty(ctx, dBuf.Bytes()) {
 		t.Fatal("handleSetDungeonDifficulty failed")
 	}
+	if sess.player.DungeonDifficulty != 1 {
+		t.Fatalf("expected DungeonDifficulty=1, got %d", sess.player.DungeonDifficulty)
+	}
 
 	// 3. Set Raid Difficulty
 	rBuf := protocol.NewBuffer(4)
 	rBuf.WriteU32(2) // 10 Heroic
 	if !sess.handleSetRaidDifficulty(ctx, rBuf.Bytes()) {
 		t.Fatal("handleSetRaidDifficulty failed")
+	}
+	if sess.player.RaidDifficulty != 2 {
+		t.Fatalf("expected RaidDifficulty=2, got %d", sess.player.RaidDifficulty)
 	}
 
 	// 4. Instance Lock Response
