@@ -484,6 +484,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), cinematicBuf.Bytes(), true)
 		}
 	}
+	if s.server != nil {
+		s.server.broadcastFriendStatus(s.playerGUID, friendsResultOnline, uint32(state.Zone), uint32(state.Level), uint32(state.Class))
+	}
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true
 }
