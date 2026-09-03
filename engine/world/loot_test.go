@@ -181,3 +181,87 @@ func TestHandleLootRoll(t *testing.T) {
 	}
 }
 
+func TestGameObjectLooting(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE gameobject (guid INTEGER PRIMARY KEY, id INTEGER, map INTEGER, position_x REAL, position_y REAL, position_z REAL)",
+		"CREATE TABLE gameobject_template (entry INTEGER PRIMARY KEY, type INTEGER, data1 INTEGER, displayId INTEGER, name TEXT)",
+		"CREATE TABLE gameobject_loot_template (Entry INTEGER, Item INTEGER, Chance REAL, QuestRequired INTEGER, LootMode INTEGER, GroupId INTEGER, MinCount INTEGER, MaxCount INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER)",
+		"INSERT INTO gameobject VALUES (50, 1001, 0, 10.0, 20.0, 30.0)",
+		"INSERT INTO gameobject_template VALUES (1001, 3, 2001, 555, 'Solid Chest')",
+		"INSERT INTO gameobject_loot_template VALUES (2001, 8888, 100.0, 0, 1, 0, 2, 2)",
+		"INSERT INTO item_template VALUES (8888, 777)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	worldStore := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{WorldStore: worldStore, creatureLoot: make(map[uint64]*activeLootState)}
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   1,
+		player:       &playerState{GUID: 1, Map: 0, X: 11.0, Y: 20.0, Z: 30.0},
+	}
+
+	goGUID := uint64(50) | uint64(1001)<<24 | uint64(0xF110)<<48
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(goGUID)
+
+	done := make(chan struct{})
+	go func() {
+		if !sess.handleLoot(context.Background(), payload.Bytes()) {
+			t.Error("handleLoot returned false")
+		}
+		close(done)
+	}()
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	opcode, data, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	if opcode != uint16(protocol.OpcodeSMSG_LOOT_RESPONSE) {
+		t.Fatalf("expected SMSG_LOOT_RESPONSE (0x160), got 0x%x", opcode)
+	}
+	r := protocol.NewReader(data)
+	tgt, _ := r.ReadU64()
+	if tgt != goGUID {
+		t.Fatalf("target mismatch: expected %d, got %d", goGUID, tgt)
+	}
+	lootType, _ := r.ReadU8()
+	if lootType != 1 {
+		t.Fatalf("expected lootType 1, got %d", lootType)
+	}
+	_, _ = r.ReadU32() // money
+	count, _ := r.ReadU8()
+	if count != 1 {
+		t.Fatalf("expected 1 item, got %d", count)
+	}
+	_, _ = r.ReadU8() // slot
+	itemEntry, _ := r.ReadU32()
+	if itemEntry != 8888 {
+		t.Fatalf("expected itemEntry 8888, got %d", itemEntry)
+	}
+	itemCount, _ := r.ReadU32()
+	if itemCount != 2 {
+		t.Fatalf("expected itemCount 2, got %d", itemCount)
+	}
+}
+
