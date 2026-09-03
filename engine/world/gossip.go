@@ -78,6 +78,19 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 				return s.sendVendorList(ctx, guid)
 			}
 		}
+		// Reference Player::SendPreparedQuest (single-quest fast-open):
+		// If the NPC has no other gossip options and exactly 1 quest, auto-open it directly.
+		if defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 1 {
+			q := defaultMenu.Quests[0]
+			queryPayload := protocol.NewBuffer(12)
+			queryPayload.WriteU64(guid)
+			queryPayload.WriteU32(q.ID)
+			status, _ := s.characterQuestStatus(ctx, q.ID)
+			if status == questStatusComplete || status == questStatusIncomplete {
+				return s.handleQuestgiverCompleteQuest(ctx, queryPayload.Bytes())
+			}
+			return s.handleQuestgiverQueryQuest(ctx, queryPayload.Bytes())
+		}
 		s.gossip = defaultMenu
 		if err := s.sendGossipMenu(); err != nil {
 			s.debug("gossip hello response failed", "account", s.accountName, "entry", entry, "error", err)

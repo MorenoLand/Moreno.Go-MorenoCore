@@ -280,10 +280,7 @@ func (s *session) loadCreatureQuestMenu(ctx context.Context, entry uint32, playe
 		if status != questStatusComplete && status != questStatusIncomplete {
 			continue
 		}
-		icon := uint32(4) // incomplete
-		if status == questStatusComplete {
-			icon = 2 // complete / reward
-		}
+		icon := uint32(4) // Question mark (complete / incomplete turn-in)
 		quest, err := s.loadQuestMenuItem(ctx, questID, icon, playerLevel)
 		if err != nil {
 			return nil, err

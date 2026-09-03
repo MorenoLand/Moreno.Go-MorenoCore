@@ -85,6 +85,10 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 	if creatureEntry == 0 || !s.creatureHasQuest(ctx, creatureEntry, questID) {
 		return s.sendGossipComplete()
 	}
+	status, _ := s.characterQuestStatus(ctx, questID)
+	if status == questStatusComplete || status == questStatusIncomplete {
+		return s.handleQuestgiverCompleteQuest(ctx, payload)
+	}
 	data, err := s.loadQuestDetailData(ctx, questID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s.sendGossipComplete()
