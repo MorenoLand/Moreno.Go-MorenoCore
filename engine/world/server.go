@@ -2392,6 +2392,9 @@ func (s *session) logout() {
 			s.debug("player position save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 		}
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID)
+		if s.server != nil {
+			s.server.broadcastFriendStatus(s.playerGUID, friendsResultOffline, 0, 0, 0)
+		}
 	}
 	if s.accountID != 0 {
 		_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID)

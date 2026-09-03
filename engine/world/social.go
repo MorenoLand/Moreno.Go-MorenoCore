@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -11,24 +12,23 @@ import (
 // FriendsResult mirrors TrinityCore's FriendsResult enum.
 // From SocialMgr.h.
 const (
-	friendsResultOK             uint8 = 0
-	friendsResultNotFound       uint8 = 1
-	friendsResultOffline        uint8 = 2
-	friendsResultEnemy          uint8 = 7
-	friendsResultIgnored        uint8 = 8
-	friendsResultMuted          uint8 = 9
-	friendsResultSelf           uint8 = 10
-	friendsResultAlready        uint8 = 11
-	friendsResultAddedOnline    uint8 = 12
-	friendsResultAddedOffline   uint8 = 13
-	friendsResultListFull       uint8 = 14
-	friendsResultRemoved        uint8 = 15
-	friendsResultIgnoreNotFound uint8 = 16
-	friendsResultIgnoreSelf     uint8 = 17
-	friendsResultIgnoreAlready  uint8 = 18
-	friendsResultIgnoreAdded    uint8 = 19
-	friendsResultIgnoreRemoved  uint8 = 20
-	friendsResultIgnoreFull     uint8 = 21
+	friendsResultDBError        uint8 = 0x00
+	friendsResultListFull       uint8 = 0x01
+	friendsResultOnline         uint8 = 0x02
+	friendsResultOffline        uint8 = 0x03
+	friendsResultNotFound       uint8 = 0x04
+	friendsResultRemoved        uint8 = 0x05
+	friendsResultAddedOnline    uint8 = 0x06
+	friendsResultAddedOffline   uint8 = 0x07
+	friendsResultAlready        uint8 = 0x08
+	friendsResultSelf           uint8 = 0x09
+	friendsResultEnemy          uint8 = 0x0A
+	friendsResultIgnoreFull     uint8 = 0x0B
+	friendsResultIgnoreSelf     uint8 = 0x0C
+	friendsResultIgnoreNotFound uint8 = 0x0D
+	friendsResultIgnoreAlready  uint8 = 0x0E
+	friendsResultIgnoreAdded    uint8 = 0x0F
+	friendsResultIgnoreRemoved  uint8 = 0x10
 )
 
 // FriendStatus mirrors TrinityCore's FriendStatus enum.
@@ -154,7 +154,7 @@ func (s *session) sendFriendStatus(result uint8, friendGUID uint64, note string)
 	}
 
 	switch result {
-	case friendsResultAddedOnline:
+	case friendsResultAddedOnline, friendsResultOnline:
 		// If friend is online, add their status/zone/level/class
 		friendSess := s.server.findSessionByGUID(friendGUID)
 		if friendSess != nil && friendSess.playerLoaded && friendSess.player != nil {
@@ -168,6 +168,53 @@ func (s *session) sendFriendStatus(result uint8, friendGUID uint64, note string)
 	}
 
 	return s.write(uint16(protocol.OpcodeSMSG_FRIEND_STATUS), b.Bytes(), true)
+}
+
+// broadcastFriendStatus sends SMSG_FRIEND_STATUS to all online players who have playerGUID on their friends list.
+// Reference: SocialMgr::BroadcastToFriendListers (SocialMgr.cpp:287).
+func (s *Server) broadcastFriendStatus(playerGUID uint64, result uint8, zone, level, class uint32) {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	rows, err := s.CharactersStore.DB.QueryContext(ctx,
+		"SELECT guid FROM character_social WHERE friend = ? AND (flags & 1) != 0", playerGUID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	var recipientGUIDs []uint64
+	for rows.Next() {
+		var g uint64
+		if rows.Scan(&g) == nil {
+			recipientGUIDs = append(recipientGUIDs, g)
+		}
+	}
+
+	if len(recipientGUIDs) == 0 {
+		return
+	}
+
+	b := protocol.NewBuffer(22)
+	b.WriteU8(result)
+	b.WriteU64(playerGUID)
+	if result == friendsResultOnline {
+		b.WriteU8(friendStatusOnline)
+		b.WriteU32(zone)
+		b.WriteU32(level)
+		b.WriteU32(class)
+	}
+
+	payload := b.Bytes()
+	for _, recipient := range recipientGUIDs {
+		sess := s.findSessionByGUID(recipient)
+		if sess != nil && sess.playerLoaded {
+			_ = sess.write(uint16(protocol.OpcodeSMSG_FRIEND_STATUS), payload, true)
+		}
+	}
 }
 
 // -----------------------------------------------------------------
