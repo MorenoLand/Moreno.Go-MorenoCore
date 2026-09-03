@@ -166,6 +166,11 @@ func (s *session) buildPlayerRepop(ctx context.Context) {
 	s.player.PlayerFieldBytes &^= playerFieldByteReleaseTimer
 	s.player.Health = 1
 	s.deathTimer = time.Time{}
+	if s.player.Race == 4 { // RACE_NIGHTELF
+		s.applyAura(20584) // Wisp Spirit
+	} else {
+		s.applyAura(8326) // Ghost
+	}
 	s.sendPlayerUpdate()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
@@ -356,6 +361,8 @@ func (s *session) resurrectPlayer(ctx context.Context, restorePercent float32) {
 	s.player.PlayerFlags &^= playerFlagGhost
 	s.player.PlayerFieldBytes &^= playerFieldByteReleaseTimer
 	s.deathTimer = time.Time{}
+	s.removeAura(8326)
+	s.removeAura(20584)
 	if restorePercent > 0 {
 		s.player.Health = uint32(float32(s.player.MaxHealth) * restorePercent)
 		s.player.Powers[0] = uint32(float32(s.player.MaxPowers[0]) * restorePercent) // mana
@@ -695,6 +702,9 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 		return true
 	}
 	s.resurrectPlayer(ctx, 0.5)
+	if s.player.Level > 10 {
+		s.applyAura(15007) // Resurrection Sickness
+	}
 	return true
 }
 
