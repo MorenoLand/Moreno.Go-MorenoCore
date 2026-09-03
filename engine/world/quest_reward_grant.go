@@ -30,6 +30,7 @@ type inventoryRewardRecord struct {
 }
 
 type questItemGrant struct {
+	ItemGUID       uint32
 	Entry          uint32
 	Count          uint32
 	Bag            uint8
@@ -98,6 +99,9 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		return false
 	}
 	for _, grant := range grants {
+		if !grant.Stacked && grant.ItemGUID != 0 {
+			_ = s.sendItemCreate(uint64(grant.ItemGUID), grant.Entry, grant.Count, grant.Bag, uint8(grant.Slot))
+		}
 		if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, grant.Bag, grant.Slot, grant.Entry, grant.Count, grant.InventoryCount, grant.Stacked), true); err != nil {
 			return false
 		}
@@ -109,20 +113,27 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	if giverGUID != 0 {
-		entry := uint32((giverGUID >> 24) & 0x00FFFFFF)
-		if entry == 0 {
-			if creature := s.luaCreature(ctx, giverGUID); creature != nil {
-				entry = objectUint32OrZero(creature, "Entry")
-			}
+		var entry uint32
+		if creature := s.luaCreature(ctx, giverGUID); creature != nil {
+			entry = objectUint32OrZero(creature, "Entry")
 		}
+		if entry == 0 {
+			entry = uint32((giverGUID >> 24) & 0x00FFFFFF)
+		}
+		if entry == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			rawGUID := giverGUID & 0x00000000FFFFFFFF
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", rawGUID).Scan(&entry)
+		}
+		status := uint8(questDialogNone)
 		if entry != 0 {
 			if qStatus, err := s.questDialogStatus(ctx, entry); err == nil {
-				packet := protocol.NewBuffer(9)
-				packet.WriteU64(giverGUID)
-				packet.WriteU8(qStatus)
-				_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS), packet.Bytes(), true)
+				status = qStatus
 			}
 		}
+		packet := protocol.NewBuffer(9)
+		packet.WriteU64(giverGUID)
+		packet.WriteU8(status)
+		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS), packet.Bytes(), true)
 	}
 	s.gossip = nil
 	s.gossipClosed = true
@@ -310,7 +321,7 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 			}
 			inventory = append(inventory, inventoryRewardRecord{Bag: inventoryRewardBag, Slot: slot, ItemGUID: nextGUID, Entry: item.ID, Count: uint32(add)})
 			remaining -= add
-			grants = append(grants, questItemGrant{Entry: item.ID, Count: uint32(add), Bag: inventoryRewardBag, Slot: uint32(slot), InventoryCount: uint32(add)})
+			grants = append(grants, questItemGrant{ItemGUID: uint32(nextGUID), Entry: item.ID, Count: uint32(add), Bag: inventoryRewardBag, Slot: uint32(slot), InventoryCount: uint32(add)})
 		}
 	}
 	return grants, nil
