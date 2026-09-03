@@ -43,11 +43,14 @@ func TestBuildBagCreateBlockIncludesContentsAndContainer(t *testing.T) {
 	if value, err := reader.ReadPackedGUID(); err != nil || value != bagGUID {
 		t.Fatalf("bag guid=%x err=%v", value, err)
 	}
-	if value, err := reader.ReadU8(); err != nil || value != 1 {
+	if value, err := reader.ReadU8(); err != nil || value != 2 {
 		t.Fatalf("object type=%d err=%v", value, err)
 	}
-	if _, err := reader.ReadU8(); err != nil {
-		t.Fatal(err)
+	if flags, err := reader.ReadU16(); err != nil || flags != 0x0010 {
+		t.Fatalf("update flags=%x err=%v", flags, err)
+	}
+	if lowguid, err := reader.ReadU32(); err != nil || lowguid != uint32(bagGUID&0xFFFFFFFF) {
+		t.Fatalf("lowguid=%x err=%v", lowguid, err)
 	}
 	maskBlocks, err := reader.ReadU8()
 	if err != nil {

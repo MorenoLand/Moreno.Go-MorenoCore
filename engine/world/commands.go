@@ -21,9 +21,33 @@ func (s *session) sendPlayerUpdate() {
 	if s == nil || s.server == nil || s.player == nil {
 		return
 	}
-	updates, err := s.server.buildPlayerUpdate(*s.player)
-	if err == nil && updates != nil {
-		_ = s.write(updates.Opcode, updates.Payload.Bytes(), true)
+	if !s.playerLoaded {
+		updates, err := s.server.buildPlayerUpdate(*s.player)
+		if err == nil && updates != nil {
+			_ = s.write(updates.Opcode, updates.Payload.Bytes(), true)
+		}
+		return
+	}
+	fields := map[int]uint32{
+		unitFieldHealth:           s.player.Health,
+		unitFieldMaxHealth:        s.player.MaxHealth,
+		unitFieldLevel:            uint32(s.player.Level),
+		unitFieldFaction:          s.server.raceFaction(s.player.Race),
+		unitFieldFlags:            unitFlagPlayerControlled | s.player.UnitFlags,
+		unitFieldBytes1:           uint32(s.player.StandState),
+		unitFieldPlayerFlags:      s.player.PlayerFlags,
+		unitFieldPlayerFieldBytes: s.player.PlayerFieldBytes,
+		unitFieldXP:               s.player.XP,
+		unitFieldCoinage:          s.player.Money,
+		unitFieldMountDisplayID:   s.player.MountDisplayID,
+	}
+	for i, p := range s.player.Powers {
+		fields[unitFieldPower1+i] = p
+		fields[unitFieldMaxPower1+i] = s.player.MaxPowers[i]
+	}
+	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
+	if err == nil && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
 }
 

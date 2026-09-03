@@ -20,6 +20,7 @@ const (
 	objectFieldScale                            = 4
 	unitFieldBytes0                             = 23 // UNIT_FIELD_BYTES_0: Race, Class, Gender, PowerType
 	unitFieldHealth                             = 24
+	unitFieldPower1                             = 25
 	unitFieldLevel                              = 54
 	unitFieldFaction                            = 55
 	unitFieldFlags                              = 59
@@ -465,6 +466,15 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 			if isLanguageSkill(skill) && (value == 0 || max == 0) {
 				value = 300
 				max = 300
+			} else if isLevelScaledSkill(skill) {
+				expectedMax := uint16(math.Max(float64(state.Level)*5, 5))
+				if max > expectedMax || max == 0 {
+					max = expectedMax
+					if value > max {
+						value = max
+					}
+					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", value, max, state.GUID, skill)
+				}
 			}
 			skills = append(skills, playerSkill{Skill: skill, Step: 1, Value: value, Max: max})
 		}
@@ -500,6 +510,14 @@ func isLanguageSkill(skill uint16) bool {
 	return false
 }
 
+func isLevelScaledSkill(skill uint16) bool {
+	switch skill {
+	case 95, 162, 43, 44, 45, 46, 54, 55, 160, 172, 173, 176, 226, 228, 229, 473:
+		return true
+	}
+	return false
+}
+
 func isAllowedClassSkill(class uint8, skill uint16) bool {
 	switch skill {
 	case 293: // Plate Mail
@@ -511,24 +529,26 @@ func isAllowedClassSkill(class uint8, skill uint16) bool {
 	case 433: // Shield
 		return class == 1 || class == 2 || class == 7
 	// Talent / Class spell lines:
-	case 6, 8, 237: // Mage: Frost, Fire, Arcane
-		return class == 8
-	case 134, 573, 574: // Druid: Feral, Resto, Balance
-		return class == 11
-	case 354, 355, 593: // Warlock: Demo, Affliction, Destro
-		return class == 9
-	case 256, 257: // Priest: Discipline, Holy, Shadow
-		return class == 5
-	case 373, 374, 375: // Shaman: Enhancement, Resto, Elemental
-		return class == 7
-	case 253, 254, 255: // Rogue: Assassination, Combat, Subtlety
-		return class == 4
+	case 26, 256, 257: // Warrior: Arms, Fury, Protection
+		return class == 1
+	case 184, 267, 594: // Paladin: Retribution, Protection, Holy
+		return class == 2
 	case 50, 51, 163: // Hunter: Beast Mastery, Survival, Marksmanship
 		return class == 3
-	case 267, 184: // Paladin: Protection, Retribution
-		return class == 2
+	case 253, 254, 255: // Rogue: Assassination, Combat, Subtlety
+		return class == 4
+	case 56, 78, 613: // Priest: Holy, Shadow, Discipline
+		return class == 5
 	case 770, 771, 772: // Death Knight: Blood, Frost, Unholy
 		return class == 6
+	case 373, 374, 375: // Shaman: Enhancement, Resto, Elemental
+		return class == 7
+	case 6, 8, 237: // Mage: Frost, Fire, Arcane
+		return class == 8
+	case 354, 355, 593: // Warlock: Demo, Affliction, Destro
+		return class == 9
+	case 134, 573, 574: // Druid: Feral, Resto, Balance
+		return class == 11
 	}
 	return true
 }
@@ -572,8 +592,13 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[0] = uint32(state.GUID)
 	values[objectFieldType] = 0x19
 	values[objectFieldScale] = math.Float32bits(1)
-	values[unitFieldHealth] = state.Health
-	values[unitFieldLevel] = uint32(state.Level)
+	lvl := state.Level
+	if lvl < 1 {
+		lvl = 1
+	} else if lvl > 80 {
+		lvl = 80
+	}
+	values[unitFieldLevel] = uint32(lvl)
 	var powerType uint8
 	switch state.Class {
 	case 1: // Warrior
@@ -585,7 +610,15 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	default:
 		powerType = 0 // Mana
 	}
-	values[unitFieldBytes0] = uint32(state.Race) | uint32(state.Class)<<8 | uint32(state.Gender)<<16 | uint32(powerType)<<24
+	race := state.Race
+	if race < 1 {
+		race = 1
+	}
+	class := state.Class
+	if class < 1 {
+		class = 1
+	}
+	values[unitFieldBytes0] = uint32(race) | uint32(class)<<8 | uint32(state.Gender)<<16 | uint32(powerType)<<24
 	values[unitFieldBytes1] = uint32(state.StandState)
 	values[unitFieldFaction] = s.raceFaction(state.Race)
 	values[unitFieldFlags] = unitFlagPlayerControlled | state.UnitFlags
@@ -657,11 +690,12 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 			}
 		}
 	}
+	values[unitFieldHealth] = maxUint32(state.Health, 1)
+	values[unitFieldMaxHealth] = maxUint32(state.MaxHealth, 1)
 	for i, power := range state.Powers {
-		values[unitFieldHealth+1+i] = power
+		values[unitFieldPower1+i] = power
 		values[unitFieldMaxPower1+i] = state.MaxPowers[i]
 	}
-	values[unitFieldMaxHealth] = state.MaxHealth
 
 	// Combat & Attack speeds (prevents client div-by-zero crashes in PaperDollFrame_UpdateStats)
 	values[unitFieldRangedAttackTime] = 2000
@@ -725,6 +759,11 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	if err := mask.Set(1); err != nil {
 		return nil, err
 	}
+	_ = mask.Set(unitFieldLevel)
+	_ = mask.Set(unitFieldBytes0)
+	_ = mask.Set(unitFieldMaxLevel)
+	_ = mask.Set(unitFieldNextLevelXP)
+	_ = mask.Set(unitFieldXP)
 	block := protocol.NewBuffer(256)
 	block.WriteU8(protocol.UpdateCreateObject2)
 	block.WritePackedGUID(state.GUID)
@@ -857,20 +896,12 @@ func buildItemCreateBlockForLocation(fullGUID uint64, itemEntry, count uint32, o
 	if containerSlots > 36 {
 		containerSlots = 36
 	}
-	values := make([]uint32, 68+containerSlots*2)
-	values[0] = uint32(fullGUID)
-	values[1] = uint32(fullGUID >> 32)
-	values[2] = 0x03 // TYPEID_ITEM
-	values[3] = itemEntry
-	values[4] = math.Float32bits(1.0)
-	values[6] = uint32(ownerGUID)
-	values[7] = uint32(ownerGUID >> 32)
-	values[8] = uint32(containedGUID)
-	values[9] = uint32(containedGUID >> 32)
-	values[14] = count
-	values[16] = 100 // Durability
-	values[17] = 100 // MaxDurability
+	var values []uint32
+	var objectTypeId uint8
 	if containerSlots > 0 {
+		values = make([]uint32, 66+containerSlots*2)
+		objectTypeId = 2 // TYPEID_CONTAINER
+		values[2] = 0x07 // TYPE_OBJECT (1) | TYPE_ITEM (4) | TYPE_CONTAINER (2)
 		values[64] = containerSlots
 		for slot, itemGUID := range contents {
 			if slot >= containerSlots {
@@ -879,7 +910,22 @@ func buildItemCreateBlockForLocation(fullGUID uint64, itemEntry, count uint32, o
 			values[66+slot*2] = uint32(itemGUID)
 			values[67+slot*2] = uint32(itemGUID >> 32)
 		}
+	} else {
+		values = make([]uint32, 64)
+		objectTypeId = 1 // TYPEID_ITEM
+		values[2] = 0x05 // TYPE_OBJECT (1) | TYPE_ITEM (4)
 	}
+	values[0] = uint32(fullGUID)
+	values[1] = uint32(fullGUID >> 32)
+	values[3] = itemEntry
+	values[4] = math.Float32bits(1.0)
+	values[6] = uint32(ownerGUID)
+	values[7] = uint32(ownerGUID >> 32)
+	values[8] = uint32(containedGUID)
+	values[9] = uint32(containedGUID >> 32)
+	values[14] = count
+	values[60] = 100 // ITEM_FIELD_DURABILITY = 60
+	values[61] = 100 // ITEM_FIELD_MAXDURABILITY = 61
 
 	mask := protocol.NewUpdateMask(len(values))
 	for idx, val := range values {
@@ -892,8 +938,9 @@ func buildItemCreateBlockForLocation(fullGUID uint64, itemEntry, count uint32, o
 	block := protocol.NewBuffer(128)
 	block.WriteU8(protocol.UpdateCreateObject2)
 	block.WritePackedGUID(fullGUID)
-	block.WriteU8(1) // TYPEID_ITEM
-	block.WriteU8(0) // update flags
+	block.WriteU8(objectTypeId)
+	block.WriteU16(0x0010)                        // update flags: UPDATEFLAG_LOWGUID (0x0010)
+	block.WriteU32(uint32(fullGUID & 0xFFFFFFFF)) // lowguid
 	block.WriteU8(uint8(mask.BlockCount()))
 	mask.AppendTo(block)
 	for i := 0; i < len(values); i++ {
@@ -916,18 +963,17 @@ func (s *session) sendItemCreate(itemGUID uint64, itemEntry, count uint32, bag, 
 	if err := s.write(packet.Opcode, packet.Payload.Bytes(), true); err != nil {
 		return err
 	}
-	packSlotField := 364 + int(slot-23)*2
-	if slot < 23 {
-		packSlotField = 318 + int(slot)*2
-	}
-	fields := map[int]uint32{
-		packSlotField:     uint32(fullGUID),
-		packSlotField + 1: uint32(fullGUID >> 32),
-		unitFieldCoinage:  s.player.Money,
-	}
-	playerPacket, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
-	if err == nil && playerPacket != nil {
-		_ = s.write(playerPacket.Opcode, playerPacket.Payload.Bytes(), true)
+	if bag == 0 || bag == 255 {
+		invField := 324 + int(slot)*2
+		fields := map[int]uint32{
+			invField:         uint32(fullGUID),
+			invField + 1:     uint32(fullGUID >> 32),
+			unitFieldCoinage: s.player.Money,
+		}
+		playerPacket, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
+		if err == nil && playerPacket != nil {
+			_ = s.write(playerPacket.Opcode, playerPacket.Payload.Bytes(), true)
+		}
 	}
 	return nil
 }
@@ -1010,22 +1056,9 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		updates.AddUpdateBlock(block)
 
 		if bag == 0 {
-			if slot >= 23 && slot <= 38 {
-				// PLAYER_FIELD_PACK_SLOT_1 = UNIT_END + 0xDE = 148 + 222 = 370
-				packField := 370 + int(slot-23)*2
-				fields[packField] = uint32(fullGUID)
-				fields[packField+1] = uint32(fullGUID >> 32)
-			} else if slot < 23 {
-				// PLAYER_FIELD_INV_SLOT_HEAD = UNIT_END + 0xB0 = 148 + 176 = 324
-				invField := 324 + int(slot)*2
-				fields[invField] = uint32(fullGUID)
-				fields[invField+1] = uint32(fullGUID >> 32)
-			} else if slot >= 39 && slot <= 66 {
-				// PLAYER_FIELD_BANK_SLOT_1 = UNIT_END + 0xFE = 148 + 254 = 402
-				bankField := 402 + int(slot-39)*2
-				fields[bankField] = uint32(fullGUID)
-				fields[bankField+1] = uint32(fullGUID >> 32)
-			}
+			invField := 324 + int(slot)*2
+			fields[invField] = uint32(fullGUID)
+			fields[invField+1] = uint32(fullGUID >> 32)
 		}
 	}
 	if updates.HasData() {
