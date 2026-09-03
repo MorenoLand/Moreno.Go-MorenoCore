@@ -42,25 +42,36 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	if target.Health != 0 {
 		return s.sendLootError(targetGUID, 0) == nil
 	}
-	creatureEntry := uint32((targetGUID >> 24) & 0xFFFFFF)
+	guid := uint32(targetGUID & 0x00FFFFFF)
+	creatureEntry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+	stdKey := creatureWorldGUID(guid, creatureEntry)
+
 	s.server.lootMu.Lock()
 	if s.server.creatureLoot == nil {
 		s.server.creatureLoot = make(map[uint64]*activeLootState)
 	}
 	loot := s.server.creatureLoot[targetGUID]
+	if loot == nil {
+		loot = s.server.creatureLoot[stdKey]
+	}
 	newLoot := loot == nil
 	if newLoot {
 		loot = &activeLootState{TargetGUID: targetGUID, MapID: target.Map, LootType: 1, Items: make(map[uint8]lootItem)}
 		s.server.creatureLoot[targetGUID] = loot
+		s.server.creatureLoot[stdKey] = loot
 	}
 	s.server.lootMu.Unlock()
 	if !newLoot {
 		s.activeLoot = loot
 		return s.sendLootResponse(loot) == nil
 	}
-	// Query min/max gold from creature_template
-	var minGold, maxGold int64
+	// Query min/max gold and lootid from creature_template
+	var minGold, maxGold, lootID int64
 	_ = wdb.QueryRowContext(ctx, "SELECT minGold, maxGold FROM creature_template WHERE entry = ? LIMIT 1", creatureEntry).Scan(&minGold, &maxGold)
+	_ = wdb.QueryRowContext(ctx, "SELECT lootid FROM creature_template WHERE entry = ? LIMIT 1", creatureEntry).Scan(&lootID)
+	if lootID == 0 {
+		lootID = int64(creatureEntry)
+	}
 	if maxGold > minGold && maxGold > 0 {
 		loot.Money = uint32(minGold + int64(rand.Intn(int(maxGold-minGold+1))))
 	} else if minGold > 0 {
@@ -70,7 +81,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0)
 		FROM creature_loot_template AS l
 		LEFT JOIN item_template AS t ON t.entry = l.Item
-		WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, creatureEntry)
+		WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, lootID)
 	if err == nil {
 		defer rows.Close()
 		var slot uint8 = 0
@@ -140,15 +151,19 @@ func (s *session) sendLootError(guid uint64, code uint8) error {
 }
 
 func (s *session) clearCreatureLoot(loot *activeLootState) {
-	if loot == nil {
+	if loot == nil || s.server == nil {
 		return
 	}
+	guid := uint32(loot.TargetGUID & 0x00FFFFFF)
+	creatureEntry := uint32((loot.TargetGUID >> 24) & 0x00FFFFFF)
+	stdKey := creatureWorldGUID(guid, creatureEntry)
+
 	s.server.lootMu.Lock()
-	if current := s.server.creatureLoot[loot.TargetGUID]; current == loot {
-		delete(s.server.creatureLoot, loot.TargetGUID)
-	}
+	delete(s.server.creatureLoot, loot.TargetGUID)
+	delete(s.server.creatureLoot, stdKey)
 	s.server.lootMu.Unlock()
 	s.server.broadcastCreatureValuesUpdate(loot.MapID, loot.TargetGUID, map[int]uint32{unitFieldDynamicFlags: 0})
+	s.server.broadcastCreatureValuesUpdate(loot.MapID, stdKey, map[int]uint32{unitFieldDynamicFlags: 0})
 }
 
 func (s *session) handleLootMoney(ctx context.Context) bool {
@@ -167,6 +182,9 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_MONEY_NOTIFY), notify.Bytes(), true)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_CLEAR_MONEY), nil, true)
 	s.sendPlayerUpdate()
+	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 {
+		s.clearCreatureLoot(s.activeLoot)
+	}
 	s.debug("loot money collected", "account", s.accountName, "copper", copper)
 	return true
 }
@@ -242,6 +260,9 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	_ = s.sendInventoryItems(ctx)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(s.playerGUID, 0, uint32(freeSlot), it.ItemEntry, it.Count, uint32(inventoryCount)), true)
 	s.sendPlayerUpdate()
+	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 {
+		s.clearCreatureLoot(s.activeLoot)
+	}
 	s.debug("loot item stored", "account", s.accountName, "item", it.ItemEntry, "slot", freeSlot)
 	return true
 }
