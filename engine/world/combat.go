@@ -29,7 +29,14 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 	}
 	s.server.motionMu.Lock()
 	if s.server.creatureMotion != nil {
-		if motion := s.server.creatureMotion[guid]; motion != nil {
+		motion := s.server.creatureMotion[guid]
+		if motion == nil {
+			low := uint32(guid & 0x00FFFFFF)
+			entry := uint32((guid >> 24) & 0x00FFFFFF)
+			stdKey := creatureWorldGUID(low, entry)
+			motion = s.server.creatureMotion[stdKey]
+		}
+		if motion != nil {
 			target := combatTarget{
 				GUID:       guid,
 				Map:        motion.Map,
