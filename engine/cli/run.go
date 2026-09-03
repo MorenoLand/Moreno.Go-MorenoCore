@@ -62,6 +62,11 @@ func Run(kind *service.Kind) int {
 		return 1
 	}
 	logger := newLogger(*debug)
+	if selectedConfig != "" {
+		logger.Info("using configuration file", "path", selectedConfig)
+	} else {
+		logger.Warn("no configuration file found, using built-in defaults")
+	}
 	if len(c.UnrecognizedKeys) > 0 {
 		logger.Warn("configuration contains unrecognized or unmapped keys", "unmapped_count", len(c.UnrecognizedKeys))
 	}
@@ -123,6 +128,11 @@ func RunCombined() int {
 		return 1
 	}
 	logger := newLogger(*debug)
+	if selectedConfig != "" {
+		logger.Info("using configuration file", "path", selectedConfig)
+	} else {
+		logger.Warn("no configuration file found, using built-in defaults")
+	}
 	if len(c.UnrecognizedKeys) > 0 {
 		logger.Warn("configuration contains unrecognized or unmapped keys", "unmapped_count", len(c.UnrecognizedKeys))
 	}
