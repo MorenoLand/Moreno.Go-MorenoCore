@@ -237,22 +237,32 @@ func (s *session) syncEquipmentCache(ctx context.Context) {
 	}
 	db := s.server.CharactersStore.DB
 	slots := make([]uint32, equipSlotEnd)
-	rows, err := db.QueryContext(ctx, `SELECT ci.slot, ii.itemEntry FROM character_inventory AS ci
+	enchants := make([]uint32, equipSlotEnd)
+	rows, err := db.QueryContext(ctx, `SELECT ci.slot, ii.itemEntry, COALESCE(ii.enchantments, '') FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ?`, s.playerGUID, equipSlotEnd)
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
 			var slot, entry int64
-			if err := rows.Scan(&slot, &entry); err == nil && slot < int64(len(slots)) {
+			var encStr string
+			if err := rows.Scan(&slot, &entry, &encStr); err == nil && slot < int64(len(slots)) {
 				slots[slot] = uint32(entry)
+				if encStr != "" {
+					fields := strings.Fields(encStr)
+					if len(fields) > 0 {
+						if encID, pErr := strconv.ParseUint(fields[0], 10, 32); pErr == nil {
+							enchants[slot] = uint32(encID)
+						}
+					}
+				}
 			}
 		}
 	}
 	parts := make([]string, equipSlotEnd*2)
 	for i := 0; i < int(equipSlotEnd); i++ {
 		parts[i*2] = strconv.FormatUint(uint64(slots[i]), 10)
-		parts[i*2+1] = "0"
+		parts[i*2+1] = strconv.FormatUint(uint64(enchants[i]), 10)
 	}
 	cacheStr := strings.Join(parts, " ")
 	s.player.Equipment = cacheStr
