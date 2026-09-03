@@ -88,6 +88,7 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	nextSlot := 67 + purchasedCount
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, 0)", s.playerGUID, nextSlot)
+	s.player.BankBagSlots = uint8(purchasedCount + 1)
 
 	res.WriteU32(0) // ERR_BANKSLOT_OK
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_BANK_SLOT_RESULT), res.Bytes(), true)
