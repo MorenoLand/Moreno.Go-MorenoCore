@@ -239,6 +239,7 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	removed.WriteU8(lootSlot)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), removed.Bytes(), true)
 	_ = s.sendItemCreate(uint64(nextGUID), it.ItemEntry, it.Count, 0, freeSlot)
+	_ = s.sendInventoryItems(ctx)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(s.playerGUID, 0, uint32(freeSlot), it.ItemEntry, it.Count, uint32(inventoryCount)), true)
 	s.sendPlayerUpdate()
 	s.debug("loot item stored", "account", s.accountName, "item", it.ItemEntry, "slot", freeSlot)

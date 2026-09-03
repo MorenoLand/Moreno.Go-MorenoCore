@@ -211,19 +211,37 @@ func (s *session) grantXP(ctx context.Context, amount uint32) {
 			break
 		}
 		s.player.XP -= needed
+		oldHP := s.player.MaxHealth
+		oldMana := s.player.MaxPowers[0]
+		oldStats := s.player.Stats
 		s.player.Level++
-		s.player.MaxHealth += 60
-		if s.player.Health > s.player.MaxHealth {
-			s.player.Health = s.player.MaxHealth
-		} else {
-			s.player.Health = s.player.MaxHealth
+		_ = s.calculatePlayerStats(ctx, s.player)
+		s.player.Health = s.player.MaxHealth
+		if len(s.player.MaxPowers) > 0 {
+			s.player.Powers[0] = s.player.MaxPowers[0]
 		}
-		// SMSG_LEVELUP_INFO: level, talent points, and per-power gains.
-		levelPacket := protocol.NewBuffer(40)
+		healthDelta := uint32(0)
+		if s.player.MaxHealth > oldHP {
+			healthDelta = s.player.MaxHealth - oldHP
+		}
+		manaDelta := uint32(0)
+		if s.player.MaxPowers[0] > oldMana {
+			manaDelta = s.player.MaxPowers[0] - oldMana
+		}
+		// SMSG_LEVELUP_INFO: 56 bytes (level, healthDelta, 7 powerDeltas, 5 statDeltas)
+		levelPacket := protocol.NewBuffer(56)
 		levelPacket.WriteU32(uint32(s.player.Level))
-		levelPacket.WriteU32(1) // talent points
-		for i := 0; i < 7; i++ {
-			levelPacket.WriteU32(0)
+		levelPacket.WriteU32(healthDelta)
+		levelPacket.WriteU32(manaDelta) // PowerDelta[0] (Mana)
+		for i := 1; i < 7; i++ {
+			levelPacket.WriteU32(0) // PowerDelta[1..6]
+		}
+		for i := 0; i < 5; i++ {
+			statDelta := uint32(0)
+			if s.player.Stats[i] > oldStats[i] {
+				statDelta = s.player.Stats[i] - oldStats[i]
+			}
+			levelPacket.WriteU32(statDelta) // StatDelta[0..4]: Str, Agi, Sta, Int, Spi
 		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_LEVELUP_INFO), levelPacket.Bytes(), true)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
