@@ -349,14 +349,21 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
 				motion.Moving = true
 				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+				motion.LastAttack = motion.MoveEnds
 			}
 			return
+		}
+		if motion.Moving && now.Before(motion.MoveEnds) {
+			return // Still in transit towards target; cannot attack yet
 		}
 		// In melee range (<= 3.0 yards): attack player
 		motion.Moving = false
 		attackTime := time.Duration(motion.AttackTime) * time.Millisecond
 		if attackTime <= 0 {
 			attackTime = 2 * time.Second
+		}
+		if motion.LastAttack.IsZero() {
+			motion.LastAttack = now
 		}
 		if now.Sub(motion.LastAttack) >= attackTime {
 			lvl := float64(motion.Level)
