@@ -303,7 +303,7 @@ func (s *session) handleRepopRequest(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	if s.player.Health > 0 || s.player.PlayerFlags&playerFlagGhost != 0 {
+	if s.player.Health > 0 || s.player.PlayerFlags&playerFlagGhost != 0 || s.hasAura(58549) {
 		return true
 	}
 	s.buildPlayerRepop(ctx)
