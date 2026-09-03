@@ -108,7 +108,8 @@ func (s *session) handleCmdGM(args []string) {
 	case "on":
 		if s.player != nil {
 			s.player.PlayerFlags |= playerFlagGM
-			s.player.ExtraFlags |= playerExtraGMOn
+			s.player.ExtraFlags |= playerExtraGMOn | playerExtraGMChat
+			s.gmChat = true
 			s.persistExtraFlags()
 			s.sendPlayerUpdate()
 			s.refreshNearbyObjects(context.Background())
