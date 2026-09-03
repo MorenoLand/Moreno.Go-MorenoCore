@@ -2,8 +2,10 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -178,5 +180,57 @@ func TestItemsQuestsAndSpells(t *testing.T) {
 	if !sess.handleSpiritHealerActivate(ctx, nil) ||
 		!sess.handleCorpseQuery(ctx, nil) {
 		t.Fatal("death query handlers returned false")
+	}
+}
+
+func TestTitlePersistenceAndKnownTitles(t *testing.T) {
+	db, err := sql.Open("sqlite", "file::memory:?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`CREATE TABLE characters (
+		guid INTEGER PRIMARY KEY, account INTEGER, xp INTEGER, money INTEGER, health INTEGER,
+		power1 INTEGER, power2 INTEGER, power3 INTEGER, power4 INTEGER, power5 INTEGER, power6 INTEGER, power7 INTEGER,
+		cinematic INTEGER, knownCurrencies INTEGER, watchedFaction INTEGER, ammoId INTEGER, actionBars INTEGER,
+		chosenTitle INTEGER, knownTitles TEXT
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec("INSERT INTO characters (guid, account, xp, money, health, power1, power2, power3, power4, power5, power6, power7, cinematic, knownCurrencies, watchedFaction, ammoId, actionBars, chosenTitle, knownTitles) VALUES (1, 1, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 15, '1 2 4 8 16 32')")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: charStore}
+	sess := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1}}
+	ctx := context.Background()
+
+	sess.accountID = 1
+	// 1. Test loadOptionalPlayerState loads chosenTitle and knownTitles
+	state := playerState{GUID: 1}
+	if err := sess.loadOptionalPlayerState(ctx, &state); err != nil {
+		t.Fatal(err)
+	}
+	if state.ChosenTitle != 15 {
+		t.Fatalf("expected chosenTitle=15, got %d", state.ChosenTitle)
+	}
+	if state.KnownTitles[0] != 1 || state.KnownTitles[1] != 2 || state.KnownTitles[5] != 32 {
+		t.Fatalf("unexpected knownTitles: %+v", state.KnownTitles)
+	}
+
+	// 2. Test handleSetTitle updates DB
+	tBuf := protocol.NewBuffer(4)
+	tBuf.WriteI32(28)
+	if !sess.handleSetTitle(ctx, tBuf.Bytes()) {
+		t.Fatal("handleSetTitle failed")
+	}
+	var dbChosen int
+	_ = db.QueryRow("SELECT chosenTitle FROM characters WHERE guid = 1").Scan(&dbChosen)
+	if dbChosen != 28 {
+		t.Fatalf("expected db chosenTitle=28, got %d", dbChosen)
 	}
 }

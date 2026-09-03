@@ -41,6 +41,7 @@ const (
 	unitFieldNextLevelXP                        = 635
 	unitFieldCoinage                            = 1170
 	unitFieldMaxLevel                           = 1279
+	playerFieldKnownTitles                      = 626
 	unitFieldKnownCurrencies                    = 632
 	unitFieldWatchedFaction                     = 1230
 	unitFieldChosenTitle                        = 1195
@@ -161,6 +162,7 @@ type playerState struct {
 	WatchedFaction   uint32
 	AmmoID           uint32
 	ChosenTitle      uint32
+	KnownTitles      [6]uint32
 	ActionBars       uint32
 	PassOnGroupLoot  bool
 	Skills           []playerSkill
@@ -638,6 +640,21 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 	state.TalentGroupsCount = uint8(specsCount)
 	state.ActiveTalentGroup = uint8(activeSpec)
 
+	var chosenTitle int64
+	var knownTitlesStr sql.NullString
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(chosenTitle, 0), knownTitles FROM characters WHERE guid = ?", state.GUID).Scan(&chosenTitle, &knownTitlesStr)
+	if chosenTitle > 0 {
+		state.ChosenTitle = uint32(chosenTitle)
+	}
+	if knownTitlesStr.Valid && knownTitlesStr.String != "" {
+		parts := strings.Fields(knownTitlesStr.String)
+		for i := 0; i < len(parts) && i < 6; i++ {
+			if val, err := strconv.ParseUint(parts[i], 10, 32); err == nil {
+				state.KnownTitles[i] = uint32(val)
+			}
+		}
+	}
+
 	gRows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT talentGroup, glyph1, glyph2, glyph3, glyph4, glyph5, glyph6 FROM character_glyphs WHERE guid = ?", state.GUID)
 	if err == nil {
 		for gRows.Next() {
@@ -918,6 +935,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldKnownCurrencies] = state.KnownCurrency
 	values[unitFieldWatchedFaction] = state.WatchedFaction
 	values[unitFieldChosenTitle] = state.ChosenTitle
+	for i := 0; i < 6; i++ {
+		values[playerFieldKnownTitles+i] = state.KnownTitles[i]
+	}
 	values[unitFieldAmmoID] = state.AmmoID
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		entry := state.QuestLog[slot]
@@ -1452,6 +1472,15 @@ func (s *session) handleSetTitle(ctx context.Context, payload []byte) bool {
 		s.player.ChosenTitle = 0
 	} else {
 		s.player.ChosenTitle = uint32(title)
+	}
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET chosenTitle = ? WHERE guid = ?", s.player.ChosenTitle, s.playerGUID)
+	}
+	fields := map[int]uint32{
+		unitFieldChosenTitle: s.player.ChosenTitle,
+	}
+	if pVal, pErr := s.server.buildPlayerValuesUpdate(s.playerGUID, fields); pErr == nil && pVal != nil {
+		_ = s.write(pVal.Opcode, pVal.Payload.Bytes(), true)
 	}
 	s.sendPlayerUpdate()
 	return true
