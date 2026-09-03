@@ -194,6 +194,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	// Reference SpellEffects.cpp:3858-3874: Spell 7266 (Duel)
+	if spellID == 7266 && targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
+		if partner := s.server.findSessionByGUID(targetGUID); partner != nil && partner.player != nil {
+			s.duelPartner = targetGUID
+			partner.duelPartner = s.playerGUID
+			arbiterGUID := uint64(s.playerGUID) | (uint64(0xF110) << 48)
+			reqBuf := protocol.NewBuffer(16)
+			reqBuf.WriteU64(arbiterGUID)
+			reqBuf.WriteU64(s.playerGUID)
+			_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_REQUESTED), reqBuf.Bytes(), true)
+			_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_REQUESTED), reqBuf.Bytes(), true)
+		}
+	}
+
 	// Apply spell effects
 	applyEffects := func(effCtx context.Context) {
 		for _, eff := range spell.Effects {
