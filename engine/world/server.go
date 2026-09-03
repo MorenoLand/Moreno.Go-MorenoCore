@@ -101,6 +101,8 @@ type session struct {
 	rooted             bool
 	attackTarget       uint64
 	lastSwing          time.Time
+	lastRegenTick      time.Time
+	lastCastTime       time.Time
 	logoutHook         bool
 	gossip             *gossipMenuState
 	gossipClosed       bool
@@ -184,11 +186,13 @@ func (s *Server) runWorldTick(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			now := time.Now()
 			s.updateActiveCreatures(ctx)
 			s.updatePlayerCombat(ctx)
-			s.processCreatureRespawns(ctx, time.Now())
-			s.updatePlayerDeathTimers(ctx, time.Now())
-			s.updateSpiritHealerResurrectWaves(ctx, time.Now())
+			s.updatePlayerRegeneration(ctx, now)
+			s.processCreatureRespawns(ctx, now)
+			s.updatePlayerDeathTimers(ctx, now)
+			s.updateSpiritHealerResurrectWaves(ctx, now)
 		}
 	}
 }
@@ -216,10 +220,120 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 			sess.attackTarget = 0
 			continue
 		}
+		swingSpeed := 2 * time.Second
+		if sess.player.AttackTime > 0 {
+			swingSpeed = time.Duration(sess.player.AttackTime) * time.Millisecond
+		}
 		if distance3D(sess.player.X, sess.player.Y, sess.player.Z, target.X, target.Y, target.Z) <= meleeAttackRange+2.0 {
-			if now.Sub(sess.lastSwing) >= 2*time.Second {
+			if now.Sub(sess.lastSwing) >= swingSpeed {
 				sess.lastSwing = now
 				sess.executeMeleeSwing(ctx, target)
+			}
+		}
+	}
+}
+
+func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
+	s.sessionsMu.RLock()
+	var activeSessions []*session
+	for sess := range s.sessions {
+		if sess.playerLoaded && sess.player != nil && sess.player.Health > 0 {
+			activeSessions = append(activeSessions, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+
+	for _, sess := range activeSessions {
+		if sess.lastRegenTick.IsZero() {
+			sess.lastRegenTick = now
+			continue
+		}
+		if now.Sub(sess.lastRegenTick) < 2*time.Second {
+			continue
+		}
+		sess.lastRegenTick = now
+
+		p := sess.player
+		if p == nil {
+			continue
+		}
+
+		inCombat := sess.attackTarget != 0
+		fields := make(map[int]uint32)
+		changed := false
+
+		// 1. Health regeneration (out of combat)
+		if !inCombat && p.Health < p.MaxHealth {
+			spirit := p.Stats[4]
+			gain := uint32(max(1, int(spirit)/2))
+			if gain < uint32(p.MaxHealth/25) {
+				gain = uint32(p.MaxHealth / 25)
+			}
+			if gain < 2 {
+				gain = 2
+			}
+			if p.Health+gain >= p.MaxHealth {
+				p.Health = p.MaxHealth
+			} else {
+				p.Health += gain
+			}
+			fields[unitFieldHealth] = p.Health
+			changed = true
+		}
+
+		// 2. Power regeneration
+		switch p.Class {
+		case 1: // Warrior: rage decays out of combat
+			if !inCombat && p.Powers[1] > 0 {
+				if p.Powers[1] > 20 {
+					p.Powers[1] -= 20
+				} else {
+					p.Powers[1] = 0
+				}
+				fields[unitFieldPower1+1] = p.Powers[1]
+				changed = true
+			}
+		case 4: // Rogue: energy regenerates 20 per 2s tick
+			if p.Powers[3] < 100 {
+				if p.Powers[3]+20 >= 100 {
+					p.Powers[3] = 100
+				} else {
+					p.Powers[3] += 20
+				}
+				fields[unitFieldPower1+3] = p.Powers[3]
+				changed = true
+			}
+		case 6: // Death Knight: runic power decays out of combat
+			if !inCombat && p.Powers[6] > 0 {
+				if p.Powers[6] > 30 {
+					p.Powers[6] -= 30
+				} else {
+					p.Powers[6] = 0
+				}
+				fields[unitFieldPower1+6] = p.Powers[6]
+				changed = true
+			}
+		default: // Mana classes (Paladin, Hunter, Priest, Shaman, Mage, Warlock, Druid)
+			if p.Powers[0] < p.MaxPowers[0] {
+				// Outside 5-second rule
+				if now.Sub(sess.lastCastTime) >= 5*time.Second {
+					spirit := p.Stats[4]
+					intellect := p.Stats[3]
+					gain := uint32(max(5, int(spirit)/2+int(intellect)/10))
+					if p.Powers[0]+gain >= p.MaxPowers[0] {
+						p.Powers[0] = p.MaxPowers[0]
+					} else {
+						p.Powers[0] += gain
+					}
+					fields[unitFieldPower1] = p.Powers[0]
+					changed = true
+				}
+			}
+		}
+
+		if changed && len(fields) > 0 {
+			if packet, err := s.buildPlayerValuesUpdate(sess.playerGUID, fields); err == nil && packet != nil {
+				_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
 			}
 		}
 	}

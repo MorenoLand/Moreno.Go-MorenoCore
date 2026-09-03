@@ -179,8 +179,23 @@ type playerState struct {
 	HomebindX        float32
 	HomebindY        float32
 	HomebindZ        float32
-	Reputations      []playerReputation
-	Talents          map[uint32]uint8
+	Reputations       []playerReputation
+	Talents           map[uint32]uint8
+	Stats             [5]uint32
+	Armor             uint32
+	Block             uint32
+	AttackPower       uint32
+	RangedAttackPower uint32
+	MinDamage         float32
+	MaxDamage         float32
+	AttackTime        uint32
+	MinOffhandDamage  float32
+	MaxOffhandDamage  float32
+	OffhandAttackTime uint32
+	MinRangedDamage   float32
+	MaxRangedDamage   float32
+	RangedAttackTime  uint32
+	CombatRatings     [25]uint32
 }
 
 type playerReputation struct {
@@ -297,49 +312,222 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	wg.Wait()
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
-	_ = s.loadClassLevelStats(ctx, &state)
+	_ = s.calculatePlayerStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
 	s.player = &state
 	return state, nil
 }
 
-func (s *session) loadClassLevelStats(ctx context.Context, state *playerState) error {
-	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) error {
+	if state == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return nil
 	}
-	var baseHealth, baseMana int64
-	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT basehp, basemana FROM player_classlevelstats WHERE class = ? AND level = ?", state.Class, state.Level).Scan(&baseHealth, &baseMana)
-	if err != nil && !missingTable(err) && !isMissingColumn(err) {
-		return err
+	lvl := state.Level
+	if lvl < 1 {
+		lvl = 1
+	} else if lvl > 80 {
+		lvl = 80
 	}
+	// 1. Base stats from player_levelstats
+	var str, agi, sta, inte, spi int64
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT str, agi, sta, inte, spi FROM player_levelstats WHERE race = ? AND class = ? AND level = ?", state.Race, state.Class, lvl).Scan(&str, &agi, &sta, &inte, &spi)
+	if err != nil {
+		str = int64(20 + int(lvl)*2)
+		agi = int64(20 + int(lvl)*2)
+		sta = int64(20 + int(lvl)*2)
+		inte = int64(20 + int(lvl)*2)
+		spi = int64(20 + int(lvl)*2)
+	}
+	state.Stats[0] = uint32(str)
+	state.Stats[1] = uint32(agi)
+	state.Stats[2] = uint32(sta)
+	state.Stats[3] = uint32(inte)
+	state.Stats[4] = uint32(spi)
+
+	// Base health and base mana from player_classlevelstats
+	var baseHealth, baseMana int64
+	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT basehp, basemana FROM player_classlevelstats WHERE class = ? AND level = ?", state.Class, lvl).Scan(&baseHealth, &baseMana)
 	if baseHealth <= 0 {
-		baseHealth = int64(20 + int(state.Level)*15)
+		baseHealth = int64(20 + int(lvl)*15)
 	}
 	if baseMana <= 0 {
-		baseMana = int64(80 + int(state.Level)*20)
+		baseMana = int64(80 + int(lvl)*20)
 	}
 
-	// In WoW 3.3.5a (TrinityCore StatSystem.cpp:309-325):
-	// MaxHealth = BaseHealth + (Stamina * 10)
-	// MaxMana = BaseMana + (Intellect * 15)
-	var str, agi, sta, inte, spi int64
-	errStats := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT str, agi, sta, inte, spi FROM player_levelstats WHERE race = ? AND class = ? AND level = ?", state.Race, state.Class, state.Level).Scan(&str, &agi, &sta, &inte, &spi)
-	if errStats != nil {
-		sta = int64(18 + int(state.Level)*2)
-		inte = int64(20 + int(state.Level)*2)
+	// Default unarmed weapon speeds and damages
+	state.MinDamage = 1.0
+	state.MaxDamage = 2.0
+	state.AttackTime = 2000
+	state.MinOffhandDamage = 1.0
+	state.MaxOffhandDamage = 2.0
+	state.OffhandAttackTime = 2000
+	state.MinRangedDamage = 1.0
+	state.MaxRangedDamage = 2.0
+	state.RangedAttackTime = 2000
+	state.Armor = 0
+	state.Block = 0
+	state.AttackPower = 0
+	state.RangedAttackPower = 0
+	for i := range state.CombatRatings {
+		state.CombatRatings[i] = 0
 	}
 
-	totalHealth := uint32(baseHealth + sta*10)
-	totalMana := uint32(baseMana + inte*15)
+	// 2. Iterate equipped items (slots 0..18)
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, it.armor, it.block, it.delay, it.dmg_min1, it.dmg_max1,
+			it.stat_type1, it.stat_value1, it.stat_type2, it.stat_value2, it.stat_type3, it.stat_value3, it.stat_type4, it.stat_value4,
+			it.stat_type5, it.stat_value5, it.stat_type6, it.stat_value6, it.stat_type7, it.stat_value7, it.stat_type8, it.stat_value8,
+			it.stat_type9, it.stat_value9, it.stat_type10, it.stat_value10
+			FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			JOIN item_template AS it ON it.entry = ii.itemEntry
+			WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < 19`, state.GUID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var slot, armor, block, delay int64
+				var minDmg, maxDmg float64
+				var st [10]int64
+				var sv [10]int64
+				if scanErr := rows.Scan(&slot, &armor, &block, &delay, &minDmg, &maxDmg,
+					&st[0], &sv[0], &st[1], &sv[1], &st[2], &sv[2], &st[3], &sv[3],
+					&st[4], &sv[4], &st[5], &sv[5], &st[6], &sv[6], &st[7], &sv[7],
+					&st[8], &sv[8], &st[9], &sv[9]); scanErr != nil {
+					continue
+				}
+				if armor > 0 {
+					state.Armor += uint32(armor)
+				}
+				if block > 0 {
+					state.Block += uint32(block)
+				}
+				// Weapon slots: 15 = Main Hand, 16 = Off Hand, 17 = Ranged
+				if slot == 15 {
+					if minDmg > 0 {
+						state.MinDamage = float32(minDmg)
+					}
+					if maxDmg > 0 {
+						state.MaxDamage = float32(maxDmg)
+					}
+					if delay > 0 {
+						state.AttackTime = uint32(delay)
+					}
+				} else if slot == 16 {
+					if minDmg > 0 {
+						state.MinOffhandDamage = float32(minDmg)
+					}
+					if maxDmg > 0 {
+						state.MaxOffhandDamage = float32(maxDmg)
+					}
+					if delay > 0 {
+						state.OffhandAttackTime = uint32(delay)
+					}
+				} else if slot == 17 {
+					if minDmg > 0 {
+						state.MinRangedDamage = float32(minDmg)
+					}
+					if maxDmg > 0 {
+						state.MaxRangedDamage = float32(maxDmg)
+					}
+					if delay > 0 {
+						state.RangedAttackTime = uint32(delay)
+					}
+				}
+				// Stats
+				for k := 0; k < 10; k++ {
+					val := sv[k]
+					if val == 0 {
+						continue
+					}
+					switch st[k] {
+					case 3: // Agility
+						state.Stats[1] += uint32(val)
+					case 4: // Strength
+						state.Stats[0] += uint32(val)
+					case 5: // Intellect
+						state.Stats[3] += uint32(val)
+					case 6: // Spirit
+						state.Stats[4] += uint32(val)
+					case 7: // Stamina
+						state.Stats[2] += uint32(val)
+					case 12: // Defense rating
+						state.CombatRatings[0] += uint32(val)
+					case 13: // Dodge rating
+						state.CombatRatings[1] += uint32(val)
+					case 14: // Parry rating
+						state.CombatRatings[2] += uint32(val)
+					case 15: // Block rating
+						state.CombatRatings[3] += uint32(val)
+					case 16, 17, 18, 31: // Hit rating
+						state.CombatRatings[5] += uint32(val)
+					case 19, 20, 21, 32: // Crit rating
+						state.CombatRatings[8] += uint32(val)
+					case 28, 29, 30, 36: // Haste rating
+						state.CombatRatings[17] += uint32(val)
+					case 38: // Attack power
+						state.AttackPower += uint32(val)
+					case 39: // Ranged attack power
+						state.RangedAttackPower += uint32(val)
+					}
+				}
+			}
+		}
+	}
 
-	state.MaxHealth = totalHealth
-	if state.Health <= 1 || state.Health > state.MaxHealth || (state.XP == 0 && state.Level == 1) {
+	// 3. Derived stats (TrinityCore StatSystem.cpp:309-360)
+	totalSta := state.Stats[2]
+	totalInte := state.Stats[3]
+	totalStr := state.Stats[0]
+	totalAgi := state.Stats[1]
+
+	state.MaxHealth = uint32(baseHealth) + (totalSta * 10)
+	totalMana := uint32(baseMana) + (totalInte * 15)
+	if state.Class == 1 { // Warrior: rage max 1000
+		state.MaxPowers[1] = 1000
+	} else if state.Class == 4 { // Rogue: energy max 100
+		state.MaxPowers[3] = 100
+	} else if state.Class == 6 { // Death Knight: runic power max 1000
+		state.MaxPowers[6] = 1000
+	} else {
+		state.MaxPowers[0] = totalMana
+		if state.Powers[0] > totalMana || (state.XP == 0 && state.Level == 1) || state.Powers[0] == 0 {
+			state.Powers[0] = totalMana
+		}
+	}
+	if state.Health > state.MaxHealth || state.Health <= 1 || (state.XP == 0 && state.Level == 1) {
 		state.Health = state.MaxHealth
 	}
-	if state.Powers[0] == 0 || state.Powers[0] > totalMana || (state.XP == 0 && state.Level == 1) {
-		state.Powers[0] = totalMana
+
+	// Armor: item armor + Agility * 2
+	state.Armor += totalAgi * 2
+
+	// Base Attack Power (TC StatSystem.cpp:1034-1065)
+	var baseAP int32
+	switch state.Class {
+	case 1, 2, 6: // Warrior, Paladin, Death Knight
+		baseAP = int32(totalStr*2 + uint32(lvl)*3) - 20
+	case 3, 4: // Hunter, Rogue
+		baseAP = int32(totalStr + totalAgi + uint32(lvl)*2) - 20
+	case 7, 11: // Shaman, Druid
+		baseAP = int32(totalStr*2 + uint32(lvl)*2) - 20
+	default:
+		baseAP = int32(totalStr) - 10
 	}
-	state.MaxPowers[0] = totalMana
+	if baseAP < 0 {
+		baseAP = 0
+	}
+	state.AttackPower += uint32(baseAP)
+
+	var baseRAP int32
+	if state.Class == 3 { // Hunter
+		baseRAP = int32(uint32(lvl)*2 + totalAgi*2) - 10
+	} else if state.Class == 4 || state.Class == 1 { // Rogue, Warrior
+		baseRAP = int32(uint32(lvl) + totalAgi) - 10
+	}
+	if baseRAP < 0 {
+		baseRAP = 0
+	}
+	state.RangedAttackPower += uint32(baseRAP)
 	return nil
 }
 
@@ -697,31 +885,65 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		values[unitFieldMaxPower1+i] = state.MaxPowers[i]
 	}
 
-	// Combat & Attack speeds (prevents client div-by-zero crashes in PaperDollFrame_UpdateStats)
-	values[unitFieldRangedAttackTime] = 2000
+	// Combat & Attack speeds
+	attackTime := state.AttackTime
+	if attackTime == 0 {
+		attackTime = 2000
+	}
+	values[unitFieldAttackTime] = attackTime
+	offhandAttackTime := state.OffhandAttackTime
+	if offhandAttackTime == 0 {
+		offhandAttackTime = 2000
+	}
+	values[unitFieldAttackTimeOffhand] = offhandAttackTime
+	rangedAttackTime := state.RangedAttackTime
+	if rangedAttackTime == 0 {
+		rangedAttackTime = 2000
+	}
+	values[unitFieldRangedAttackTime] = rangedAttackTime
 	values[unitModCastSpeed] = math.Float32bits(1.0)
-	values[unitFieldMinDamage] = math.Float32bits(1.0)
-	values[unitFieldMaxDamage] = math.Float32bits(2.0)
-	values[unitFieldMinOffhandDamage] = math.Float32bits(1.0)
-	values[unitFieldMaxOffhandDamage] = math.Float32bits(2.0)
-	values[unitFieldMinRangedDamage] = math.Float32bits(1.0)
-	values[unitFieldMaxRangedDamage] = math.Float32bits(2.0)
+	minDmg := state.MinDamage
+	if minDmg <= 0 {
+		minDmg = 1.0
+	}
+	maxDmg := state.MaxDamage
+	if maxDmg <= minDmg {
+		maxDmg = minDmg + 1.0
+	}
+	values[unitFieldMinDamage] = math.Float32bits(minDmg)
+	values[unitFieldMaxDamage] = math.Float32bits(maxDmg)
+	values[unitFieldMinOffhandDamage] = math.Float32bits(state.MinOffhandDamage)
+	values[unitFieldMaxOffhandDamage] = math.Float32bits(state.MaxOffhandDamage)
+	values[unitFieldMinRangedDamage] = math.Float32bits(state.MinRangedDamage)
+	values[unitFieldMaxRangedDamage] = math.Float32bits(state.MaxRangedDamage)
 	values[unitFieldAttackPowerMultiplier] = math.Float32bits(1.0)
 	values[unitFieldRangedAttackPowerMultiplier] = math.Float32bits(1.0)
-	values[unitFieldAttackPower] = uint32(20 + int(state.Level)*2)
-	values[unitFieldRangedAttackPower] = uint32(20 + int(state.Level)*2)
+	values[unitFieldAttackPower] = state.AttackPower
+	values[unitFieldRangedAttackPower] = state.RangedAttackPower
 
 	// Base stats & Armor (displayed in character sheet)
-	baseStat := uint32(20 + int(state.Level)*2)
 	for i := 0; i < 5; i++ {
-		values[unitFieldStat0+i] = baseStat
-		values[unitFieldPosStat0+i] = baseStat
+		statVal := state.Stats[i]
+		if statVal == 0 {
+			statVal = uint32(20 + int(state.Level)*2)
+		}
+		values[unitFieldStat0+i] = statVal
+		values[unitFieldPosStat0+i] = statVal
 	}
-	values[unitFieldResistances] = baseStat * 2 // Armor = Agility * 2
+	armor := state.Armor
+	if armor == 0 {
+		armor = uint32((20 + int(state.Level)*2) * 2)
+	}
+	values[unitFieldResistances] = armor // Armor (resistance 0)
 
 	values[unitFieldBaseHealth] = maxUint32(state.MaxHealth, 1)
 	if len(state.MaxPowers) > 0 {
 		values[unitFieldBaseMana] = maxUint32(state.MaxPowers[0], 1)
+	}
+
+	// Combat ratings
+	for i := 0; i < 25; i++ {
+		values[playerFieldCombatRating1+i] = state.CombatRatings[i]
 	}
 
 	// Modifiers & Ratings (required by client PaperDoll formulas)

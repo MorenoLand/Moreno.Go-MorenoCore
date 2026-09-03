@@ -119,6 +119,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	castTime := uint32(0)
+	s.lastCastTime = time.Now()
 	if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
 		castTime = uint32(value)
 	}
@@ -183,6 +184,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell_cooldown (guid, spell, item, time, categoryId, categoryEnd) VALUES (?, ?, 0, ?, 0, 0)", s.playerGUID, spellID, cooldownEnd)
 		}
 	}
+	if spellID == 8690 {
+		nowUnix := time.Now().Unix()
+		cooldownEnd := nowUnix + 900 // 15 min cooldown
+		s.player.Cooldowns = append(s.player.Cooldowns, spellCooldown{Spell: spellID, End: cooldownEnd})
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_COOLDOWN), buildSpellCooldown(s.playerGUID, spellID, 900000), true)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_spell_cooldown (guid, spell, item, time, categoryId, categoryEnd) VALUES (?, ?, 6948, ?, 0, 0)", s.playerGUID, spellID, cooldownEnd)
+		}
+	}
 
 	// Apply spell effects
 	applyEffects := func(effCtx context.Context) {
@@ -209,6 +219,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.applyAura(spellID)
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
+			case 5: // SPELL_EFFECT_TELEPORT_UNITS (e.g. Hearthstone)
+				if spellID == 8690 && s.player != nil {
+					hbMap, hbX, hbY, hbZ := s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ
+					if hbX == 0 && hbY == 0 && hbZ == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+						_ = s.server.WorldStore.DB.QueryRowContext(effCtx, "SELECT map, position_x, position_y, position_z FROM playercreateinfo WHERE race = ? AND class = ? LIMIT 1", s.player.Race, s.player.Class).Scan(&hbMap, &hbX, &hbY, &hbZ)
+					}
+					s.teleportTo(hbMap, hbX, hbY, hbZ, 0)
+				}
 			}
 		}
 	}

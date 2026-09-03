@@ -257,6 +257,7 @@ func (s *session) syncEquipmentCache(ctx context.Context) {
 	cacheStr := strings.Join(parts, " ")
 	s.player.Equipment = cacheStr
 	_, _ = db.ExecContext(ctx, "UPDATE characters SET equipmentCache = ? WHERE guid = ?", cacheStr, s.playerGUID)
+	_ = s.calculatePlayerStats(ctx, s.player)
 }
 
 func inventoryTypeToSlot(invType uint8) uint8 {
@@ -545,7 +546,20 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	// Cast spell
 	if spellID != 0 && s.server != nil && s.server.Data != nil {
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
-			s.finishSpellCast(ctx, castCount, spellID, spell, target)
+			castTime := uint32(0)
+			if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
+				castTime = uint32(value)
+			}
+			if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castCount, spellID, spellCastFlagStart, castTime, target), true); err != nil {
+				return false
+			}
+			if castTime > 0 {
+				time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
+					s.finishSpellCast(context.Background(), castCount, spellID, spell, target)
+				})
+			} else {
+				s.finishSpellCast(ctx, castCount, spellID, spell, target)
+			}
 		}
 	}
 

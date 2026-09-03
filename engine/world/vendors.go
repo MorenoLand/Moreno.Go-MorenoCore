@@ -180,7 +180,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	}
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 100, 0, '')", nextGUID, itemEntry, s.playerGUID, count)
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
-	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, itemEntry, count, count), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, slot, 0xFFFFFFFF, count), true)
 	_ = s.sendItemCreate(uint64(nextGUID), itemEntry, count, 0, freeSlot)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
@@ -330,10 +330,10 @@ func buildBuyFailed(vendorGUID uint64, itemEntry uint32, result uint8) []byte {
 	return buf.Bytes()
 }
 
-func buildBuySucceeded(vendorGUID uint64, itemEntry, newCount, buyCount uint32) []byte {
+func buildBuySucceeded(vendorGUID uint64, slot, newCount, buyCount uint32) []byte {
 	buf := protocol.NewBuffer(20)
 	buf.WriteU64(vendorGUID)
-	buf.WriteU32(itemEntry)
+	buf.WriteU32(slot)
 	buf.WriteU32(newCount)
 	buf.WriteU32(buyCount)
 	return buf.Bytes()
