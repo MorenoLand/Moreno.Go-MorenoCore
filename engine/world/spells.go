@@ -39,7 +39,16 @@ func (s *session) calculateSpellPowerCost(spell wotlk.Spell) uint32 {
 	cost := spell.ManaCost
 	if spell.ManaCostPct > 0 && s.player != nil {
 		pType := spell.PowerType
-		if pType < 7 {
+		if pType == 0 { // Mana: calculate percentage from BaseMana per TrinityCore Player::GetCreateMana()
+			basePower := s.player.BaseMana
+			if basePower == 0 {
+				basePower = s.player.MaxPowers[0]
+			}
+			if basePower == 0 {
+				basePower = 100
+			}
+			cost += (basePower * spell.ManaCostPct) / 100
+		} else if pType < 7 {
 			basePower := s.player.MaxPowers[pType]
 			if basePower == 0 {
 				basePower = s.player.Powers[pType]

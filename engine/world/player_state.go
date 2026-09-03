@@ -151,6 +151,7 @@ type playerState struct {
 	Zone             uint32
 	Health           uint32
 	MaxHealth        uint32
+	BaseMana         uint32
 	Powers           [7]uint32
 	MaxPowers        [7]uint32
 	Cinematic        uint32
@@ -353,6 +354,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	if baseMana <= 0 {
 		baseMana = int64(80 + int(lvl)*20)
 	}
+	state.BaseMana = uint32(baseMana)
 
 	// Default unarmed weapon speeds and damages
 	state.MinDamage = 1.0
@@ -937,7 +939,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldResistances] = armor // Armor (resistance 0)
 
 	values[unitFieldBaseHealth] = maxUint32(state.MaxHealth, 1)
-	if len(state.MaxPowers) > 0 {
+	if state.BaseMana > 0 {
+		values[unitFieldBaseMana] = state.BaseMana
+	} else if len(state.MaxPowers) > 0 {
 		values[unitFieldBaseMana] = maxUint32(state.MaxPowers[0], 1)
 	}
 
