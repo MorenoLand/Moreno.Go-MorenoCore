@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -512,5 +513,53 @@ func TestUseItemValidationAndConsumption(t *testing.T) {
 	_ = db.QueryRow("SELECT count FROM item_instance WHERE guid = 500").Scan(&count)
 	if count != 1 {
 		t.Fatalf("dead player used item, count changed to %d", count)
+	}
+}
+
+func TestSyncEquipmentCachePreservesEnchantments(t *testing.T) {
+	db, err := sql.Open("sqlite", "file::memory:?mode=memory&cache=shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY(guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, enchantments TEXT)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Equipped item at mainhand (slot 15) with enchant 3789 (Berserking)
+	_, _ = db.Exec("INSERT INTO characters (guid, equipmentCache) VALUES (1, '')")
+	_, _ = db.Exec("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (1, 0, 15, 100)")
+	_, _ = db.Exec("INSERT INTO item_instance (guid, itemEntry, enchantments) VALUES (100, 49623, '3789 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0')")
+
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: charStore}
+	sess := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1}}
+
+	sess.syncEquipmentCache(context.Background())
+
+	fields := strings.Fields(sess.player.Equipment)
+	if len(fields) < 32 {
+		t.Fatalf("expected at least 32 equipment fields, got %d", len(fields))
+	}
+	// Slot 15: mainhand -> index 15*2 = 30 (entry), index 15*2+1 = 31 (enchant)
+	if fields[30] != "49623" {
+		t.Fatalf("expected mainhand item 49623, got %s", fields[30])
+	}
+	if fields[31] != "3789" {
+		t.Fatalf("expected mainhand enchant 3789, got %s", fields[31])
+	}
+
+	// Verify DB was updated
+	var dbCache string
+	_ = db.QueryRow("SELECT equipmentCache FROM characters WHERE guid = 1").Scan(&dbCache)
+	if !strings.Contains(dbCache, "49623 3789") {
+		t.Fatalf("expected db cache to contain '49623 3789', got %s", dbCache)
 	}
 }
