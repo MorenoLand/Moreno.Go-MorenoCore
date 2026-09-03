@@ -350,6 +350,39 @@ func TestHandleInspectChecksAndPacketLayout(t *testing.T) {
 		t.Fatalf("enchMask1=%d err=%v", enchMask1, err)
 	}
 
+	// Test inspecting target with talents
+	target.player.Talents = map[uint32]uint8{123: 5}
+	target.player.Level = 80
+	doneTalents := make(chan struct{})
+	go func() {
+		if !inspector.handleInspect(context.Background(), payload.Bytes()) {
+			t.Error("handleInspect with talents returned false")
+		}
+		close(doneTalents)
+	}()
+	_, talentPayload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-doneTalents
+	tr := protocol.NewReader(talentPayload)
+	_, _ = tr.ReadPackedGUID()
+	_, _ = tr.ReadU32() // unspent
+	tGroupCount, _ := tr.ReadU8()
+	tGroupIdx, _ := tr.ReadU8()
+	if tGroupCount != 1 || tGroupIdx != 0 {
+		t.Fatalf("expected tGroupCount=1, tGroupIdx=0, got %d, %d", tGroupCount, tGroupIdx)
+	}
+	tCount, _ := tr.ReadU8()
+	if tCount != 1 {
+		t.Fatalf("expected tCount=1, got %d", tCount)
+	}
+	tID, _ := tr.ReadU32()
+	tRank, _ := tr.ReadU8()
+	if tID != 123 || tRank != 5 {
+		t.Fatalf("expected talent 123 rank 5, got %d rank %d", tID, tRank)
+	}
+
 	// Out of range check (> 28 yards): target at X=100
 	target.player.X = 100.0
 	if !inspector.handleInspect(context.Background(), payload.Bytes()) {

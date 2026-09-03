@@ -307,9 +307,25 @@ func (s *session) handleInspect(ctx context.Context, payload []byte) bool {
 	buf.WritePackedGUID(targetGUID)
 
 	// Talents info (unspentTalentPoints: u32, talentGroupCount: u8, talentGroupIndex: u8)
-	buf.WriteU32(0) // unspentTalentPoints
-	buf.WriteU8(0)  // talentGroupCount
-	buf.WriteU8(0)  // talentGroupIndex
+	if len(target.Talents) > 0 {
+		buf.WriteU32(targetSession.freeTalentPoints())
+		buf.WriteU8(1) // talentGroupCount
+		buf.WriteU8(0) // talentGroupIndex
+
+		buf.WriteU8(uint8(len(target.Talents)))
+		for tid, rank := range target.Talents {
+			buf.WriteU32(tid)
+			buf.WriteU8(rank)
+		}
+		buf.WriteU8(maxGlyphSlotIndex)
+		for i := uint8(0); i < maxGlyphSlotIndex; i++ {
+			buf.WriteU16(0)
+		}
+	} else {
+		buf.WriteU32(0) // unspentTalentPoints
+		buf.WriteU8(0)  // talentGroupCount
+		buf.WriteU8(0)  // talentGroupIndex
+	}
 
 	// Enchantments info data: BuildEnchantmentsInfoData (Player.cpp:25920)
 	var slotUsedMask uint32
