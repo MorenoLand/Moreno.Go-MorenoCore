@@ -287,10 +287,18 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask), true)
 
+	low := uint32(target.GUID & 0x00FFFFFF)
+	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
+	stdKey := creatureWorldGUID(low, entry)
+
 	if damage >= target.Health {
 		// Target dies
 		s.server.motionMu.Lock()
-		if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+		motion := s.server.creatureMotion[target.GUID]
+		if motion == nil {
+			motion = s.server.creatureMotion[stdKey]
+		}
+		if motion != nil {
 			motion.Health = 0
 			motion.InCombat = false
 			motion.TargetGUID = 0
@@ -310,7 +318,11 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 	} else {
 		newHealth := target.Health - damage
 		s.server.motionMu.Lock()
-		if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+		motion := s.server.creatureMotion[target.GUID]
+		if motion == nil {
+			motion = s.server.creatureMotion[stdKey]
+		}
+		if motion != nil {
 			motion.Health = newHealth
 			motion.InCombat = true
 			motion.TargetGUID = s.playerGUID

@@ -139,10 +139,14 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	if s.creatureMotion == nil {
 		s.creatureMotion = make(map[uint64]*creatureMotion)
 	}
+	guid := uint32(creatureGUID & 0x00FFFFFF)
+	entry := uint32((creatureGUID >> 24) & 0x00FFFFFF)
+	stdKey := creatureWorldGUID(guid, entry)
 	motion := s.creatureMotion[creatureGUID]
+	if motion == nil {
+		motion = s.creatureMotion[stdKey]
+	}
 	if motion == nil && s.WorldStore != nil && s.WorldStore.DB != nil {
-		guid := uint32(creatureGUID & 0x00FFFFFF)
-		entry := uint32((creatureGUID >> 24) & 0x00FFFFFF)
 		var x, y, z float64
 		var mapID, faction, level int64
 		if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT c.map, c.position_x, c.position_y, c.position_z,
@@ -164,6 +168,7 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 				MaxHealth: uint32(math.Max(float64(level)*30, 42)),
 			}
 			s.creatureMotion[creatureGUID] = motion
+			s.creatureMotion[stdKey] = motion
 		}
 	}
 	if motion != nil && motion.Health > 0 {
