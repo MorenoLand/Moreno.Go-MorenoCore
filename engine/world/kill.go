@@ -244,8 +244,20 @@ func (s *session) grantXP(ctx context.Context, amount uint32) {
 			levelPacket.WriteU32(statDelta) // StatDelta[0..4]: Str, Agi, Sta, Int, Spi
 		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_LEVELUP_INFO), levelPacket.Bytes(), true)
+		for i := range s.player.Skills {
+			maxSkill := uint16(s.player.Level) * 5
+			if s.player.Skills[i].Max < maxSkill && s.player.Skills[i].Max > 0 {
+				s.player.Skills[i].Max = maxSkill
+			}
+		}
+		if s.player.Level >= 10 {
+			_ = s.sendTalentsInfo(false)
+		}
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ?, xp = ?, health = ? WHERE guid = ?", s.player.Level, s.player.XP, s.player.Health, s.playerGUID)
+			for _, sk := range s.player.Skills {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET max = ? WHERE guid = ? AND skill = ?", sk.Max, s.playerGUID, sk.Skill)
+			}
 		}
 	}
 	s.sendPlayerUpdate()
