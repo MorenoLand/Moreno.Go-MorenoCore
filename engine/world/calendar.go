@@ -223,37 +223,178 @@ func (s *session) handleCalendarRemoveEvent(ctx context.Context, payload []byte)
 }
 
 // handleCalendarCopyEvent processes CMSG_CALENDAR_COPY_EVENT (0x430).
+// Reference: WorldSession::HandleCalendarCopyEvent (CalendarHandler.cpp:457).
 func (s *session) handleCalendarCopyEvent(ctx context.Context, payload []byte) bool {
+	if len(payload) < 12 {
+		return s.sendCalendarCommandResult(3, 1)
+	}
+	r := protocol.NewReader(payload)
+	eventID, _ := r.ReadU64()
+	packedEventTime, _ := r.ReadU32()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		var nextID uint64 = 1
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_events").Scan(&nextID)
+		_, _ = cdb.ExecContext(ctx,
+			`INSERT INTO calendar_events (id, creator, title, description, type, dungeon, eventtime, flags, time2)
+			 SELECT ?, ?, title, description, type, dungeon, ?, flags, time2 FROM calendar_events WHERE id = ?`,
+			nextID, s.playerGUID, packedEventTime, eventID)
+
+		rows, err := cdb.QueryContext(ctx, "SELECT invitee, sender, status, statustime, rank, text FROM calendar_invites WHERE event = ?", eventID)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var invitee, sender, status, statustime, rank int64
+				var text string
+				if rows.Scan(&invitee, &sender, &status, &statustime, &rank, &text) == nil {
+					var nextInviteID uint64 = 1
+					_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
+					_, _ = cdb.ExecContext(ctx,
+						"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+						nextInviteID, nextID, invitee, sender, status, statustime, rank, text)
+				}
+			}
+		}
+	}
 	return s.sendCalendarCommandResult(3, 0)
 }
 
 // handleCalendarEventInvite processes CMSG_CALENDAR_EVENT_INVITE (0x431).
+// Reference: WorldSession::HandleCalendarEventInvite (CalendarHandler.cpp:507).
 func (s *session) handleCalendarEventInvite(ctx context.Context, payload []byte) bool {
+	if len(payload) < 16 {
+		return s.sendCalendarCommandResult(4, 1)
+	}
+	r := protocol.NewReader(payload)
+	eventID, _ := r.ReadU64()
+	_, _ = r.ReadU64() // inviteID
+	name, _ := r.ReadCString()
+
+	if name == "" {
+		return s.sendCalendarCommandResult(4, 28) // CALENDAR_ERROR_PLAYER_NOT_FOUND
+	}
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		var targetGUID uint64
+		err := cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE name = ? COLLATE NOCASE", name).Scan(&targetGUID)
+		if err != nil || targetGUID == 0 {
+			return s.sendCalendarCommandResult(4, 28) // CALENDAR_ERROR_PLAYER_NOT_FOUND
+		}
+		var nextInviteID uint64 = 1
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
+		_, _ = cdb.ExecContext(ctx,
+			"INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text) VALUES (?, ?, ?, ?, 0, ?, 0, '')",
+			nextInviteID, eventID, targetGUID, s.playerGUID, time.Now().Unix())
+	}
 	return s.sendCalendarCommandResult(4, 0)
 }
 
 // handleCalendarEventRSVP processes CMSG_CALENDAR_EVENT_RSVP (0x432).
+// Reference: WorldSession::HandleCalendarEventRsvp (CalendarHandler.cpp:630).
 func (s *session) handleCalendarEventRSVP(ctx context.Context, payload []byte) bool {
+	if len(payload) < 20 {
+		return s.sendCalendarCommandResult(5, 1)
+	}
+	r := protocol.NewReader(payload)
+	eventID, _ := r.ReadU64()
+	inviteID, _ := r.ReadU64()
+	status, _ := r.ReadU32()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		now := time.Now().Unix()
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			"UPDATE calendar_invites SET status = ?, statustime = ? WHERE (id = ? OR (event = ? AND invitee = ?))",
+			status, now, inviteID, eventID, s.playerGUID)
+	}
 	return s.sendCalendarCommandResult(5, 0)
 }
 
 // handleCalendarEventRemoveInvite processes CMSG_CALENDAR_EVENT_REMOVE_INVITE (0x433).
+// Reference: WorldSession::HandleCalendarEventRemoveInvite (CalendarHandler.cpp:667).
 func (s *session) handleCalendarEventRemoveInvite(ctx context.Context, payload []byte) bool {
+	if len(payload) < 24 {
+		return s.sendCalendarCommandResult(6, 1)
+	}
+	r := protocol.NewReader(payload)
+	inviteeGUID, _ := r.ReadPackedGUID()
+	inviteID, _ := r.ReadU64()
+	_, _ = r.ReadU64() // ownerInviteId
+	eventID, _ := r.ReadU64()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			"DELETE FROM calendar_invites WHERE id = ? OR (event = ? AND (invitee = ? OR ? = 0))",
+			inviteID, eventID, inviteeGUID, inviteeGUID)
+	}
 	return s.sendCalendarCommandResult(6, 0)
 }
 
 // handleCalendarEventStatus processes CMSG_CALENDAR_EVENT_STATUS (0x434).
+// Reference: WorldSession::HandleCalendarEventStatus (CalendarHandler.cpp:696).
 func (s *session) handleCalendarEventStatus(ctx context.Context, payload []byte) bool {
+	if len(payload) < 25 {
+		return s.sendCalendarCommandResult(7, 1)
+	}
+	r := protocol.NewReader(payload)
+	inviteeGUID, _ := r.ReadPackedGUID()
+	eventID, _ := r.ReadU64()
+	inviteID, _ := r.ReadU64()
+	_, _ = r.ReadU64() // ownerInviteId
+	status, _ := r.ReadU8()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			"UPDATE calendar_invites SET status = ? WHERE id = ? OR (event = ? AND invitee = ?)",
+			status, inviteID, eventID, inviteeGUID)
+	}
 	return s.sendCalendarCommandResult(7, 0)
 }
 
 // handleCalendarEventModeratorStatus processes CMSG_CALENDAR_EVENT_MODERATOR_STATUS (0x435).
+// Reference: WorldSession::HandleCalendarEventModeratorStatus (CalendarHandler.cpp:730).
 func (s *session) handleCalendarEventModeratorStatus(ctx context.Context, payload []byte) bool {
+	if len(payload) < 25 {
+		return s.sendCalendarCommandResult(8, 1)
+	}
+	r := protocol.NewReader(payload)
+	inviteeGUID, _ := r.ReadPackedGUID()
+	eventID, _ := r.ReadU64()
+	inviteID, _ := r.ReadU64()
+	_, _ = r.ReadU64() // ownerInviteId
+	rank, _ := r.ReadU8()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+			"UPDATE calendar_invites SET rank = ? WHERE id = ? OR (event = ? AND invitee = ?)",
+			rank, inviteID, eventID, inviteeGUID)
+	}
 	return s.sendCalendarCommandResult(8, 0)
 }
 
 // handleCalendarEventSignup processes CMSG_CALENDAR_EVENT_SIGNUP (0x4BA).
+// Reference: WorldSession::HandleCalendarEventSignup (CalendarHandler.cpp:604).
 func (s *session) handleCalendarEventSignup(ctx context.Context, payload []byte) bool {
+	if len(payload) < 9 {
+		return s.sendCalendarCommandResult(9, 1)
+	}
+	r := protocol.NewReader(payload)
+	eventID, _ := r.ReadU64()
+	tentative, _ := r.ReadU8()
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		status := 4 // signed up
+		if tentative != 0 {
+			status = 2 // tentative
+		}
+		var nextInviteID uint64 = 1
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM calendar_invites").Scan(&nextInviteID)
+		_, _ = cdb.ExecContext(ctx,
+			`INSERT INTO calendar_invites (id, event, invitee, sender, status, statustime, rank, text)
+			 VALUES (?, ?, ?, ?, ?, ?, 0, '')`,
+			nextInviteID, eventID, s.playerGUID, s.playerGUID, status, time.Now().Unix())
+	}
 	return s.sendCalendarCommandResult(9, 0)
 }
 

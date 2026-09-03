@@ -123,6 +123,7 @@ type session struct {
 	buyback            []buybackEntry
 	arenaTeamInvited   uint32
 	bgQueues           [2]bgQueueEntry
+	afkReporters       map[uint64]struct{}
 }
 
 type bgQueueEntry struct {

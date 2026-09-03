@@ -1124,7 +1124,7 @@ func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bo
 		return false
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadPackedGUID() // granter GUID
+	granterGUID, _ := r.ReadPackedGUID()
 
 	if s.player.Level >= 80 {
 		return true
@@ -1139,17 +1139,37 @@ func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bo
 	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ? WHERE guid = ?", s.player.Level, s.playerGUID)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ?, health = ? WHERE guid = ?", s.player.Level, s.player.Health, s.playerGUID)
+		if granterGUID != 0 {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET grantableLevels = CASE WHEN grantableLevels > 0 THEN grantableLevels - 1 ELSE 0 END WHERE guid = ?", granterGUID)
+		}
 	}
 
 	s.sendPlayerUpdate()
-	s.debug("level granted", "account", s.accountName, "level", s.player.Level)
+	s.debug("level granted", "account", s.accountName, "level", s.player.Level, "granter", granterGUID)
 	return true
 }
 
 // handleGrantLevel processes CMSG_GRANT_LEVEL (0x41F).
+// Reference: WorldSession::HandleGrantLevel (ReferAFriendHandler.cpp:24).
 func (s *session) handleGrantLevel(ctx context.Context, payload []byte) bool {
-	return s.handleAcceptLevelGrant(ctx, payload)
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	targetGUID, err := r.ReadPackedGUID()
+	if err != nil || targetGUID == 0 || targetGUID == s.playerGUID {
+		return true
+	}
+	if s.server != nil {
+		targetSess := s.server.findSessionByGUID(targetGUID)
+		if targetSess != nil && targetSess.player != nil && targetSess.playerLoaded {
+			buf := protocol.NewBuffer(9)
+			buf.WritePackedGUID(s.playerGUID)
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_PROPOSE_LEVEL_GRANT), buf.Bytes(), true)
+		}
+	}
+	return true
 }
 
 // handleAlterAppearance processes CMSG_ALTER_APPEARANCE (0x426).

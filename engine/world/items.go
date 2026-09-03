@@ -432,6 +432,7 @@ const (
 	equipErrItemNotFound = 5
 	equipErrYouAreDead   = 17
 	equipErrNotInCombat  = 20
+	equipErrInvFull      = 50
 )
 
 func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {

@@ -474,18 +474,54 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 	_, _ = r.ReadU64() // mailbox GUID
 	mailID, _ := r.ReadU32()
 
-	// Grant letter item (entry 8383: Plain Letter)
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
-		var nextGUID int64
-		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
-		if nextGUID <= 0 {
-			nextGUID = 1
+
+		// Check for free slot in backpack (slots 23..38)
+		usedSlots := make(map[uint8]bool)
+		rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
+		if err == nil {
+			for rows.Next() {
+				var sl int64
+				if rows.Scan(&sl) == nil {
+					usedSlots[uint8(sl)] = true
+				}
+			}
+			rows.Close()
 		}
-		const mailBodyItemTemplate uint32 = 8383
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, 0, '', 0, '', 0, 0, 0, '')", nextGUID, mailBodyItemTemplate, s.playerGUID)
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, 23, ?)", s.playerGUID, nextGUID)
+		freeSlot := uint8(0xFF)
+		for sl := uint8(23); sl <= 38; sl++ {
+			if !usedSlots[sl] {
+				freeSlot = sl
+				break
+			}
+		}
+		if freeSlot == 0xFF {
+			// Inventory full error (MAIL_ERR_EQUIP_ERROR)
+			buf := protocol.NewBuffer(16)
+			buf.WriteU32(mailID)
+			buf.WriteU32(9) // MAIL_MADE_PERMANENT
+			buf.WriteU32(1) // MAIL_ERR_EQUIP_ERROR
+			buf.WriteU32(uint32(equipErrInvFull))
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buf.Bytes(), true)
+			return true
+		}
+
+		var body string
+		_ = cdb.QueryRowContext(ctx, "SELECT body FROM mail WHERE id = ?", mailID).Scan(&body)
+
+		var nextGUID uint64
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
+		if nextGUID == 0 {
+			nextGUID = uint64(time.Now().UnixNano())
+		}
+		const mailBodyItemTemplate uint32 = 8383 // Plain Letter
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, 0, '', 1, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, body)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET checked = checked | 8 WHERE id = ?", mailID) // MAIL_CHECK_MASK_COPIED = 8
+		_ = s.sendItemCreate(nextGUID, mailBodyItemTemplate, 1, 0, freeSlot)
 		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
 	}
 
 	// Send result: action 9 (MAIL_MADE_PERMANENT), result 0 (MAIL_OK)
