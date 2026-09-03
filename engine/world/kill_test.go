@@ -3,9 +3,12 @@ package world
 import (
 	"context"
 	"database/sql"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 func TestKillXPGainMatchesTrinityFormula(t *testing.T) {
@@ -86,5 +89,75 @@ func TestQuestKillCreditAndCompletion(t *testing.T) {
 	state.creditQuestKills(ctx, 68, victim)
 	if state.player.QuestLog[0].Counters[0] != 2 {
 		t.Fatalf("counter must cap at requirement, got %d", state.player.QuestLog[0].Counters[0])
+	}
+}
+
+func TestGrantXPEmitsLogXPGain(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{sessions: make(map[*session]struct{})}
+	sess := &session{
+		conn:         serverConn,
+		authed:       true,
+		playerLoaded: true,
+		server:       srv,
+		playerGUID:   1,
+		player:       &playerState{GUID: 1, Level: 5, XP: 100},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		sess.grantXPWithVictim(context.Background(), 250, 0x12345678)
+		close(done)
+	}()
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	op, data, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		for {
+			_, _, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+	<-done
+
+	if op != uint16(protocol.OpcodeSMSG_LOG_XPGAIN) {
+		t.Fatalf("expected SMSG_LOG_XPGAIN (0x1D0), got 0x%x", op)
+	}
+	r := protocol.NewReader(data)
+	victim, err := r.ReadU64()
+	if err != nil || victim != 0x12345678 {
+		t.Fatalf("expected victim 0x12345678, got 0x%x err=%v", victim, err)
+	}
+	totalXP, _ := r.ReadU32()
+	if totalXP != 250 {
+		t.Fatalf("expected totalXP 250, got %d", totalXP)
+	}
+	xpType, _ := r.ReadU8()
+	if xpType != 0 {
+		t.Fatalf("expected xpType 0 (kill), got %d", xpType)
+	}
+	baseXP, _ := r.ReadU32()
+	if baseXP != 250 {
+		t.Fatalf("expected baseXP 250, got %d", baseXP)
+	}
+	groupRate, _ := r.ReadF32()
+	if groupRate != 1.0 {
+		t.Fatalf("expected groupRate 1.0, got %f", groupRate)
+	}
+	raf, _ := r.ReadU8()
+	if raf != 0 {
+		t.Fatalf("expected raf 0, got %d", raf)
+	}
+	if sess.player.XP != 350 {
+		t.Fatalf("expected player XP 350, got %d", sess.player.XP)
 	}
 }
