@@ -1042,15 +1042,12 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 // handleGuildBankSwapItems processes CMSG_GUILD_BANK_SWAP_ITEMS (0x3E9).
 // Reference: WorldSession::HandleGuildBankSwapItems (GuildHandler.cpp:320).
 func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 13 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 9 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	_, _ = r.ReadU64() // bankerGUID
-	bankTab, _ := r.ReadU8()
-	bankSlot, _ := r.ReadU8()
-	_, _ = r.ReadU32() // itemEntry
-	isBankToBank, _ := r.ReadU8()
+	bankerGUID, _ := r.ReadU64()
+	bankOnly, _ := r.ReadU8()
 
 	guildID := s.player.GuildID
 	if guildID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
@@ -1058,22 +1055,71 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	}
 	cdb := s.server.CharactersStore.DB
 
-	if isBankToBank != 0 && len(payload) >= 15 {
-		destTab, _ := r.ReadU8()
-		destSlot, _ := r.ReadU8()
+	var bankTab uint8
+	if bankOnly != 0 {
+		bankTab, _ = r.ReadU8()
+		bankSlot, _ := r.ReadU8()
+		_, _ = r.ReadU32() // itemID
+		bankTab1, _ := r.ReadU8()
+		bankSlot1, _ := r.ReadU8()
+		_, _ = r.ReadU32() // itemID1
 
 		var item1, item2 uint64
 		_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot).Scan(&item1)
-		_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, destTab, destSlot).Scan(&item2)
+		_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab1, bankSlot1).Scan(&item2)
 
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ? AND ((TabId = ? AND SlotId = ?) OR (TabId = ? AND SlotId = ?))", guildID, bankTab, bankSlot, destTab, destSlot)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ? AND ((TabId = ? AND SlotId = ?) OR (TabId = ? AND SlotId = ?))", guildID, bankTab, bankSlot, bankTab1, bankSlot1)
 		if item1 != 0 {
-			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, destTab, destSlot, item1)
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab1, bankSlot1, item1)
 		}
 		if item2 != 0 {
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, item2)
 		}
+	} else {
+		bankTab, _ = r.ReadU8()
+		bankSlot, _ := r.ReadU8()
+		_, _ = r.ReadU32() // itemID
+		autoStore, _ := r.ReadU8()
+
+		var containerSlot, containerItemSlot, toSlot uint8
+		if autoStore != 0 {
+			_, _ = r.ReadU32() // bankItemCount
+			toSlot, _ = r.ReadU8()
+			_, _ = r.ReadU32() // stackCount
+			containerSlot = 0
+			containerItemSlot = 23
+		} else {
+			containerSlot, _ = r.ReadU8()
+			containerItemSlot, _ = r.ReadU8()
+			toSlot, _ = r.ReadU8()
+			_, _ = r.ReadU32() // stackCount
+		}
+
+		if toSlot != 0 {
+			// Bank -> Player Inventory (Withdraw)
+			var bankItemGUID uint64
+			err := cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot).Scan(&bankItemGUID)
+			if err == nil && bankItemGUID > 0 {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot)
+				_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, containerSlot, containerItemSlot, bankItemGUID)
+				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, bankItemGUID)
+				_ = s.sendInventoryItems(ctx)
+				s.sendPlayerUpdate()
+			}
+		} else {
+			// Player Inventory -> Bank (Deposit)
+			var invItemGUID uint64
+			err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot).Scan(&invItemGUID)
+			if err == nil && invItemGUID > 0 {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot)
+				_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, invItemGUID)
+				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = 0 WHERE guid = ?", invItemGUID)
+				_ = s.sendInventoryItems(ctx)
+				s.sendPlayerUpdate()
+			}
+		}
 	}
+	s.sendGuildBankList(ctx, bankerGUID, bankTab, false)
 	return true
 }
 
