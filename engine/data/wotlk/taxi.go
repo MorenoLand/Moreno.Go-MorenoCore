@@ -19,7 +19,7 @@ type TaxiNode struct {
 
 const (
 	taxiDKSpecialMount = 32981 // Ebon Hold flight, valid for both factions
-	taxiMaskSize       = 8
+	taxiMaskSize       = 14
 )
 
 type taxiNetwork struct {
