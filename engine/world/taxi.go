@@ -15,7 +15,7 @@ import (
 const (
 	unitNPCFlagFlightmaster uint32 = 0x00002000
 	playerExtraTaxiCheat    uint32 = 0x00000008
-	taxiMaskSize                   = 8
+	taxiMaskSize                   = 14
 )
 
 // TrinityCore Player.h extra flags and transient PLAYER_FLAGS bits.
