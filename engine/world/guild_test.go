@@ -179,11 +179,15 @@ func TestGuildQueryRosterAndInvite(t *testing.T) {
 	}
 
 	// Buy Tab & Update Tab
+	sessLeader.player.Money += 300 * 10000 // 300 gold
 	buyBuf := protocol.NewBuffer(16)
 	buyBuf.WriteU64(1001)
-	buyBuf.WriteU8(1)
+	buyBuf.WriteU8(1) // Tab 1 costs 250 gold
 	if !sessLeader.handleGuildBankBuyTab(ctx, buyBuf.Bytes()) {
 		t.Fatal("handleGuildBankBuyTab failed")
+	}
+	if sessLeader.player.Money != 700+50*10000 { // 300g - 250g = 50g remaining
+		t.Fatalf("expected player money %d, got %d", 700+50*10000, sessLeader.player.Money)
 	}
 	updBuf := protocol.NewBuffer(64)
 	updBuf.WriteU64(1001)
