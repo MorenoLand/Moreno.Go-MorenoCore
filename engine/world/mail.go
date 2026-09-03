@@ -243,6 +243,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, att.ItemGUID, itemEntry, receiverGUID)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(uint32(nextMailID), 0, 0), true) // MAIL_OK = 0
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	// Notify receiver if online
 	targetSess := s.server.findSessionByGUID(uint64(receiverGUID))
