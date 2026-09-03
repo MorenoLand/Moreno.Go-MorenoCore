@@ -386,7 +386,7 @@ func (s *session) handlePetNameQuery(ctx context.Context, payload []byte) bool {
 	petNumber, _ := r.ReadU32()
 	_, _ = r.ReadU64() // petGUID
 
-	petName := "Pet"
+	petName := ""
 	var saveTime uint32
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_ = s.server.CharactersStore.DB.QueryRowContext(ctx,

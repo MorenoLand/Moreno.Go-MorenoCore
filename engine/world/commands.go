@@ -941,7 +941,12 @@ func (s *session) dispatchCommand(ctx context.Context, fields []string) bool {
 }
 
 // handleSetFactionCheat processes CMSG_SET_FACTION_CHEAT (0x126).
+// Reference: WorldSession::HandleSetFactionCheat (CharacterHandler.cpp:1043).
 func (s *session) handleSetFactionCheat(ctx context.Context, payload []byte) bool {
+	s.debug("handleSetFactionCheat received", "account", s.accountName)
+	if s.playerLoaded && s.player != nil {
+		_ = s.write(uint16(protocol.OpcodeSMSG_INITIALIZE_FACTIONS), buildInitialReputations(*s.player), true)
+	}
 	return true
 }
 

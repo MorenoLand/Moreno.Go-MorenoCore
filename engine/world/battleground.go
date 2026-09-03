@@ -291,7 +291,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bo
 }
 
 // handleReportPvPAfk processes CMSG_REPORT_PVP_AFK (0x3E4).
-// Reference: WorldSession::HandleReportPvPAFK (BattleGroundHandler.cpp:795).
+// Reference: WorldSession::HandleReportPvPAFK (BattleGroundHandler.cpp:795) and Player::ReportedAfkBy (Player.cpp:22524).
 func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -299,13 +299,21 @@ func (s *session) handleReportPvPAfk(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	targetGUID, _ := r.ReadU64()
 
-	if s.server != nil {
+	if s.server != nil && targetGUID != s.playerGUID {
 		targetSess := s.server.findSessionByGUID(targetGUID)
 		if targetSess != nil && targetSess.player != nil {
-			buf := protocol.NewBuffer(9)
-			buf.WriteU64(targetGUID)
-			buf.WriteU8(1) // reported
-			_ = s.write(uint16(protocol.OpcodeSMSG_REPORT_PVP_AFK_RESULT), buf.Bytes(), true)
+			targetSess.writeMu.Lock()
+			if targetSess.afkReporters == nil {
+				targetSess.afkReporters = make(map[uint64]struct{})
+			}
+			targetSess.afkReporters[s.playerGUID] = struct{}{}
+			reportCount := len(targetSess.afkReporters)
+			targetSess.writeMu.Unlock()
+
+			s.debug("reported player for pvp afk", "account", s.accountName, "target", targetGUID, "reports", reportCount)
+			if reportCount >= 3 {
+				targetSess.applyAura(43680) // Idle debuff
+			}
 		}
 	}
 	return true
