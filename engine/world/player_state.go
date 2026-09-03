@@ -183,6 +183,8 @@ type playerState struct {
 	HomebindZ        float32
 	Reputations       []playerReputation
 	Talents           map[uint32]uint8
+	TalentGroupsCount uint8
+	ActiveTalentGroup uint8
 	Stats             [5]uint32
 	Armor             uint32
 	Block             uint32
@@ -259,7 +261,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		state.HomebindY = state.Y
 		state.HomebindZ = state.Z
 	}
-	state.Talents = make(map[uint32]uint8)
+	s.loadPlayerTalents(ctx, &state)
 	s.player = &state
 
 	// Rebuild the quest log slots, taxi masks, guild info, skills, and packet states concurrently
@@ -619,7 +621,52 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 	var bankSlots int64
 	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= 67 AND slot <= 73", state.GUID).Scan(&bankSlots)
 	state.BankBagSlots = uint8(bankSlots)
+
+	var specsCount, activeSpec int64
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(talentGroupsCount, 1), COALESCE(activeTalentGroup, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&specsCount, &activeSpec)
+	if specsCount < 1 {
+		specsCount = 1
+	} else if specsCount > 2 {
+		specsCount = 2
+	}
+	if activeSpec >= specsCount {
+		activeSpec = 0
+	}
+	state.TalentGroupsCount = uint8(specsCount)
+	state.ActiveTalentGroup = uint8(activeSpec)
 	return nil
+}
+
+func (s *session) loadPlayerTalents(ctx context.Context, state *playerState) {
+	state.Talents = make(map[uint32]uint8)
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	rows, err := cdb.QueryContext(ctx, "SELECT spell FROM character_talent WHERE guid = ? AND talentGroup = ?", state.GUID, state.ActiveTalentGroup)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var spellID int64
+		if err := rows.Scan(&spellID); err == nil && spellID > 0 {
+			var tid uint32
+			var r uint8
+			var found bool
+			if s.server.Data != nil {
+				tid, r, found = s.server.Data.TalentBySpell(uint32(spellID))
+			}
+			if !found && spellID > 10 {
+				tid = uint32((spellID - 1) / 10)
+				r = uint8((spellID - 1) % 10)
+				found = true
+			}
+			if found {
+				state.Talents[tid] = r
+			}
+		}
+	}
 }
 
 func (s *session) CharGuild(ctx context.Context, state *playerState) error {

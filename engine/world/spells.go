@@ -708,7 +708,7 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 	// Clear player talents and unlearn all talent spells
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
-		rows, err := cdb.QueryContext(ctx, "SELECT spell FROM character_talent WHERE guid = ?", s.playerGUID)
+		rows, err := cdb.QueryContext(ctx, "SELECT spell FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup)
 		if err == nil {
 			var unlearnSpells []uint32
 			for rows.Next() {
@@ -725,7 +725,7 @@ func (s *session) handleTalentWipeConfirm(ctx context.Context, payload []byte) b
 				_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), unlearnBuf.Bytes(), true)
 			}
 		}
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ?", s.playerGUID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup)
 	}
 	s.player.Talents = make(map[uint32]uint8)
 
