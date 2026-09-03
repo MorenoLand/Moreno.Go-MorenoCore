@@ -101,6 +101,7 @@ func newSkillsTestSession(t *testing.T, player *playerState) (*session, net.Conn
 	for _, stmt := range []string{
 		"CREATE TABLE IF NOT EXISTS characters (guid INTEGER PRIMARY KEY, account INTEGER, talentGroupsCount INTEGER, activeTalentGroup INTEGER)",
 		"CREATE TABLE IF NOT EXISTS character_action (guid INTEGER, spec INTEGER, button INTEGER, action INTEGER, type INTEGER, PRIMARY KEY (guid, spec, button))",
+		"CREATE TABLE IF NOT EXISTS character_glyphs (guid INTEGER, talentGroup INTEGER, glyph1 INTEGER, glyph2 INTEGER, glyph3 INTEGER, glyph4 INTEGER, glyph5 INTEGER, glyph6 INTEGER, PRIMARY KEY (guid, talentGroup))",
 		"CREATE TABLE IF NOT EXISTS character_talent (guid INTEGER, spell INTEGER, talentGroup INTEGER, PRIMARY KEY(guid, spell, talentGroup))",
 		"CREATE TABLE IF NOT EXISTS character_spell (guid INTEGER, spell INTEGER, active INTEGER, disabled INTEGER, PRIMARY KEY(guid, spell))",
 		"CREATE TABLE IF NOT EXISTS character_skills (guid INTEGER, skill INTEGER, value INTEGER, max INTEGER, PRIMARY KEY(guid, skill))",
@@ -477,5 +478,80 @@ func TestActivateSpecFlow(t *testing.T) {
 	_ = server.CharactersStore.DB.QueryRow("SELECT activeTalentGroup FROM characters WHERE guid = 10").Scan(&dbActiveSpec)
 	if dbActiveSpec != 1 {
 		t.Fatalf("expected db activeTalentGroup=1, got %d", dbActiveSpec)
+	}
+}
+
+func TestGlyphApplicationAndRemoval(t *testing.T) {
+	player := &playerState{
+		GUID:              10,
+		Name:              "Hero",
+		Level:             80,
+		TalentGroupsCount: 1,
+		ActiveTalentGroup: 0,
+		Talents:           map[uint32]uint8{1: 0},
+	}
+	s, clientConn, server := newSkillsTestSession(t, player)
+
+	ctx := context.Background()
+
+	// 1. Socket glyph 420 into slot 0
+	drainDone := make(chan struct{})
+	receivedOpcodes := make(map[uint16]bool)
+	go func() {
+		defer close(drainDone)
+		for {
+			_ = clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			opcode, _, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+			receivedOpcodes[opcode] = true
+		}
+	}()
+
+	s.applyGlyph(ctx, 0, 420)
+	<-drainDone
+
+	if player.Glyphs[0][0] != 420 {
+		t.Fatalf("expected glyph 420 in slot 0, got %d", player.Glyphs[0][0])
+	}
+	if !receivedOpcodes[uint16(protocol.OpcodeSMSG_TALENTS_INFO)] {
+		t.Error("expected SMSG_TALENTS_INFO after applying glyph")
+	}
+
+	// Verify DB was updated
+	var dbGlyph1 int
+	_ = server.CharactersStore.DB.QueryRow("SELECT glyph1 FROM character_glyphs WHERE guid = 10 AND talentGroup = 0").Scan(&dbGlyph1)
+	if dbGlyph1 != 420 {
+		t.Fatalf("expected db glyph1=420, got %d", dbGlyph1)
+	}
+
+	// 2. Remove glyph from slot 0
+	removePayload := protocol.NewBuffer(4)
+	removePayload.WriteU32(0) // slot 0
+
+	drainDone2 := make(chan struct{})
+	go func() {
+		defer close(drainDone2)
+		for {
+			_ = clientConn.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			_, _, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	if !s.handleRemoveGlyph(ctx, removePayload.Bytes()) {
+		t.Fatal("handleRemoveGlyph failed")
+	}
+	<-drainDone2
+
+	if player.Glyphs[0][0] != 0 {
+		t.Fatalf("expected slot 0 cleared in memory, got %d", player.Glyphs[0][0])
+	}
+	_ = server.CharactersStore.DB.QueryRow("SELECT glyph1 FROM character_glyphs WHERE guid = 10 AND talentGroup = 0").Scan(&dbGlyph1)
+	if dbGlyph1 != 0 {
+		t.Fatalf("expected db glyph1=0 after remove, got %d", dbGlyph1)
 	}
 }

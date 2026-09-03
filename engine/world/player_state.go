@@ -185,6 +185,7 @@ type playerState struct {
 	Talents           map[uint32]uint8
 	TalentGroupsCount uint8
 	ActiveTalentGroup uint8
+	Glyphs            [2][6]uint16
 	Stats             [5]uint32
 	Armor             uint32
 	Block             uint32
@@ -634,6 +635,23 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 	}
 	state.TalentGroupsCount = uint8(specsCount)
 	state.ActiveTalentGroup = uint8(activeSpec)
+
+	gRows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT talentGroup, glyph1, glyph2, glyph3, glyph4, glyph5, glyph6 FROM character_glyphs WHERE guid = ?", state.GUID)
+	if err == nil {
+		for gRows.Next() {
+			var tg int64
+			var g1, g2, g3, g4, g5, g6 int64
+			if err := gRows.Scan(&tg, &g1, &g2, &g3, &g4, &g5, &g6); err == nil && tg >= 0 && tg < 2 {
+				state.Glyphs[tg][0] = uint16(g1)
+				state.Glyphs[tg][1] = uint16(g2)
+				state.Glyphs[tg][2] = uint16(g3)
+				state.Glyphs[tg][3] = uint16(g4)
+				state.Glyphs[tg][4] = uint16(g5)
+				state.Glyphs[tg][5] = uint16(g6)
+			}
+		}
+		gRows.Close()
+	}
 	return nil
 }
 

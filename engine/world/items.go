@@ -494,9 +494,12 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	_, err = r.ReadU32() // glyphIndex
+	glyphIndex, err := r.ReadU32()
 	if err != nil {
 		return false
+	}
+	if glyphIndex < 6 {
+		s.targetGlyphSlot = uint8(glyphIndex)
 	}
 	_, err = r.ReadU8() // castFlags
 	if err != nil {

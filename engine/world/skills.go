@@ -146,7 +146,11 @@ func (s *session) sendTalentsInfo(pet bool) error {
 		}
 		buf.WriteU8(maxGlyphSlotIndex)
 		for i := uint8(0); i < maxGlyphSlotIndex; i++ {
-			buf.WriteU16(0)
+			glyphID := uint16(0)
+			if int(spec) < len(s.player.Glyphs) && int(i) < len(s.player.Glyphs[spec]) {
+				glyphID = s.player.Glyphs[spec][i]
+			}
+			buf.WriteU16(glyphID)
 		}
 	}
 	return s.write(uint16(protocol.OpcodeSMSG_TALENTS_INFO), buf.Bytes(), true)
