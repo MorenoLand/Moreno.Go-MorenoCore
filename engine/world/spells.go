@@ -178,6 +178,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 		if pVal, pErr := s.server.buildPlayerValuesUpdate(s.playerGUID, fields); pErr == nil && pVal != nil {
 			_ = s.write(pVal.Opcode, pVal.Payload.Bytes(), true)
+			if s.server != nil {
+				s.server.broadcastToNearby(pVal.Opcode, pVal.Payload.Bytes(), s)
+			}
 		}
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			col := fmt.Sprintf("power%d", pType+1)

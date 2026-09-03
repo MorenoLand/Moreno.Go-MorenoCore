@@ -336,6 +336,7 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 		if changed && len(fields) > 0 {
 			if packet, err := s.buildPlayerValuesUpdate(sess.playerGUID, fields); err == nil && packet != nil {
 				_ = sess.write(packet.Opcode, packet.Payload.Bytes(), true)
+				s.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), sess)
 			}
 		}
 	}
