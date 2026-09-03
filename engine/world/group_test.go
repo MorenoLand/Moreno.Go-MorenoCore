@@ -2,7 +2,11 @@ package world
 
 import (
 	"context"
+	"net"
 	"testing"
+	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 func newGroupTestServer() *Server {
@@ -188,4 +192,64 @@ func putU64LE(b []byte, v uint64) {
 	b[5] = byte(v >> 40)
 	b[6] = byte(v >> 48)
 	b[7] = byte(v >> 56)
+}
+
+func TestRequestPartyMemberStats(t *testing.T) {
+	srv := newGroupTestServer()
+	alice := addSess(srv, 1, "Alice")
+	bob := addSess(srv, 2, "Bob")
+	bob.player.Class = 1 // Warrior (Rage = 1)
+	bob.player.Health = 500
+	bob.player.MaxHealth = 1000
+	bob.player.Powers[1] = 75
+	bob.player.MaxPowers[1] = 100
+	bob.player.Level = 45
+	bob.player.Zone = 12
+	bob.player.X = 100.0
+	bob.player.Y = 200.0
+
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	alice.conn = serverConn
+
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(2)
+
+	done := make(chan struct{})
+	go func() {
+		if !alice.handleRequestPartyMemberStats(context.Background(), payload.Bytes()) {
+			t.Error("handleRequestPartyMemberStats failed")
+		}
+		close(done)
+	}()
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	opcode, statsPayload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	if opcode != uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS) {
+		t.Fatalf("expected SMSG_PARTY_MEMBER_STATS (0x7E), got %x", opcode)
+	}
+	r := protocol.NewReader(statsPayload)
+	guid, _ := r.ReadPackedGUID()
+	mask, _ := r.ReadU32()
+	status, _ := r.ReadU16()
+	hp, _ := r.ReadU32()
+	maxHp, _ := r.ReadU32()
+	powerType, _ := r.ReadU8()
+	power, _ := r.ReadU16()
+	maxPower, _ := r.ReadU16()
+	lvl, _ := r.ReadU16()
+	zone, _ := r.ReadU16()
+	x, _ := r.ReadU16()
+	y, _ := r.ReadU16()
+
+	if guid != 2 || mask != 0x000001FF || status != 1 || hp != 500 || maxHp != 1000 || powerType != 1 || power != 75 || maxPower != 100 || lvl != 45 || zone != 12 || x != 100 || y != 200 {
+		t.Fatalf("unexpected stats: guid=%d mask=%x status=%d hp=%d maxHp=%d powerType=%d power=%d maxPower=%d lvl=%d zone=%d x=%d y=%d",
+			guid, mask, status, hp, maxHp, powerType, power, maxPower, lvl, zone, x, y)
+	}
 }

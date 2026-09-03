@@ -1007,8 +1007,30 @@ func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []by
 	return true
 }
 
+const (
+	groupUpdateFlagStatus    uint32 = 0x00000001
+	groupUpdateFlagCurHP     uint32 = 0x00000002
+	groupUpdateFlagMaxHP     uint32 = 0x00000004
+	groupUpdateFlagPowerType uint32 = 0x00000008
+	groupUpdateFlagCurPower  uint32 = 0x00000010
+	groupUpdateFlagMaxPower  uint32 = 0x00000020
+	groupUpdateFlagLevel     uint32 = 0x00000040
+	groupUpdateFlagZone      uint32 = 0x00000080
+	groupUpdateFlagPosition  uint32 = 0x00000100
+)
+
+const (
+	memberStatusOnline uint16 = 0x0001
+	memberStatusPvP    uint16 = 0x0002
+	memberStatusDead   uint16 = 0x0004
+	memberStatusGhost  uint16 = 0x0008
+	memberStatusAFK    uint16 = 0x0020
+	memberStatusDND    uint16 = 0x0040
+)
+
 // handleRequestPartyMemberStats processes CMSG_REQUEST_PARTY_MEMBER_STATS (0x27F).
-// Reference: WorldSession::HandleRequestPartyMemberStatsOpcode (GroupHandler.cpp:320).
+// Reference: WorldSession::HandleRequestPartyMemberStatsOpcode (GroupHandler.cpp:320),
+// and GroupHandler::SendPartyMemberStats (GroupHandler.cpp:752).
 func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -1019,18 +1041,47 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 	if s.server != nil {
 		targetSess := s.server.findSessionByGUID(targetGUID)
 		if targetSess != nil && targetSess.player != nil {
+			tp := targetSess.player
+			mask := groupUpdateFlagStatus | groupUpdateFlagCurHP | groupUpdateFlagMaxHP |
+				groupUpdateFlagPowerType | groupUpdateFlagCurPower | groupUpdateFlagMaxPower |
+				groupUpdateFlagLevel | groupUpdateFlagZone | groupUpdateFlagPosition
+
+			var status uint16 = memberStatusOnline
+			if tp.Health == 0 {
+				if tp.PlayerFlags&playerFlagGhost != 0 {
+					status |= memberStatusGhost
+				} else {
+					status |= memberStatusDead
+				}
+			}
+			if tp.PlayerFlags&playerFlagAFK != 0 {
+				status |= memberStatusAFK
+			}
+			if tp.PlayerFlags&playerFlagDND != 0 {
+				status |= memberStatusDND
+			}
+
+			powerType := classPowerType(tp.Class)
+			curPower := uint16(0)
+			maxPower := uint16(0)
+			if int(powerType) < len(tp.Powers) {
+				curPower = uint16(tp.Powers[powerType])
+				maxPower = uint16(tp.MaxPowers[powerType])
+			}
+
 			buf := protocol.NewBuffer(64)
 			buf.WritePackedGUID(targetGUID)
-			buf.WriteU32(0x00000001) // PMSP_STATUS (online)
-			buf.WriteU8(1)           // online
-			buf.WriteU32(targetSess.player.Health)
-			buf.WriteU32(targetSess.player.MaxHealth)
-			buf.WriteU8(0) // power type (mana = 0)
-			buf.WriteU16(uint16(targetSess.player.Powers[0]))
-			buf.WriteU16(uint16(targetSess.player.MaxPowers[0]))
-			buf.WriteU8(targetSess.player.Level)
-			buf.WriteU16(uint16(targetSess.player.Zone))
-			buf.WriteU16(0)
+			buf.WriteU32(mask)
+			buf.WriteU16(status)
+			buf.WriteU32(tp.Health)
+			buf.WriteU32(tp.MaxHealth)
+			buf.WriteU8(powerType)
+			buf.WriteU16(curPower)
+			buf.WriteU16(maxPower)
+			buf.WriteU16(uint16(tp.Level))
+			buf.WriteU16(uint16(tp.Zone))
+			buf.WriteU16(uint16(tp.X))
+			buf.WriteU16(uint16(tp.Y))
 			_ = s.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), buf.Bytes(), true)
 		}
 	}
