@@ -502,12 +502,16 @@ func (s *session) handleNextCinematicCamera() bool {
 }
 
 func (s *session) handleOpeningCinematic() bool {
-	if !s.playerLoaded || s.player == nil || s.player.XP != 0 {
+	if !s.playerLoaded || s.player == nil || s.player.Cinematic != 0 || s.player.XP != 0 {
 		return true
 	}
 	cinematicID := s.getStartingCinematicID(s.player.Race, s.player.Class)
 	if cinematicID == 0 {
 		return true
+	}
+	s.player.Cinematic = 1
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(), "UPDATE characters SET cinematic = 1 WHERE guid = ?", s.playerGUID)
 	}
 	packet := protocol.NewBuffer(4)
 	packet.WriteU32(cinematicID)
