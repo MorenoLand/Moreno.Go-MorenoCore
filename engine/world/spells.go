@@ -478,6 +478,14 @@ func (s *session) removeAura(spellID uint32) {
 	s.sendPlayerUpdate()
 }
 
+func (s *session) hasAura(spellID uint32) bool {
+	if s.auras == nil {
+		return false
+	}
+	_, ok := s.auras[spellID]
+	return ok
+}
+
 // handleCancelMountAura processes CMSG_CANCEL_MOUNT_AURA (0x375).
 // Reference: WorldSession::HandleCancelMountAuraOpcode (SpellHandler.cpp:544).
 func (s *session) handleCancelMountAura(payload []byte) bool {
