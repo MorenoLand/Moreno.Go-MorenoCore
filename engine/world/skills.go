@@ -72,13 +72,46 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		if oldSpellID > 0 {
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND spell = ?", s.playerGUID, oldSpellID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND spell = ? AND talentGroup = ?", s.playerGUID, oldSpellID, s.player.ActiveTalentGroup)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE guid = ? AND spell = ?", s.playerGUID, oldSpellID)
 		}
-		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_talent (guid, spell, talentGroup) VALUES (?, ?, 0)", s.playerGUID, spellID)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_talent (guid, spell, talentGroup) VALUES (?, ?, ?)", s.playerGUID, spellID, s.player.ActiveTalentGroup)
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
 	}
 	return true
+}
+
+func (s *session) loadTalentsForGroup(group uint8) map[uint32]uint8 {
+	talents := make(map[uint32]uint8)
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return talents
+	}
+	cdb := s.server.CharactersStore.DB
+	rows, err := cdb.Query("SELECT spell FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, group)
+	if err != nil {
+		return talents
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var spellID int64
+		if err := rows.Scan(&spellID); err == nil && spellID > 0 {
+			var tid uint32
+			var r uint8
+			var found bool
+			if s.server.Data != nil {
+				tid, r, found = s.server.Data.TalentBySpell(uint32(spellID))
+			}
+			if !found && spellID > 10 {
+				tid = uint32((spellID - 1) / 10)
+				r = uint8((spellID - 1) % 10)
+				found = true
+			}
+			if found {
+				talents[tid] = r
+			}
+		}
+	}
+	return talents
 }
 
 // sendTalentsInfo mirrors Player::SendTalentsInfoData (Player.cpp:25909).
@@ -93,18 +126,28 @@ func (s *session) sendTalentsInfo(pet bool) error {
 
 	buf.WriteU8(0)
 	buf.WriteU32(s.freeTalentPoints())
-	buf.WriteU8(1) // specsCount (1)
-	buf.WriteU8(0) // activeSpec (0)
-
-	talentCount := uint8(len(s.player.Talents))
-	buf.WriteU8(talentCount)
-	for tid, rank := range s.player.Talents {
-		buf.WriteU32(tid)
-		buf.WriteU8(rank)
+	specsCount := s.player.TalentGroupsCount
+	if specsCount == 0 {
+		specsCount = 1
 	}
-	buf.WriteU8(maxGlyphSlotIndex)
-	for i := uint8(0); i < maxGlyphSlotIndex; i++ {
-		buf.WriteU16(0)
+	buf.WriteU8(specsCount)
+	buf.WriteU8(s.player.ActiveTalentGroup)
+
+	for spec := uint8(0); spec < specsCount; spec++ {
+		talents := s.player.Talents
+		if spec != s.player.ActiveTalentGroup {
+			talents = s.loadTalentsForGroup(spec)
+		}
+		talentCount := uint8(len(talents))
+		buf.WriteU8(talentCount)
+		for tid, rank := range talents {
+			buf.WriteU32(tid)
+			buf.WriteU8(rank)
+		}
+		buf.WriteU8(maxGlyphSlotIndex)
+		for i := uint8(0); i < maxGlyphSlotIndex; i++ {
+			buf.WriteU16(0)
+		}
 	}
 	return s.write(uint16(protocol.OpcodeSMSG_TALENTS_INFO), buf.Bytes(), true)
 }

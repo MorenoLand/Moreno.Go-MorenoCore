@@ -591,3 +591,28 @@ func (s *Store) Talent(id uint32) (TalentEntry, bool, error) {
 		PrereqRank:   prereqRank,
 	}, true, nil
 }
+
+// TalentBySpell scans Talent.dbc for a talent record that grants the given spell.
+func (s *Store) TalentBySpell(spellID uint32) (uint32, uint8, bool) {
+	if spellID == 0 {
+		return 0, 0, false
+	}
+	file, err := s.File("Talent")
+	if err != nil {
+		return 0, 0, false
+	}
+	for i := 0; i < file.Records(); i++ {
+		rec, err := file.Record(i)
+		if err != nil {
+			continue
+		}
+		for r := 0; r < 5; r++ {
+			sp, _ := rec.Uint32(4 + r)
+			if sp == spellID {
+				id, _ := rec.Uint32(0)
+				return id, uint8(r), true
+			}
+		}
+	}
+	return 0, 0, false
+}
