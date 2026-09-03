@@ -1137,6 +1137,15 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 	return true
 }
 
+var guildBankTabPrices = []uint32{
+	100 * 10000,  // Tab 0 (first bought tab): 100 gold
+	250 * 10000,  // Tab 1: 250 gold
+	500 * 10000,  // Tab 2: 500 gold
+	1000 * 10000, // Tab 3: 1000 gold
+	2500 * 10000, // Tab 4: 2500 gold
+	5000 * 10000, // Tab 5: 5000 gold
+}
+
 // handleGuildBankBuyTab processes CMSG_GUILD_BANK_BUY_TAB (0x3EA).
 // Reference: WorldSession::HandleGuildBankBuyTab (GuildHandler.cpp:340).
 func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) bool {
@@ -1163,9 +1172,20 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 		return true
 	}
 
+	if int(tabID) >= len(guildBankTabPrices) {
+		return true
+	}
+	cost := guildBankTabPrices[tabID]
+	if s.player.Money < cost {
+		return true
+	}
+
+	s.player.Money -= cost
+	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "INSERT OR IGNORE INTO guild_bank_tab (guildid, TabId, TabName, TabIcon, TabText) VALUES (?, ?, ?, 'INV_Misc_Bag_08', '')",
 		guildID, tabID, "Tab "+string(rune('1'+tabID)))
 
+	s.sendPlayerUpdate()
 	return s.sendGuildBankList(ctx, bankerGUID, tabID, true)
 }
 
