@@ -27,20 +27,27 @@ func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byt
 	if err != nil {
 		return false
 	}
-	creature := s.luaCreature(ctx, guid)
-	if creature == nil {
-		return true
+	var entry uint32
+	if creature := s.luaCreature(ctx, guid); creature != nil {
+		entry = objectUint32OrZero(creature, "Entry")
 	}
-	entry := objectUint32OrZero(creature, "Entry")
-	status, err := s.questDialogStatus(ctx, entry)
-	if err != nil {
-		s.debug("quest status failed", "account", s.accountName, "entry", entry, "error", err)
-		return false
+	if entry == 0 {
+		entry = uint32((guid >> 24) & 0x00FFFFFF)
+	}
+	if entry == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		rawGUID := guid & 0x00000000FFFFFFFF
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", rawGUID).Scan(&entry)
+	}
+	status := uint8(questDialogNone)
+	if entry != 0 {
+		if st, err := s.questDialogStatus(ctx, entry); err == nil {
+			status = st
+		}
 	}
 	packet := protocol.NewBuffer(9)
 	packet.WriteU64(guid)
 	packet.WriteU8(status)
-	s.debug("quest status response", "account", s.accountName, "entry", entry, "status", status)
+	s.debug("quest status response", "account", s.accountName, "guid", guid, "entry", entry, "status", status)
 	return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS), packet.Bytes(), true) == nil
 }
 
