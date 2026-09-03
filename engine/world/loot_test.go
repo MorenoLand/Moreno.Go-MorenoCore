@@ -3,8 +3,11 @@ package world
 import (
 	"context"
 	"database/sql"
+	"net"
 	"testing"
+	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -104,3 +107,77 @@ func TestLootItemPushResultMatchesReferenceFlags(t *testing.T) {
 		t.Fatalf("entry=%d err=%v", value, err)
 	}
 }
+
+func TestHandleLootRoll(t *testing.T) {
+	srv := &Server{
+		groups:       make(map[uint64]*groupState),
+		creatureLoot: make(map[uint64]*activeLootState),
+		sessions:     make(map[*session]struct{}),
+		Config:       config.Default(),
+	}
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   100,
+		groupID:      1,
+		player:       &playerState{GUID: 100},
+	}
+	srv.sessions[sess] = struct{}{}
+	srv.groups[1] = &groupState{ID: 1, Members: []groupMember{{GUID: 100}}}
+
+	// Populate loot in creatureLoot
+	targetGUID := uint64(500)
+	srv.creatureLoot[targetGUID] = &activeLootState{
+		TargetGUID: targetGUID,
+		Items: map[uint8]lootItem{
+			0: {Slot: 0, ItemEntry: 12345},
+		},
+	}
+
+	payload := protocol.NewBuffer(13)
+	payload.WriteU64(targetGUID)
+	payload.WriteU32(0) // slot 0
+	payload.WriteU8(1)  // need roll
+
+	done := make(chan struct{})
+	go func() {
+		if !sess.handleLootRoll(context.Background(), payload.Bytes()) {
+			t.Error("handleLootRoll returned false")
+		}
+		close(done)
+	}()
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	opcode, rollPayload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	if opcode != uint16(protocol.OpcodeSMSG_LOOT_ROLL) {
+		t.Fatalf("expected SMSG_LOOT_ROLL (0x2A2), got %x", opcode)
+	}
+	if len(rollPayload) != 35 {
+		t.Fatalf("expected 35 bytes, got %d", len(rollPayload))
+	}
+	r := protocol.NewReader(rollPayload)
+	src, _ := r.ReadU64()
+	slot, _ := r.ReadU32()
+	player, _ := r.ReadU64()
+	entry, _ := r.ReadU32()
+	_, _ = r.ReadU32() // suffix
+	_, _ = r.ReadU32() // propId
+	rollNum, _ := r.ReadU8()
+	rollType, _ := r.ReadU8()
+	autoPass, _ := r.ReadU8()
+
+	if src != targetGUID || slot != 0 || player != 100 || entry != 12345 || rollNum == 0 || rollNum > 100 || rollType != 1 || autoPass != 0 {
+		t.Fatalf("unexpected fields: src=%d slot=%d player=%d entry=%d rollNum=%d rollType=%d autoPass=%d", src, slot, player, entry, rollNum, rollType, autoPass)
+	}
+}
+

@@ -355,7 +355,7 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 }
 
 // handleLootRoll processes CMSG_LOOT_ROLL (0x2A0).
-// Reference: WorldSession::HandleLootRoll (GroupHandler.cpp:470).
+// Reference: WorldSession::HandleLootRoll (GroupHandler.cpp:470), Group::SendLootRoll (Group.cpp:995).
 func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 13 {
 		return true
@@ -366,12 +366,30 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	rollType, _ := r.ReadU8() // 0 = pass, 1 = need, 2 = greed, 3 = disenchant
 
 	if s.server != nil && s.groupID != 0 {
-		buf := protocol.NewBuffer(22)
-		buf.WriteU64(itemGUID)
-		buf.WriteU32(itemSlot)
-		buf.WriteU64(s.playerGUID)
-		buf.WriteU8(rollType)
-		buf.WriteU8(0) // autoPass
+		var itemEntry uint32
+		s.server.lootMu.Lock()
+		if loot := s.server.creatureLoot[itemGUID]; loot != nil {
+			if li, ok := loot.Items[uint8(itemSlot)]; ok {
+				itemEntry = li.ItemEntry
+			}
+		}
+		s.server.lootMu.Unlock()
+
+		rollNumber := uint8(128) // pass
+		if rollType > 0 {
+			rollNumber = uint8(rand.Intn(100) + 1) // 1..100
+		}
+
+		buf := protocol.NewBuffer(35)
+		buf.WriteU64(itemGUID)     // sourceGuid (guid of loot object)
+		buf.WriteU32(itemSlot)     // slot
+		buf.WriteU64(s.playerGUID) // targetGuid (rolling player)
+		buf.WriteU32(itemEntry)    // itemEntryId
+		buf.WriteU32(0)            // randomSuffix
+		buf.WriteU32(0)            // randomPropId
+		buf.WriteU8(rollNumber)    // rollNumber
+		buf.WriteU8(rollType)      // rollType (0: pass, 1: need, 2: greed, 3: disenchant)
+		buf.WriteU8(0)             // autoPass
 		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
 	}
 	return true
