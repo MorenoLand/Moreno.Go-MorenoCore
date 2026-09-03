@@ -103,6 +103,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	// Self-cast only spells (e.g. Demon Skin, Demon Armor, Ice Barrier) must always target the caster
 	if isSelfCastOnly(spell) {
+		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID {
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 2), true) // SPELL_FAILED_BAD_TARGETS = 2
+			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "self-cast only spell cannot target other units")
+			return true
+		}
 		target.UnitGUID = s.playerGUID
 		target.Flags = protocol.SpellTargetFlagUnit
 	}
@@ -158,7 +163,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		} else {
 			s.player.Powers[pType] = 0
 		}
-		s.sendPlayerUpdate()
+		fields := map[int]uint32{
+			unitFieldPower1 + int(pType): s.player.Powers[pType],
+		}
+		if pVal, pErr := s.server.buildPlayerValuesUpdate(s.playerGUID, fields); pErr == nil && pVal != nil {
+			_ = s.write(pVal.Opcode, pVal.Payload.Bytes(), true)
+		}
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			col := fmt.Sprintf("power%d", pType+1)
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), s.player.Powers[pType], s.playerGUID)

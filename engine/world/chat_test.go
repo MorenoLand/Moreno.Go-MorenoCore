@@ -89,8 +89,8 @@ func TestBroadcastGMChatIncludesChatTag(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) {
-		t.Fatalf("opcode=%x, expected SMSG_MESSAGECHAT (0x096)", opcode)
+	if opcode != uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT) && opcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) {
+		t.Fatalf("opcode=%x, expected SMSG_GM_MESSAGECHAT or SMSG_MESSAGECHAT", opcode)
 	}
 	reader := protocol.NewReader(payload)
 	if _, err := reader.ReadU8(); err != nil {
@@ -104,6 +104,17 @@ func TestBroadcastGMChatIncludesChatTag(t *testing.T) {
 	}
 	if _, err := reader.ReadU32(); err != nil {
 		t.Fatal(err)
+	}
+	if opcode == uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT) {
+		nameLen, err := reader.ReadU32()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if nameLen > 0 {
+			if _, err := reader.ReadCString(); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	if value, err := reader.ReadU64(); err != nil || value != 99 {
 		t.Fatalf("receiver=%d err=%v", value, err)

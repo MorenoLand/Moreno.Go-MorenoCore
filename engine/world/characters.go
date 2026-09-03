@@ -1095,7 +1095,14 @@ func (s *session) createStarterSkills(ctx context.Context, guid uint64, race, cl
 					continue
 				}
 				val := 1
-				max := 300
+				max := 1
+				if isLanguageSkill(uint16(skillID)) {
+					val = 300
+					max = 300
+				} else if isLevelScaledSkill(uint16(skillID)) {
+					val = 1
+					max = 5 // level 1 * 5
+				}
 				if rank > 0 {
 					val = int(rank)
 				}

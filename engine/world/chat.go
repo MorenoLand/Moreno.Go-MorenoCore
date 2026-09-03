@@ -213,8 +213,15 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			receiverGUID = 0
 		}
 		tag := source.chatTag()
-		payload := protocol.BuildChatMessageWithOptions(chatType, language, source.playerGUID, receiverGUID, message, channel, false, "", tag)
-		if err := target.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), payload, true); err != nil {
+		isGM := tag&0x04 != 0
+		opcode := uint16(protocol.OpcodeSMSG_MESSAGECHAT)
+		senderName := ""
+		if isGM && source.player != nil {
+			opcode = uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT)
+			senderName = source.player.Name
+		}
+		payload := protocol.BuildChatMessageWithOptions(chatType, language, source.playerGUID, receiverGUID, message, channel, isGM, senderName, tag)
+		if err := target.write(opcode, payload, true); err != nil {
 			target.debug("chat delivery failed", "account", target.accountName, "error", err)
 		}
 	}

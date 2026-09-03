@@ -56,7 +56,7 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 	// 1. TrinityCore 3.3.5: trainer_spell + trainer + creature_default_trainer
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT ts.SpellId, COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqLevel, 0),
 		COALESCE(ts.ReqAbility1, 0), COALESCE(ts.ReqAbility2, 0), COALESCE(ts.ReqAbility3, 0),
-		COALESCE(t.Type, 0), COALESCE(t.Greeting, 'Hello! Ready for some training?')
+		COALESCE(t.Type, 0), COALESCE(t.Requirement, 0), COALESCE(t.Greeting, 'Hello! Ready for some training?')
 		FROM trainer_spell AS ts
 		LEFT JOIN trainer AS t ON t.Id = ts.TrainerId
 		WHERE ts.TrainerId IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
@@ -65,9 +65,15 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
-			var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel, reqAb1, reqAb2, reqAb3, tType int64
+			var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel, reqAb1, reqAb2, reqAb3, tType, tReq int64
 			var greet sql.NullString
-			if err := rows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel, &reqAb1, &reqAb2, &reqAb3, &tType, &greet); err != nil {
+			if err := rows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel, &reqAb1, &reqAb2, &reqAb3, &tType, &tReq, &greet); err != nil {
+				continue
+			}
+			if tType == 0 && tReq != 0 && tReq != int64(s.player.Class) {
+				continue
+			}
+			if tType == 1 && tReq != 0 && tReq != int64(s.player.Race) {
 				continue
 			}
 			if greet.Valid && greet.String != "" {
@@ -222,14 +228,24 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry)
 	}
 
-	var moneyCost, reqLevel int64
-	err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0)
+	var moneyCost, reqLevel, tType, tReq int64
+	err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0), COALESCE(t.Type, 0), COALESCE(t.Requirement, 0)
 		FROM trainer_spell AS ts
+		LEFT JOIN trainer AS t ON t.Id = ts.TrainerId
 		WHERE (ts.TrainerId IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
 		   OR ts.TrainerId = ?) AND ts.SpellId = ? LIMIT 1`,
-		creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel)
-	if err != nil && s.player != nil && s.player.Class > 0 {
-		// Fallback to class trainer
+		creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel, &tType, &tReq)
+	if err == nil {
+		if tType == 0 && tReq != 0 && tReq != int64(s.player.Class) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true)
+			return true
+		}
+		if tType == 1 && tReq != 0 && tReq != int64(s.player.Race) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true)
+			return true
+		}
+	} else if s.player != nil && s.player.Class > 0 {
+		// Fallback to class trainer only for player's own class
 		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0)
 			FROM trainer_spell AS ts
 			JOIN trainer AS t ON t.Id = ts.TrainerId
@@ -237,15 +253,16 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 			s.player.Class, spellID).Scan(&moneyCost, &reqLevel)
 	}
 	if err != nil {
-		// Global fallback for any trainer offering this spell
-		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(MoneyCost, 0), COALESCE(ReqLevel, 0)
-			FROM trainer_spell WHERE SpellId = ? LIMIT 1`, spellID).Scan(&moneyCost, &reqLevel)
-		if err != nil {
-			s.debug("trainer spell not found", "account", s.accountName, "trainer", trainerGUID, "entry", creatureEntry, "spell", spellID)
-			return true
-		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true)
+		s.debug("trainer spell not found", "account", s.accountName, "trainer", trainerGUID, "entry", creatureEntry, "spell", spellID)
+		return true
 	}
-	if s.player.Money < uint32(moneyCost) || s.player.Level < uint8(reqLevel) {
+	if s.player.Money < uint32(moneyCost) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 1), true) // NotEnoughMoney = 1
+		return true
+	}
+	if s.player.Level < uint8(reqLevel) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true) // NotEnoughSkill = 2
 		return true
 	}
 	s.player.Money -= uint32(moneyCost)
@@ -277,5 +294,13 @@ func buildTrainerBuySucceeded(trainerGUID uint64, spellID uint32) []byte {
 	buf := protocol.NewBuffer(12)
 	buf.WriteU64(trainerGUID)
 	buf.WriteU32(spellID)
+	return buf.Bytes()
+}
+
+func buildTrainerBuyFailed(trainerGUID uint64, spellID, reason uint32) []byte {
+	buf := protocol.NewBuffer(16)
+	buf.WriteU64(trainerGUID)
+	buf.WriteU32(spellID)
+	buf.WriteU32(reason)
 	return buf.Bytes()
 }

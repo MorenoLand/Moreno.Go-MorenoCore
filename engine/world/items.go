@@ -46,6 +46,9 @@ func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool 
 		return true
 	}
 	srcBag := payload[0]
+	if srcBag == 255 {
+		srcBag = 0
+	}
 	srcSlot := payload[1]
 	db := s.server.CharactersStore.DB
 	if db == nil {
@@ -73,6 +76,7 @@ func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool 
 	}
 	_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET slot = ?, bag = 0 WHERE guid = ? AND item = ?", destSlot, s.playerGUID, itemGUID)
 	s.syncEquipmentCache(ctx)
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("item auto-equipped", "account", s.accountName, "guid", s.playerGUID, "entry", itemEntry, "slot", destSlot)
 	return true
@@ -110,6 +114,7 @@ func (s *session) handleAutoEquipItemSlot(ctx context.Context, payload []byte) b
 	}
 	_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET slot = ?, bag = 0 WHERE guid = ? AND item = ?", dstSlot, s.playerGUID, itemGUID)
 	s.syncEquipmentCache(ctx)
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("item slot equipped", "account", s.accountName, "guid", s.playerGUID, "item", itemGUID, "slot", dstSlot)
 	return true
@@ -158,6 +163,12 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 	dstSlot := payload[1]
 	srcBag := payload[2]
 	srcSlot := payload[3]
+	if dstBag == 255 {
+		dstBag = 0
+	}
+	if srcBag == 255 {
+		srcBag = 0
+	}
 	if dstBag == srcBag && dstSlot == srcSlot {
 		return true
 	}
@@ -191,6 +202,9 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	bag := payload[0]
+	if bag == 255 {
+		bag = 0
+	}
 	slot := payload[1]
 	count := payload[2]
 	db := s.server.CharactersStore.DB
@@ -211,6 +225,7 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 		_, _ = db.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
 	}
 	s.syncEquipmentCache(ctx)
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("item destroyed", "account", s.accountName, "item", itemGUID, "bag", bag, "slot", slot, "count", count)
 	return true
