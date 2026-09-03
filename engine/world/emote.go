@@ -71,7 +71,8 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 	if !found {
 		return true
 	}
-	if _, err := entry.Uint32(2); err != nil {
+	visualEmote, err := entry.Uint32(2)
+	if err != nil {
 		return true
 	}
 	targetName := ""
@@ -89,16 +90,25 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
-	packet := protocol.NewBuffer(32 + len(targetName))
+	packet := protocol.NewBuffer(32 + len(targetName) + 1)
 	packet.WriteU64(s.playerGUID)
 	packet.WriteU32(textEmote)
 	packet.WriteU32(emoteNum)
 	packet.WriteU32(uint32(len(targetName)))
 	if len(targetName) > 1 {
-		packet.WriteString(targetName)
+		packet.WriteCString(targetName)
 	} else {
 		packet.WriteU8(0)
 	}
+
+	var visPacket []byte
+	if visualEmote > 0 {
+		buf := protocol.NewBuffer(12)
+		buf.WriteU32(visualEmote)
+		buf.WriteU64(s.playerGUID)
+		visPacket = buf.Bytes()
+	}
+
 	s.server.sessionsMu.RLock()
 	defer s.server.sessionsMu.RUnlock()
 	for member := range s.server.sessions {
@@ -106,6 +116,9 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 			continue
 		}
 		_ = member.write(uint16(protocol.OpcodeSMSG_TEXT_EMOTE), packet.Bytes(), true)
+		if len(visPacket) > 0 {
+			_ = member.write(uint16(protocol.OpcodeSMSG_EMOTE), visPacket, true)
+		}
 	}
 	return true
 }
