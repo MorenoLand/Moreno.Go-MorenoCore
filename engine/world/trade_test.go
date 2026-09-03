@@ -22,7 +22,7 @@ func TestPlayerToPlayerTrade(t *testing.T) {
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, played_time INTEGER, text TEXT)",
 		"INSERT INTO characters VALUES (1, 'Player1', 5000, '')",
 		"INSERT INTO characters VALUES (2, 'Player2', 2000, '')",
-		"INSERT INTO item_instance VALUES (101, 5555, 1, 0, 1, 0, '', 0, '', 0, 100, 0, '')",
+		"INSERT INTO item_instance VALUES (101, 5555, 1, 0, 1, 0, '', 0, '3789 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0', 0, 100, 0, '')",
 		"INSERT INTO character_inventory VALUES (1, 0, 23, 101)",
 	} {
 		if _, err := db.Exec(stmt); err != nil {
@@ -62,6 +62,9 @@ func TestPlayerToPlayerTrade(t *testing.T) {
 	itemBuf.WriteU8(23) // slot 23
 	if !sess1.handleSetTradeItem(ctx, itemBuf.Bytes()) {
 		t.Fatal("handleSetTradeItem failed")
+	}
+	if sess1.trade.Items[0].EnchantID != 3789 {
+		t.Fatalf("expected EnchantID 3789, got %d", sess1.trade.Items[0].EnchantID)
 	}
 
 	// 4. Player 2 offers 500 gold

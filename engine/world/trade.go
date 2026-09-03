@@ -3,6 +3,8 @@ package world
 import (
 	"context"
 	"database/sql"
+	"strconv"
+	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -26,6 +28,7 @@ type tradeSlotItem struct {
 	ItemEntry  uint32
 	DisplayID  uint32
 	StackCount uint32
+	EnchantID  uint32
 }
 
 type playerTradeState struct {
@@ -70,6 +73,8 @@ func (s *session) handleBeginTrade(ctx context.Context) bool {
 	buf.WriteU32(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), buf.Bytes(), true)
 	_ = partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), buf.Bytes(), true)
+	s.notifyTradeUpdate()
+	partner.notifyTradeUpdate()
 	s.debug("trade window opened", "player1", s.accountName, "player2", partner.accountName)
 	return true
 }
@@ -88,9 +93,13 @@ func (s *session) handleSetTradeGold(ctx context.Context, payload []byte) bool {
 	}
 	s.trade.Money = gold
 	s.trade.Accepted = false
-	if s.trade.Partner != nil {
+	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
 		s.trade.Partner.trade.Accepted = false
-		s.sendTradeStatusExtended(true)
+		statusBuf := protocol.NewBuffer(4)
+		statusBuf.WriteU32(tradeStatusTradeChange)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
+		_ = s.trade.Partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
+		s.notifyTradeUpdate()
 	}
 	return true
 }
@@ -115,16 +124,38 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	var itemEntry, count int64
-	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count)
+	var encStr sql.NullString
+	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, enchantments FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &encStr)
+	var enchantID uint32
+	if encStr.Valid && encStr.String != "" {
+		fields := strings.Fields(encStr.String)
+		if len(fields) > 0 {
+			if e, err := strconv.ParseUint(fields[0], 10, 32); err == nil {
+				enchantID = uint32(e)
+			}
+		}
+	}
+	var displayID uint32
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var disp int64
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT displayid FROM item_template WHERE entry = ?", itemEntry).Scan(&disp)
+		displayID = uint32(disp)
+	}
 	s.trade.Items[tradeSlot] = tradeSlotItem{
 		ItemGUID:   uint64(itemGUID),
 		ItemEntry:  uint32(itemEntry),
+		DisplayID:  displayID,
 		StackCount: uint32(count),
+		EnchantID:  enchantID,
 	}
 	s.trade.Accepted = false
-	if s.trade.Partner != nil {
+	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
 		s.trade.Partner.trade.Accepted = false
-		s.sendTradeStatusExtended(true)
+		statusBuf := protocol.NewBuffer(4)
+		statusBuf.WriteU32(tradeStatusTradeChange)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
+		_ = s.trade.Partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
+		s.notifyTradeUpdate()
 	}
 	return true
 }
@@ -136,9 +167,13 @@ func (s *session) handleClearTradeItem(ctx context.Context, payload []byte) bool
 	tradeSlot := payload[0]
 	delete(s.trade.Items, tradeSlot)
 	s.trade.Accepted = false
-	if s.trade.Partner != nil {
+	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
 		s.trade.Partner.trade.Accepted = false
-		s.sendTradeStatusExtended(true)
+		statusBuf := protocol.NewBuffer(4)
+		statusBuf.WriteU32(tradeStatusTradeChange)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
+		_ = s.trade.Partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
+		s.notifyTradeUpdate()
 	}
 	return true
 }
@@ -233,6 +268,10 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 
 	_ = s.sendInventoryItems(ctx)
 	_ = partner.sendInventoryItems(ctx)
+	s.sendPlayerMoneyUpdate()
+	partner.sendPlayerMoneyUpdate()
+	s.syncEquipmentCache(ctx)
+	partner.syncEquipmentCache(ctx)
 	s.sendPlayerUpdate()
 	partner.sendPlayerUpdate()
 
@@ -302,7 +341,7 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 			buf.WriteU32(it.StackCount)
 			buf.WriteU32(0) // wrapped
 			buf.WriteU64(0) // giftCreator
-			buf.WriteU32(0) // permEnchant
+			buf.WriteU32(it.EnchantID) // permEnchant
 			for j := 0; j < 3; j++ {
 				buf.WriteU32(0) // gem sockets
 			}
@@ -320,4 +359,11 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 		}
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS_EXTENDED), buf.Bytes(), true)
+}
+
+func (s *session) notifyTradeUpdate() {
+	s.sendTradeStatusExtended(false)
+	if s.trade != nil && s.trade.Partner != nil {
+		s.trade.Partner.sendTradeStatusExtended(true)
+	}
 }
