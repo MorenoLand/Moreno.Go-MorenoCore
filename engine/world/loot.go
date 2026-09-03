@@ -333,17 +333,45 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 
 	if s.activeLoot != nil {
 		if it, ok := s.activeLoot.Items[slotID]; ok {
-			delete(s.activeLoot.Items, slotID)
 			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 				cdb := s.server.CharactersStore.DB
+				usedSlots := make(map[uint8]bool)
+				rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", targetGUID)
+				if err == nil {
+					for rows.Next() {
+						var sl int64
+						if rows.Scan(&sl) == nil {
+							usedSlots[uint8(sl)] = true
+						}
+					}
+					rows.Close()
+				}
+				freeSlot := uint8(0xFF)
+				for sl := uint8(23); sl <= 38; sl++ {
+					if !usedSlots[sl] {
+						freeSlot = sl
+						break
+					}
+				}
+				if freeSlot == 0xFF {
+					buf := protocol.NewBuffer(9)
+					buf.WriteU64(lootGUID)
+					buf.WriteU8(4) // LOOT_ERROR_INVENTORY_FULL
+					_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
+					return true
+				}
+
+				delete(s.activeLoot.Items, slotID)
 				var nextGUID int64
 				_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
 				if nextGUID <= 0 {
 					nextGUID = 1
 				}
 				_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 0, 0, '')", nextGUID, it.ItemEntry, targetGUID, it.Count)
-				_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, 23, ?)", targetGUID, nextGUID)
+				_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", targetGUID, freeSlot, nextGUID)
 				_ = targetSess.sendInventoryItems(ctx)
+			} else {
+				delete(s.activeLoot.Items, slotID)
 			}
 			buf := protocol.NewBuffer(9)
 			buf.WriteU64(lootGUID)
