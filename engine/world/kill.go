@@ -182,7 +182,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(maxlevel, 0), minlevel, 1) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&mobLevel)
 	xp := s.server.killXPGain(ctx, uint32(s.player.Level), uint32(mobLevel))
 	if xp > 0 {
-		s.grantXP(ctx, xp)
+		s.grantXPWithVictim(ctx, xp, target.GUID)
 	}
 
 	// Mark the corpse lootable for everyone in range (dynamic flags update).
@@ -201,9 +201,29 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 
 // grantXP applies XP with repeated level-ups and updates the client fields.
 func (s *session) grantXP(ctx context.Context, amount uint32) {
-	if s.player == nil || amount == 0 {
+	s.grantXPWithVictim(ctx, amount, 0)
+}
+
+// grantXPWithVictim applies XP with combat log SMSG_LOG_XPGAIN, repeated level-ups, and client field updates.
+func (s *session) grantXPWithVictim(ctx context.Context, amount uint32, victimGUID uint64) {
+	if s.player == nil || amount == 0 || s.player.Level >= 80 {
 		return
 	}
+
+	// SMSG_LOG_XPGAIN (0x1D0): victimGUID (8), totalXP (4), type (1), [baseXP (4), groupRate (4)], rafBonus (1)
+	xpLog := protocol.NewBuffer(22)
+	xpLog.WriteU64(victimGUID)
+	xpLog.WriteU32(amount)
+	if victimGUID != 0 {
+		xpLog.WriteU8(0)       // 0 = kill XP
+		xpLog.WriteU32(amount) // base XP
+		xpLog.WriteF32(1.0)    // group rate
+	} else {
+		xpLog.WriteU8(1) // 1 = non-kill XP (quest, exploration)
+	}
+	xpLog.WriteU8(0) // recruit-a-friend flag
+	_ = s.write(uint16(protocol.OpcodeSMSG_LOG_XPGAIN), xpLog.Bytes(), true)
+
 	s.player.XP += amount
 	for s.player.Level < 80 {
 		needed := s.server.xpForLevel(ctx, uint32(s.player.Level))
