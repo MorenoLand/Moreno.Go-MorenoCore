@@ -147,6 +147,7 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 	}
 
 	_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND bag = ? AND slot = ?", destSlot, s.playerGUID, srcBag, srcSlot)
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	return true
 }
@@ -230,6 +231,7 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND bag = ? AND slot = ?", destSlot, s.playerGUID, srcBag, srcSlot)
 	}
 
+	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	return true
 }
