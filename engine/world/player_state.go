@@ -208,14 +208,14 @@ type playerReputation struct {
 
 func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState, error) {
 	state := playerState{GUID: guid, Health: 1, MaxHealth: 1}
-	var race, class, gender, level, playerFlags, mapID, extraFlags, atLogin, zone, deathExpireTime int64
+	var race, class, gender, level, playerFlags, mapID, extraFlags, atLogin, zone, deathExpireTime, cinematic int64
 	var equipment sql.NullString
-	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, name, race, class, gender, level, playerFlags, map, position_x, position_y, position_z, orientation, extra_flags, at_login, zone, equipmentCache, death_expire_time FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&state.GUID, &state.Name, &race, &class, &gender, &level, &playerFlags, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &extraFlags, &atLogin, &zone, &equipment, &deathExpireTime); err != nil {
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guid, name, race, class, gender, level, playerFlags, map, position_x, position_y, position_z, orientation, extra_flags, at_login, zone, equipmentCache, death_expire_time, COALESCE(cinematic, 0) FROM characters WHERE guid = ? AND account = ?", guid, s.accountID).Scan(&state.GUID, &state.Name, &race, &class, &gender, &level, &playerFlags, &mapID, &state.X, &state.Y, &state.Z, &state.Orientation, &extraFlags, &atLogin, &zone, &equipment, &deathExpireTime, &cinematic); err != nil {
 		return playerState{}, err
 	}
 	s.deathExpireTime = deathExpireTime
 	state.Race, state.Class, state.Gender, state.Level = uint8(race), uint8(class), uint8(gender), uint8(level)
-	state.PlayerFlags, state.Map, state.ExtraFlags, state.AtLogin, state.Zone = uint32(playerFlags), uint32(mapID), uint32(extraFlags), uint32(atLogin), uint32(zone)
+	state.PlayerFlags, state.Map, state.ExtraFlags, state.AtLogin, state.Zone, state.Cinematic = uint32(playerFlags), uint32(mapID), uint32(extraFlags), uint32(atLogin), uint32(zone), uint32(cinematic)
 	if equipment.Valid {
 		state.Equipment = equipment.String
 	}
