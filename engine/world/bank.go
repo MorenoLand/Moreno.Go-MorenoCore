@@ -65,9 +65,12 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 		return false
 	}
 
-	// Count purchased bank bag slots
-	var purchasedCount int
-	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= 67 AND slot <= 73", s.playerGUID).Scan(&purchasedCount)
+	// Count purchased bank bag slots from characters table or player state
+	purchasedCount := int(s.player.BankBagSlots)
+	var dbSlots int64
+	if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(bankSlots, 0) FROM characters WHERE guid = ?", s.playerGUID).Scan(&dbSlots); err == nil {
+		purchasedCount = int(dbSlots)
+	}
 
 	res := protocol.NewBuffer(12)
 	res.WriteU64(bankerGUID)
@@ -85,13 +88,15 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 	}
 
 	s.player.Money -= cost
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-	nextSlot := 67 + purchasedCount
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, 0)", s.playerGUID, nextSlot)
-	s.player.BankBagSlots = uint8(purchasedCount + 1)
+	newCount := uint8(purchasedCount + 1)
+	s.player.BankBagSlots = newCount
+	if _, err := cdb.ExecContext(ctx, "UPDATE characters SET money = ?, bankSlots = ? WHERE guid = ?", s.player.Money, newCount, s.playerGUID); err != nil {
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	}
 
 	res.WriteU32(0) // ERR_BANKSLOT_OK
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_BANK_SLOT_RESULT), res.Bytes(), true)
+	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()
 	return true
 }
@@ -117,13 +122,18 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 		return false
 	}
 
-	var itemGUID uint64
-	err = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, srcBag, srcSlot).Scan(&itemGUID)
+	srcBagKey, ok := s.inventoryBagKey(ctx, srcBag)
+	if !ok {
+		return true
+	}
+
+	var itemGUID int64
+	err = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, srcBagKey, srcSlot).Scan(&itemGUID)
 	if err != nil || itemGUID == 0 {
 		return true
 	}
 
-	// Find free bank slot among 39..66
+	// 1. Find free bank slot among 39..66
 	occupied := make(map[uint8]bool)
 	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot <= ?", s.playerGUID, bankSlotStart, bankSlotEnd)
 	if err == nil {
@@ -136,6 +146,7 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	var destBagKey int64 = 0
 	var destSlot uint8 = 0xFF
 	for sl := bankSlotStart; sl <= bankSlotEnd; sl++ {
 		if !occupied[sl] {
@@ -143,11 +154,38 @@ func (s *session) handleAutoBankItem(ctx context.Context, payload []byte) bool {
 			break
 		}
 	}
+
+	// 2. If 39..66 are full, check purchased bank bags (slots 67..73)
+	if destSlot == 0xFF && s.player.BankBagSlots > 0 {
+		maxBankBag := int(s.player.BankBagSlots)
+		if maxBankBag > 7 {
+			maxBankBag = 7
+		}
+		for i := 0; i < maxBankBag; i++ {
+			bagSlot := 67 + i
+			var bagGUID int64
+			_ = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, bagSlot).Scan(&bagGUID)
+			if bagGUID == 0 {
+				continue
+			}
+			freeSlot, ok := s.freeInventorySlot(ctx, bagGUID)
+			if ok {
+				destBagKey = bagGUID
+				destSlot = freeSlot
+				break
+			}
+		}
+	}
+
 	if destSlot == 0xFF {
+		s.sendEquipError(equipErrInvFull, uint64(itemGUID))
 		return true // Bank full
 	}
 
-	_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND bag = ? AND slot = ?", destSlot, s.playerGUID, srcBag, srcSlot)
+	_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID)
+	if srcBagKey == 0 && srcSlot < equipSlotEnd {
+		s.syncEquipmentCache(ctx)
+	}
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	return true
@@ -174,16 +212,27 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 		return false
 	}
 
-	var itemGUID uint64
-	err = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, srcBag, srcSlot).Scan(&itemGUID)
+	srcBagKey, ok := s.inventoryBagKey(ctx, srcBag)
+	if !ok {
+		return true
+	}
+
+	var itemGUID int64
+	err = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, srcBagKey, srcSlot).Scan(&itemGUID)
 	if err != nil || itemGUID == 0 {
 		return true
 	}
 
-	isBank := (srcBag == 0 && srcSlot >= bankSlotStart && srcSlot <= bankSlotEnd)
+	// Determine if item is in the bank (primary bank 39..66 or inside a bank bag)
+	isBank := (srcBagKey == 0 && srcSlot >= bankSlotStart && srcSlot <= bankSlotEnd)
+	if !isBank && srcBagKey != 0 {
+		var isBankBagCount int
+		_ = cdb.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= 67 AND slot <= 73 AND item = ?", s.playerGUID, srcBagKey).Scan(&isBankBagCount)
+		isBank = isBankBagCount > 0
+	}
 
 	if isBank {
-		// Move from bank to backpack (slots 23..38)
+		// Move from bank to backpack (slots 23..38), or into equipped bags (19..22)
 		occupied := make(map[uint8]bool)
 		rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot <= ?", s.playerGUID, bagSlotStart, bagSlotEnd)
 		if err == nil {
@@ -195,6 +244,7 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 				}
 			}
 		}
+		var destBagKey int64 = 0
 		var destSlot uint8 = 0xFF
 		for sl := bagSlotStart; sl <= bagSlotEnd; sl++ {
 			if !occupied[sl] {
@@ -203,11 +253,28 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 			}
 		}
 		if destSlot == 0xFF {
-			return true // Bags full
+			// Check equipped bags 19..22
+			for bagSlot := int(invSlotBagStart); bagSlot < int(invSlotBagEnd); bagSlot++ {
+				var bagGUID int64
+				_ = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, bagSlot).Scan(&bagGUID)
+				if bagGUID == 0 {
+					continue
+				}
+				freeSlot, ok := s.freeInventorySlot(ctx, bagGUID)
+				if ok {
+					destBagKey = bagGUID
+					destSlot = freeSlot
+					break
+				}
+			}
 		}
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND bag = ? AND slot = ?", destSlot, s.playerGUID, srcBag, srcSlot)
+		if destSlot == 0xFF {
+			s.sendEquipError(equipErrInvFull, uint64(itemGUID))
+			return true // Inventory full
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID)
 	} else {
-		// Move from backpack to bank (slots 39..66)
+		// Move from player bags to bank
 		occupied := make(map[uint8]bool)
 		rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= ? AND slot <= ?", s.playerGUID, bankSlotStart, bankSlotEnd)
 		if err == nil {
@@ -219,6 +286,7 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 				}
 			}
 		}
+		var destBagKey int64 = 0
 		var destSlot uint8 = 0xFF
 		for sl := bankSlotStart; sl <= bankSlotEnd; sl++ {
 			if !occupied[sl] {
@@ -226,12 +294,36 @@ func (s *session) handleAutoStoreBankItem(ctx context.Context, payload []byte) b
 				break
 			}
 		}
+		if destSlot == 0xFF && s.player.BankBagSlots > 0 {
+			maxBankBag := int(s.player.BankBagSlots)
+			if maxBankBag > 7 {
+				maxBankBag = 7
+			}
+			for i := 0; i < maxBankBag; i++ {
+				bagSlot := 67 + i
+				var bagGUID int64
+				_ = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? AND item != 0 LIMIT 1", s.playerGUID, bagSlot).Scan(&bagGUID)
+				if bagGUID == 0 {
+					continue
+				}
+				freeSlot, ok := s.freeInventorySlot(ctx, bagGUID)
+				if ok {
+					destBagKey = bagGUID
+					destSlot = freeSlot
+					break
+				}
+			}
+		}
 		if destSlot == 0xFF {
+			s.sendEquipError(equipErrInvFull, uint64(itemGUID))
 			return true // Bank full
 		}
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND bag = ? AND slot = ?", destSlot, s.playerGUID, srcBag, srcSlot)
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", destBagKey, destSlot, s.playerGUID, itemGUID)
 	}
 
+	if srcBagKey == 0 && srcSlot < equipSlotEnd {
+		s.syncEquipmentCache(ctx)
+	}
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	return true

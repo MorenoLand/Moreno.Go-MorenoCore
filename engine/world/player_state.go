@@ -637,7 +637,7 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 	}
 	state.Cinematic, state.KnownCurrency, state.WatchedFaction, state.AmmoID, state.ActionBars = uint32(cinematic), uint32(knownCurrency), uint32(watchedFaction), uint32(ammoID), uint32(actionBars)
 	var bankSlots int64
-	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COUNT(1) FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= 67 AND slot <= 73", state.GUID).Scan(&bankSlots)
+	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(bankSlots, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&bankSlots)
 	state.BankBagSlots = uint8(bankSlots)
 
 	var specsCount, activeSpec int64
@@ -1447,12 +1447,12 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			updates.AddUpdateBlock(valBlock)
 		}
 
-		if bag == 0 && slot >= 0 && slot <= 118 {
+		if bag == 0 && slot >= 0 && slot < 150 {
 			slotItems[int(slot)] = fullGUID
 		}
 	}
-	// TrinityCore: populate slots 0..73 so unequipped/empty slots are cleared to 0 (including bank bags)
-	for sl := 0; sl <= 73; sl++ {
+	// TrinityCore: populate slots 0..149 so unequipped/empty slots are cleared to 0 (equipment, backpack, bank, bank bags, buyback, keyring, currency)
+	for sl := 0; sl < 150; sl++ {
 		invField := 324 + sl*2
 		guid := slotItems[sl]
 		fields[invField] = uint32(guid)
