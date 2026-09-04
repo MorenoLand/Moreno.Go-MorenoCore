@@ -2416,6 +2416,9 @@ func (s *session) debug(message string, args ...any) {
 
 func (s *session) logout() {
 	ctx := context.Background()
+	if s.trade != nil {
+		s.handleCancelTrade(ctx)
+	}
 	if s.server != nil {
 		s.server.removeSessionChannels(s)
 	}

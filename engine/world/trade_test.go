@@ -94,3 +94,149 @@ func TestPlayerToPlayerTrade(t *testing.T) {
 		t.Fatalf("expected item 101 owner to be 2, got %d", owner)
 	}
 }
+
+func TestTradeValidations(t *testing.T) {
+	srv := &Server{sessions: make(map[*session]struct{})}
+	sess1 := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Name: "Player1", Health: 100, MaxHealth: 100, Race: 1, Map: 0, X: 0, Y: 0, Z: 0}}
+	sess2 := &session{server: srv, playerGUID: 2, playerLoaded: true, player: &playerState{GUID: 2, Name: "Player2", Health: 100, MaxHealth: 100, Race: 1, Map: 0, X: 0, Y: 0, Z: 0}}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+
+	ctx := context.Background()
+
+	// 1. Non-existent target -> tradeStatusNoTarget (6)
+	initBuf := protocol.NewBuffer(8)
+	initBuf.WriteU64(999)
+	sess1.handleInitiateTrade(ctx, initBuf.Bytes())
+	if sess1.trade != nil {
+		t.Fatal("expected trade to not start with invalid target")
+	}
+
+	// 2. Target dead -> tradeStatusTargetDead (18)
+	sess2.player.Health = 0
+	initBuf = protocol.NewBuffer(8)
+	initBuf.WriteU64(2)
+	sess1.handleInitiateTrade(ctx, initBuf.Bytes())
+	if sess1.trade != nil {
+		t.Fatal("expected trade to not start with dead target")
+	}
+	sess2.player.Health = 100
+
+	// 3. Target too far (> 11.11 yards) -> tradeStatusTargetTooFar (10)
+	sess2.player.X = 20.0
+	initBuf = protocol.NewBuffer(8)
+	initBuf.WriteU64(2)
+	sess1.handleInitiateTrade(ctx, initBuf.Bytes())
+	if sess1.trade != nil {
+		t.Fatal("expected trade to not start with distant target")
+	}
+	sess2.player.X = 0.0
+
+	// 4. Target opposite faction -> tradeStatusWrongFaction (11)
+	// Race 1 = Human (Alliance, team 0), Race 2 = Orc (Horde, team 1)
+	sess2.player.Race = 2
+	initBuf = protocol.NewBuffer(8)
+	initBuf.WriteU64(2)
+	sess1.handleInitiateTrade(ctx, initBuf.Bytes())
+	if sess1.trade != nil {
+		t.Fatal("expected trade to not start with opposite faction")
+	}
+	sess2.player.Race = 1
+
+	// 5. Success initiation
+	initBuf = protocol.NewBuffer(8)
+	initBuf.WriteU64(2)
+	if !sess1.handleInitiateTrade(ctx, initBuf.Bytes()) || sess1.trade == nil || sess2.trade == nil {
+		t.Fatal("expected successful trade initiation")
+	}
+}
+
+func TestTradeNonTradedSlotAndCancel(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, name TEXT, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, played_time INTEGER, text TEXT)",
+		"INSERT INTO characters VALUES (1, 'Player1', 1000, '')",
+		"INSERT INTO characters VALUES (2, 'Player2', 1000, '')",
+		// item 201 in slot 23, item 202 in slot 24
+		"INSERT INTO item_instance VALUES (201, 7001, 1, 0, 1, 0, '', 0, '', 0, 100, 0, '')",
+		"INSERT INTO item_instance VALUES (202, 7002, 1, 0, 1, 0, '', 0, '', 0, 100, 0, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 201)",
+		"INSERT INTO character_inventory VALUES (1, 0, 24, 202)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{AuthStore: store, CharactersStore: store, WorldStore: store, sessions: make(map[*session]struct{})}
+	sess1 := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Name: "Player1", Health: 100, MaxHealth: 100, Race: 1, Money: 1000}}
+	sess2 := &session{server: srv, playerGUID: 2, playerLoaded: true, player: &playerState{GUID: 2, Name: "Player2", Health: 100, MaxHealth: 100, Race: 1, Money: 1000}}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+
+	ctx := context.Background()
+
+	// Initiate & open trade
+	initBuf := protocol.NewBuffer(8)
+	initBuf.WriteU64(2)
+	sess1.handleInitiateTrade(ctx, initBuf.Bytes())
+	sess2.handleBeginTrade(ctx)
+
+	// Player 1 puts item 201 into traded slot 0, item 202 into non-traded slot 6
+	itemBuf0 := protocol.NewBuffer(3)
+	itemBuf0.WriteU8(0)  // slot 0 (traded)
+	itemBuf0.WriteU8(0)  // bag 0
+	itemBuf0.WriteU8(23) // inv slot 23
+	sess1.handleSetTradeItem(ctx, itemBuf0.Bytes())
+
+	itemBuf6 := protocol.NewBuffer(3)
+	itemBuf6.WriteU8(6)  // slot 6 (non-traded!)
+	itemBuf6.WriteU8(0)  // bag 0
+	itemBuf6.WriteU8(24) // inv slot 24
+	sess1.handleSetTradeItem(ctx, itemBuf6.Bytes())
+
+	// Test unaccept: player 1 accepts, then modifies trade (or unaccepts)
+	sess1.handleAcceptTrade(ctx)
+	if !sess1.trade.Accepted {
+		t.Fatal("expected sess1 accepted")
+	}
+	sess1.handleUnacceptTrade(ctx)
+	if sess1.trade.Accepted {
+		t.Fatal("expected sess1 unaccepted")
+	}
+
+	// Re-accept both
+	sess1.handleAcceptTrade(ctx)
+	sess2.handleAcceptTrade(ctx)
+
+	// Item 201 (slot 0) should be transferred to player 2
+	var owner201 int64
+	_ = db.QueryRow("SELECT owner_guid FROM item_instance WHERE guid = 201").Scan(&owner201)
+	if owner201 != 2 {
+		t.Fatalf("expected item 201 transferred to player 2, got %d", owner201)
+	}
+
+	// Item 202 (slot 6, non-traded) MUST NOT be transferred, must stay with player 1!
+	var owner202 int64
+	_ = db.QueryRow("SELECT owner_guid FROM item_instance WHERE guid = 202").Scan(&owner202)
+	if owner202 != 1 {
+		t.Fatalf("expected item 202 in non-traded slot 6 to stay with player 1, got %d", owner202)
+	}
+
+	// Now test handleCancelTrade
+	sess1.handleInitiateTrade(ctx, initBuf.Bytes())
+	if sess1.trade == nil || sess2.trade == nil {
+		t.Fatal("expected new trade initiated")
+	}
+	sess1.handleCancelTrade(ctx)
+	if sess1.trade != nil || sess2.trade != nil {
+		t.Fatal("expected trade states cleared after cancel")
+	}
+}

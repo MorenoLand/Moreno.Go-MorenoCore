@@ -9,18 +9,36 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+// Reference: SharedDefines.h:3601 (enum TradeStatus)
 const (
-	tradeStatusBeginTrade  = 0
-	tradeStatusOpenWindow  = 1
-	tradeStatusTradeChange = 2
-	tradeStatusCancelled   = 3
-	tradeStatusTradeAccept = 4
-	tradeStatusUnaccept    = 5
-	tradeStatusComplete    = 7
-	tradeStatusCloseWindow = 8
-	tradeStatusOnlyTarget  = 9
-	tradeStatusNotEligible = 10
-	tradeStatusInitiated   = 11
+	tradeStatusBusy          uint32 = 0
+	tradeStatusBeginTrade    uint32 = 1
+	tradeStatusOpenWindow    uint32 = 2
+	tradeStatusTradeCanceled uint32 = 3
+	tradeStatusTradeAccept   uint32 = 4
+	tradeStatusBusy2         uint32 = 5
+	tradeStatusNoTarget      uint32 = 6
+	tradeStatusBackToTrade   uint32 = 7
+	tradeStatusTradeComplete uint32 = 8
+	tradeStatusTradeRejected uint32 = 9
+	tradeStatusTargetTooFar  uint32 = 10
+	tradeStatusWrongFaction  uint32 = 11
+	tradeStatusCloseWindow   uint32 = 12
+	tradeStatusIgnoreYou     uint32 = 14
+	tradeStatusYouStunned    uint32 = 15
+	tradeStatusTargetStunned uint32 = 16
+	tradeStatusYouDead       uint32 = 17
+	tradeStatusTargetDead    uint32 = 18
+	tradeStatusYouLogout     uint32 = 19
+	tradeStatusTargetLogout  uint32 = 20
+	tradeStatusTrialAccount  uint32 = 21
+	tradeStatusWrongRealm    uint32 = 22
+	tradeStatusNotOnTaplist  uint32 = 23
+
+	tradeSlotCount       = 7
+	tradeSlotTradedCount = 6
+	tradeSlotNonTraded   = 6
+	tradeDistance        = 11.111111
 )
 
 type tradeSlotItem struct {
@@ -38,6 +56,26 @@ type playerTradeState struct {
 	Accepted bool
 }
 
+// sendTradeStatus sends SMSG_TRADE_STATUS (0x120) with matching TrinityCore structure.
+// Reference: WorldSession::SendTradeStatus (TradeHandler.cpp:34).
+func (s *session) sendTradeStatus(status uint32, traderGUID uint64, result uint32, isTargetResult uint8, itemLimitCategory uint32) error {
+	buf := protocol.NewBuffer(16)
+	buf.WriteU32(status)
+	switch status {
+	case tradeStatusBeginTrade:
+		buf.WriteU64(traderGUID)
+	case tradeStatusOpenWindow:
+		buf.WriteU32(0) // tradeID
+	case tradeStatusCloseWindow:
+		buf.WriteU32(result)
+		buf.WriteU8(isTargetResult)
+		buf.WriteU32(itemLimitCategory)
+	}
+	return s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), buf.Bytes(), true)
+}
+
+// handleInitiateTrade processes CMSG_INITIATE_TRADE (0x116).
+// Reference: WorldSession::HandleInitiateTradeOpcode (TradeHandler.cpp:590).
 func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -47,38 +85,61 @@ func (s *session) handleInitiateTrade(ctx context.Context, payload []byte) bool 
 	if err != nil {
 		return false
 	}
-	targetSess := s.server.findSessionByGUID(targetGUID)
-	if targetSess == nil || targetSess.player == nil {
+	if s.trade != nil {
 		return true
 	}
+	if s.player.MaxHealth > 0 && s.player.Health == 0 {
+		_ = s.sendTradeStatus(tradeStatusYouDead, 0, 0, 0, 0)
+		return true
+	}
+	targetSess := s.server.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil {
+		_ = s.sendTradeStatus(tradeStatusNoTarget, 0, 0, 0, 0)
+		return true
+	}
+	if targetSess == s || targetSess.trade != nil {
+		_ = s.sendTradeStatus(tradeStatusBusy, 0, 0, 0, 0)
+		return true
+	}
+	if targetSess.player.MaxHealth > 0 && targetSess.player.Health == 0 {
+		_ = s.sendTradeStatus(tradeStatusTargetDead, 0, 0, 0, 0)
+		return true
+	}
+	if targetSess.player.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, targetSess.player.X, targetSess.player.Y, targetSess.player.Z) > tradeDistance {
+		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0)
+		return true
+	}
+	if s.player.Race != 0 && targetSess.player.Race != 0 && teamForRace(s.player.Race) != teamForRace(targetSess.player.Race) {
+		_ = s.sendTradeStatus(tradeStatusWrongFaction, 0, 0, 0, 0)
+		return true
+	}
+
 	s.trade = &playerTradeState{Partner: targetSess, Items: make(map[uint8]tradeSlotItem)}
 	targetSess.trade = &playerTradeState{Partner: s, Items: make(map[uint8]tradeSlotItem)}
 
 	// Send SMSG_TRADE_STATUS (TRADE_STATUS_BEGIN_TRADE) to target
-	buf := protocol.NewBuffer(12)
-	buf.WriteU32(tradeStatusBeginTrade)
-	buf.WriteU64(s.playerGUID)
-	_ = targetSess.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), buf.Bytes(), true)
+	_ = targetSess.sendTradeStatus(tradeStatusBeginTrade, s.playerGUID, 0, 0, 0)
 	s.debug("trade initiated", "from", s.accountName, "to", targetSess.accountName)
 	return true
 }
 
+// handleBeginTrade processes CMSG_BEGIN_TRADE (0x117).
+// Reference: WorldSession::HandleBeginTradeOpcode (TradeHandler.cpp:561).
 func (s *session) handleBeginTrade(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil || s.trade == nil || s.trade.Partner == nil {
 		return true
 	}
 	partner := s.trade.Partner
-	buf := protocol.NewBuffer(8)
-	buf.WriteU32(tradeStatusOpenWindow)
-	buf.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), buf.Bytes(), true)
-	_ = partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), buf.Bytes(), true)
+	_ = s.sendTradeStatus(tradeStatusOpenWindow, 0, 0, 0, 0)
+	_ = partner.sendTradeStatus(tradeStatusOpenWindow, 0, 0, 0, 0)
 	s.notifyTradeUpdate()
 	partner.notifyTradeUpdate()
 	s.debug("trade window opened", "player1", s.accountName, "player2", partner.accountName)
 	return true
 }
 
+// handleSetTradeGold processes CMSG_SET_TRADE_GOLD (0x11F).
+// Reference: WorldSession::HandleSetTradeGoldOpcode (TradeHandler.cpp:711).
 func (s *session) handleSetTradeGold(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.trade == nil || len(payload) < 4 {
 		return true
@@ -92,18 +153,22 @@ func (s *session) handleSetTradeGold(ctx context.Context, payload []byte) bool {
 		gold = s.player.Money
 	}
 	s.trade.Money = gold
-	s.trade.Accepted = false
+	if s.trade.Accepted {
+		s.trade.Accepted = false
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+	}
 	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
-		s.trade.Partner.trade.Accepted = false
-		statusBuf := protocol.NewBuffer(4)
-		statusBuf.WriteU32(tradeStatusTradeChange)
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
-		_ = s.trade.Partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
+		if s.trade.Partner.trade.Accepted {
+			s.trade.Partner.trade.Accepted = false
+			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		}
 		s.notifyTradeUpdate()
 	}
 	return true
 }
 
+// handleSetTradeItem processes CMSG_SET_TRADE_ITEM (0x11D).
+// Reference: WorldSession::HandleSetTradeItemOpcode (TradeHandler.cpp:723).
 func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.trade == nil || len(payload) < 3 {
 		return true
@@ -111,7 +176,7 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	tradeSlot := payload[0]
 	bag := payload[1]
 	slot := payload[2]
-	if tradeSlot >= 7 {
+	if tradeSlot >= tradeSlotCount {
 		return true
 	}
 	cdb := s.server.CharactersStore.DB
@@ -148,36 +213,44 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 		StackCount: uint32(count),
 		EnchantID:  enchantID,
 	}
-	s.trade.Accepted = false
+	if s.trade.Accepted {
+		s.trade.Accepted = false
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+	}
 	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
-		s.trade.Partner.trade.Accepted = false
-		statusBuf := protocol.NewBuffer(4)
-		statusBuf.WriteU32(tradeStatusTradeChange)
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
-		_ = s.trade.Partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
+		if s.trade.Partner.trade.Accepted {
+			s.trade.Partner.trade.Accepted = false
+			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		}
 		s.notifyTradeUpdate()
 	}
 	return true
 }
 
+// handleClearTradeItem processes CMSG_CLEAR_TRADE_ITEM (0x11E).
+// Reference: WorldSession::HandleClearTradeItemOpcode (TradeHandler.cpp:780).
 func (s *session) handleClearTradeItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.trade == nil || len(payload) < 1 {
 		return true
 	}
 	tradeSlot := payload[0]
 	delete(s.trade.Items, tradeSlot)
-	s.trade.Accepted = false
+	if s.trade.Accepted {
+		s.trade.Accepted = false
+		_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+	}
 	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
-		s.trade.Partner.trade.Accepted = false
-		statusBuf := protocol.NewBuffer(4)
-		statusBuf.WriteU32(tradeStatusTradeChange)
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
-		_ = s.trade.Partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), statusBuf.Bytes(), true)
+		if s.trade.Partner.trade.Accepted {
+			s.trade.Partner.trade.Accepted = false
+			_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+		}
 		s.notifyTradeUpdate()
 	}
 	return true
 }
 
+// handleAcceptTrade processes CMSG_ACCEPT_TRADE (0x11A).
+// Reference: WorldSession::HandleAcceptTradeOpcode (TradeHandler.cpp:337).
 func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil || s.trade == nil || s.trade.Partner == nil {
 		return true
@@ -185,10 +258,8 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	s.trade.Accepted = true
 	partner := s.trade.Partner
 
-	acceptBuf := protocol.NewBuffer(4)
-	acceptBuf.WriteU32(tradeStatusTradeAccept)
-	_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), acceptBuf.Bytes(), true)
-	_ = partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), acceptBuf.Bytes(), true)
+	// Inform partner
+	_ = partner.sendTradeStatus(tradeStatusTradeAccept, 0, 0, 0, 0)
 
 	if partner.trade != nil && partner.trade.Accepted {
 		// Both accepted -> execute trade
@@ -224,18 +295,42 @@ func findFreeBackpackSlots(ctx context.Context, cdb *sql.DB, guid uint64, count 
 	return free, len(free) >= count
 }
 
+// completeTrade finalizes the trade, exchanging traded items (slots 0..5) and currency.
+// Reference: WorldSession::HandleAcceptTradeOpcode (TradeHandler.cpp:443-544).
 func (s *session) completeTrade(ctx context.Context, partner *session) {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return
 	}
-	partnerSlots, ok1 := findFreeBackpackSlots(ctx, cdb, partner.playerGUID, len(s.trade.Items))
-	sSlots, ok2 := findFreeBackpackSlots(ctx, cdb, s.playerGUID, len(partner.trade.Items))
+
+	// Only slots 0..5 (TRADE_SLOT_TRADED_COUNT = 6) are traded; slot 6 is non-traded
+	var sTradedItems []tradeSlotItem
+	for slot, it := range s.trade.Items {
+		if slot < tradeSlotTradedCount {
+			sTradedItems = append(sTradedItems, it)
+		}
+	}
+	var partnerTradedItems []tradeSlotItem
+	for slot, it := range partner.trade.Items {
+		if slot < tradeSlotTradedCount {
+			partnerTradedItems = append(partnerTradedItems, it)
+		}
+	}
+
+	partnerSlots, ok1 := findFreeBackpackSlots(ctx, cdb, partner.playerGUID, len(sTradedItems))
+	sSlots, ok2 := findFreeBackpackSlots(ctx, cdb, s.playerGUID, len(partnerTradedItems))
 	if !ok1 || !ok2 {
-		cancelBuf := protocol.NewBuffer(4)
-		cancelBuf.WriteU32(tradeStatusCloseWindow)
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), cancelBuf.Bytes(), true)
-		_ = partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), cancelBuf.Bytes(), true)
+		// EQUIP_ERR_BAG_FULL = 1
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0)
+		s.trade = nil
+		partner.trade = nil
+		return
+	}
+
+	if s.player.Money < s.trade.Money || partner.player.Money < partner.trade.Money {
+		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 0, 0, 0)
 		s.trade = nil
 		partner.trade = nil
 		return
@@ -248,23 +343,21 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", partner.player.Money, partner.playerGUID)
 
 	// Items transfer
-	for _, it := range s.trade.Items {
+	for _, it := range sTradedItems {
 		targetSlot := partnerSlots[0]
 		partnerSlots = partnerSlots[1:]
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", partner.playerGUID, it.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = 0, slot = ? WHERE item = ?", partner.playerGUID, targetSlot, it.ItemGUID)
 	}
-	for _, it := range partner.trade.Items {
+	for _, it := range partnerTradedItems {
 		targetSlot := sSlots[0]
 		sSlots = sSlots[1:]
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, it.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = 0, slot = ? WHERE item = ?", s.playerGUID, targetSlot, it.ItemGUID)
 	}
 
-	completeBuf := protocol.NewBuffer(4)
-	completeBuf.WriteU32(tradeStatusComplete)
-	_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), completeBuf.Bytes(), true)
-	_ = partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), completeBuf.Bytes(), true)
+	_ = s.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)
+	_ = partner.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)
 
 	_ = s.sendInventoryItems(ctx)
 	_ = partner.sendInventoryItems(ctx)
@@ -280,37 +373,39 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 	s.debug("trade completed successfully", "player1", s.accountName, "player2", partner.accountName)
 }
 
+// handleUnacceptTrade processes CMSG_UNACCEPT_TRADE (0x11B).
+// Reference: WorldSession::HandleUnacceptTradeOpcode (TradeHandler.cpp:552).
 func (s *session) handleUnacceptTrade(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil || s.trade == nil {
 		return true
 	}
 	s.trade.Accepted = false
-	unacceptBuf := protocol.NewBuffer(4)
-	unacceptBuf.WriteU32(tradeStatusUnaccept)
-	_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), unacceptBuf.Bytes(), true)
-	if s.trade.Partner != nil {
+	_ = s.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
+	if s.trade.Partner != nil && s.trade.Partner.trade != nil {
 		s.trade.Partner.trade.Accepted = false
-		_ = s.trade.Partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), unacceptBuf.Bytes(), true)
+		_ = s.trade.Partner.sendTradeStatus(tradeStatusBackToTrade, 0, 0, 0, 0)
 	}
 	return true
 }
 
+// handleCancelTrade processes CMSG_CANCEL_TRADE (0x11C).
+// Reference: WorldSession::HandleCancelTradeOpcode (TradeHandler.cpp:583).
 func (s *session) handleCancelTrade(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil || s.trade == nil {
 		return true
 	}
 	partner := s.trade.Partner
-	cancelBuf := protocol.NewBuffer(4)
-	cancelBuf.WriteU32(tradeStatusCancelled)
-	_ = s.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), cancelBuf.Bytes(), true)
+	_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
 	s.trade = nil
 	if partner != nil {
 		partner.trade = nil
-		_ = partner.write(uint16(protocol.OpcodeSMSG_TRADE_STATUS), cancelBuf.Bytes(), true)
+		_ = partner.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
 	}
 	return true
 }
 
+// sendTradeStatusExtended sends SMSG_TRADE_STATUS_EXTENDED (0x121).
+// Reference: WorldSession::SendUpdateTrade (TradeHandler.cpp:75).
 func (s *session) sendTradeStatusExtended(traderData bool) {
 	if s.trade == nil || s.trade.Partner == nil {
 		return
@@ -328,27 +423,27 @@ func (s *session) sendTradeStatusExtended(traderData bool) {
 	} else {
 		buf.WriteU8(0)
 	}
-	buf.WriteU32(0) // tradeID
-	buf.WriteU32(7) // tradeSlotCount
-	buf.WriteU32(7) // tradeSlotCount
+	buf.WriteU32(0)              // tradeID
+	buf.WriteU32(tradeSlotCount) // tradeSlotCount
+	buf.WriteU32(tradeSlotCount) // tradeSlotCount
 	buf.WriteU32(data.Money)
 	buf.WriteU32(0) // spell
-	for i := uint8(0); i < 7; i++ {
+	for i := uint8(0); i < tradeSlotCount; i++ {
 		buf.WriteU8(i)
 		if it, ok := data.Items[i]; ok {
 			buf.WriteU32(it.ItemEntry)
 			buf.WriteU32(it.DisplayID)
 			buf.WriteU32(it.StackCount)
-			buf.WriteU32(0) // wrapped
-			buf.WriteU64(0) // giftCreator
+			buf.WriteU32(0)            // wrapped
+			buf.WriteU64(0)            // giftCreator
 			buf.WriteU32(it.EnchantID) // permEnchant
 			for j := 0; j < 3; j++ {
 				buf.WriteU32(0) // gem sockets
 			}
 			buf.WriteU64(0) // creator
 			buf.WriteU32(0) // charges
-			buf.WriteU32(0) // suffixFactor
 			buf.WriteU32(0) // randomPropId
+			buf.WriteU32(0) // suffixFactor
 			buf.WriteU32(0) // lockId
 			buf.WriteU32(0) // maxDurability
 			buf.WriteU32(0) // durability
