@@ -399,3 +399,88 @@ func TestSpellCastPowerDeductionAndBroadcast(t *testing.T) {
 		t.Fatalf("expected caster mana 155, got %d", casterSess.player.Powers[0])
 	}
 }
+
+func TestCancelCastInterruptsSpellTimerAndSendsFailed(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{sessions: make(map[*session]struct{})}
+	sess := &session{
+		conn:         serverConn,
+		authed:       true,
+		playerLoaded: true,
+		server:       srv,
+		playerGUID:   1,
+		player:       &playerState{GUID: 1, Powers: [7]uint32{500}, MaxPowers: [7]uint32{500}},
+	}
+
+	spell := wotlk.Spell{
+		ID:        133,
+		PowerType: 0,
+		ManaCost:  50,
+	}
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: 1}
+
+	// Start a 1000ms cast
+	sess.castMu.Lock()
+	castState := &activeCastState{
+		CastID:  1,
+		SpellID: 133,
+	}
+	castState.Timer = time.AfterFunc(1000*time.Millisecond, func() {
+		sess.castMu.Lock()
+		if castState.Cancelled {
+			sess.castMu.Unlock()
+			return
+		}
+		sess.activeCast = nil
+		sess.castMu.Unlock()
+		sess.finishSpellCast(context.Background(), 1, 133, spell, target)
+	})
+	sess.activeCast = castState
+	sess.castMu.Unlock()
+
+	// Player cancels cast via CMSG_CANCEL_CAST
+	cancelPayload := protocol.NewBuffer(5)
+	cancelPayload.WriteU8(1)
+	cancelPayload.WriteU32(133)
+
+	done := make(chan struct{})
+	go func() {
+		if !sess.handleCancelCast(cancelPayload.Bytes()) {
+			t.Error("handleCancelCast returned false")
+		}
+		close(done)
+	}()
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	op, data, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	if op != uint16(protocol.OpcodeSMSG_CAST_FAILED) {
+		t.Fatalf("expected SMSG_CAST_FAILED (0x13A), got 0x%x", op)
+	}
+	r := protocol.NewReader(data)
+	cid, _ := r.ReadU8()
+	sid, _ := r.ReadU32()
+	res, _ := r.ReadU8()
+	if cid != 1 || sid != 133 || res != 24 { // 24 = SPELL_FAILED_INTERRUPTED
+		t.Fatalf("unexpected fields: castID=%d spellID=%d result=%d (expected 24)", cid, sid, res)
+	}
+
+	// Verify activeCast is nil
+	sess.castMu.Lock()
+	if sess.activeCast != nil {
+		t.Fatal("expected activeCast to be nil after cancel")
+	}
+	sess.castMu.Unlock()
+
+	// Verify mana was untouched
+	if sess.player.Powers[0] != 500 {
+		t.Fatalf("expected mana 500, got %d", sess.player.Powers[0])
+	}
+}
