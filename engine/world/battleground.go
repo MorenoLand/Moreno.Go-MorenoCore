@@ -329,8 +329,24 @@ func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload
 	// Only respond if player is inside a battleground instance/map
 	switch s.player.Map {
 	case 30, 489, 529, 566, 607, 628:
-		buf := protocol.NewBuffer(8)
-		buf.WriteU32(0) // numPlayerPositions
+		var teammates []*session
+		if s.server != nil {
+			s.server.sessionsMu.RLock()
+			for other := range s.server.sessions {
+				if other != s && other.playerLoaded && other.player != nil && other.player.Map == s.player.Map && teamForRace(other.player.Race) == teamForRace(s.player.Race) {
+					teammates = append(teammates, other)
+				}
+			}
+			s.server.sessionsMu.RUnlock()
+		}
+
+		buf := protocol.NewBuffer(8 + len(teammates)*16)
+		buf.WriteU32(uint32(len(teammates))) // numPlayerPositions
+		for _, mate := range teammates {
+			buf.WriteU64(mate.playerGUID)
+			buf.WriteF32(mate.player.X)
+			buf.WriteF32(mate.player.Y)
+		}
 		buf.WriteU32(0) // flagCarrierCount
 		_ = s.write(uint16(protocol.OpcodeMSG_BATTLEGROUND_PLAYER_POSITIONS), buf.Bytes(), true)
 	}

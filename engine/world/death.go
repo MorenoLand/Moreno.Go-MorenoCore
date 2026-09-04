@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -137,7 +138,83 @@ func (s *session) sendForcedMovement(opcode uint16) {
 // SMSG_PRE_RESURRECT, record the corpse at the death location, convert the
 // body to a ghost with one health point, switch to water walking, unroot, and
 // send the corpse reclaim delay. The reference ghost auras 8326 (Ghost) and
-// 20584 (Wisp Spirit) have no Go spell system yet and stay unimplemented.
+// buildCorpseCreateBlock constructs an SMSG_UPDATE_OBJECT block creating a visible
+// Corpse object in the world, matching TrinityCore Corpse::Create and Corpse::BuildValuesUpdate.
+func buildCorpseCreateBlock(corpseGUID, ownerGUID uint64, displayID uint32, posX, posY, posZ, orientation float32, isBones bool) []byte {
+	values := make([]uint32, 36)
+	values[0] = uint32(corpseGUID)
+	values[1] = uint32(corpseGUID >> 32)
+	values[2] = 0x81 // TYPEMASK_OBJECT (0x01) | TYPEMASK_CORPSE (0x80)
+	values[3] = 0
+	values[4] = math.Float32bits(1.0)
+	values[6] = uint32(ownerGUID)
+	values[7] = uint32(ownerGUID >> 32)
+	values[10] = displayID
+	if isBones {
+		values[33] = 0x01 // CORPSE_FLAG_BONES
+	}
+
+	mask := protocol.NewUpdateMask(len(values))
+	for idx, val := range values {
+		if val != 0 {
+			_ = mask.Set(idx)
+		}
+	}
+	_ = mask.Set(1) // GUID high
+
+	block := protocol.NewBuffer(128)
+	block.WriteU8(protocol.UpdateCreateObject2)
+	block.WritePackedGUID(corpseGUID)
+	block.WriteU8(7)      // TYPEID_CORPSE
+	block.WriteU16(0x0050) // UPDATEFLAG_STATIONARY_POSITION (0x0040) | UPDATEFLAG_LOWGUID (0x0010)
+	block.WriteU32(uint32(corpseGUID & 0xFFFFFFFF))
+	block.WriteF32(posX)
+	block.WriteF32(posY)
+	block.WriteF32(posZ)
+	block.WriteF32(orientation)
+
+	block.WriteU8(uint8(mask.BlockCount()))
+	mask.AppendTo(block)
+	for i := 0; i < len(values); i++ {
+		if mask.Has(i) {
+			block.WriteU32(values[i])
+		}
+	}
+	return block.Bytes()
+}
+
+func (s *session) spawnCorpseObject(displayID uint32) {
+	if s.player == nil {
+		return
+	}
+	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
+	block := buildCorpseCreateBlock(corpseGUID, s.playerGUID, displayID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, false)
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(block)
+	packet, err := updates.BuildPacket(0)
+	if err == nil && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		if s.server != nil {
+			s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+		}
+	}
+}
+
+func (s *session) despawnCorpseObject() {
+	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
+	updates := protocol.NewUpdateData()
+	updates.AddOutOfRangeGUID(corpseGUID)
+	packet, err := updates.BuildPacket(0)
+	if err == nil && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		if s.server != nil {
+			s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+		}
+	}
+}
+
+// buildPlayerRepop converts the dead player into a ghost, persists the corpse record,
+// spawns the physical Corpse object into the world grid, and applies ghost visual auras.
 func (s *session) buildPlayerRepop(ctx context.Context) {
 	if s.player == nil {
 		return
@@ -146,16 +223,17 @@ func (s *session) buildPlayerRepop(ctx context.Context) {
 	preResurrect.WritePackedGUID(s.playerGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_PRE_RESURRECT), preResurrect.Bytes(), true)
 
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		displayID := uint32(0)
-		if s.server.Data != nil {
-			if race, found, err := s.server.Data.Race(uint32(s.player.Race)); err == nil && found {
-				displayID = race.MaleDisplayID
-				if s.player.Gender != 0 {
-					displayID = race.FemaleDisplayID
-				}
+	displayID := uint32(0)
+	if s.server.Data != nil {
+		if race, found, err := s.server.Data.Race(uint32(s.player.Race)); err == nil && found {
+			displayID = race.MaleDisplayID
+			if s.player.Gender != 0 {
+				displayID = race.FemaleDisplayID
 			}
 		}
+	}
+
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		// Reference Corpse::SaveToDB deletes any previous record first.
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSE", s.playerGUID)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
@@ -173,6 +251,7 @@ func (s *session) buildPlayerRepop(ctx context.Context) {
 	} else {
 		s.applyAura(8326) // Ghost
 	}
+	s.spawnCorpseObject(displayID)
 	s.sendPlayerUpdate()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
@@ -180,10 +259,8 @@ func (s *session) buildPlayerRepop(ctx context.Context) {
 }
 
 // repopAtGraveyard mirrors Player::RepopAtGraveyard: locate the graveyard
-// linked to the ghost zone, teleport there, and point the client corpse map at
-// the graveyard. The battleground and battlefield graveyard overrides have no
-// Go equivalent yet and neither does the entrance-map distance tier, which
-// needs Map.dbc CorpseMapID data.
+// linked to the ghost zone, teleport there, point the client corpse map at
+// the graveyard, and in battlegrounds automatically queue into the spirit wave.
 func (s *session) repopAtGraveyard(ctx context.Context) {
 	if s.player == nil {
 		return
@@ -191,16 +268,36 @@ func (s *session) repopAtGraveyard(ctx context.Context) {
 	grave, ok := s.server.closestGraveyard(ctx, s.player.X, s.player.Y, s.player.Z, s.player.Map, s.player.Zone, playerTeam(s.player.Race))
 	if ok {
 		s.teleportTo(grave.MapID, grave.X, grave.Y, grave.Z, s.player.Orientation)
+		packet := protocol.NewBuffer(16)
+		packet.WriteU32(grave.MapID)
+		packet.WriteF32(grave.X)
+		packet.WriteF32(grave.Y)
+		packet.WriteF32(grave.Z)
+		_ = s.write(uint16(protocol.OpcodeSMSG_DEATH_RELEASE_LOC), packet.Bytes(), true)
 	} else {
 		s.debug("no graveyard found, staying at current location", "account", s.accountName, "guid", s.playerGUID)
-		return
 	}
-	packet := protocol.NewBuffer(16)
-	packet.WriteU32(grave.MapID)
-	packet.WriteF32(grave.X)
-	packet.WriteF32(grave.Y)
-	packet.WriteF32(grave.Z)
-	_ = s.write(uint16(protocol.OpcodeSMSG_DEATH_RELEASE_LOC), packet.Bytes(), true)
+
+	// In battlegrounds, automatically queue for wave resurrection
+	switch s.player.Map {
+	case 30, 489, 529, 566, 607, 628:
+		if s.server != nil {
+			s.server.spiritWaveMu.Lock()
+			if s.server.spiritReviveQueue == nil {
+				s.server.spiritReviveQueue = make(map[uint64]uint64)
+			}
+			s.server.spiritReviveQueue[s.playerGUID] = 0
+			elapsed := time.Since(s.server.lastSpiritWave)
+			s.server.spiritWaveMu.Unlock()
+
+			s.applyAura(2584) // SPELL_WAITING_FOR_RESURRECT
+			timeLeftMs := uint32(30000)
+			if elapsed < 30*time.Second {
+				timeLeftMs = uint32((30*time.Second - elapsed).Milliseconds())
+			}
+			s.sendAreaSpiritHealerTime(0, timeLeftMs)
+		}
+	}
 }
 
 // playerTeam maps a race to the graveyard faction domain: TEAM_ALLIANCE (469),
@@ -375,10 +472,24 @@ func (s *Server) updateSpiritHealerResurrectWaves(ctx context.Context, now time.
 // spawnCorpseBones converts an existing corpse record into bones, mirroring
 // Player::SpawnCorpseBones for the resurrect-at-graveyard path.
 func (s *session) spawnCorpseBones(ctx context.Context) {
-	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return
 	}
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE corpse SET corpseType = ?, time = ? WHERE guid = ?", corpseTypeBones, time.Now().Unix(), s.playerGUID)
+	s.despawnCorpseObject()
+	if s.player != nil {
+		corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
+		block := buildCorpseCreateBlock(corpseGUID, s.playerGUID, 0, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, true)
+		updates := protocol.NewUpdateData()
+		updates.AddUpdateBlock(block)
+		packet, err := updates.BuildPacket(0)
+		if err == nil && packet != nil {
+			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+			if s.server != nil {
+				s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+			}
+		}
+	}
 }
 
 // resurrectPlayer mirrors Player::ResurrectPlayer for the core state: clear
@@ -401,6 +512,7 @@ func (s *session) resurrectPlayer(ctx context.Context, restorePercent float32) {
 	s.deathTimer = time.Time{}
 	s.removeAura(8326)
 	s.removeAura(20584)
+	s.despawnCorpseObject()
 	if restorePercent > 0 {
 		s.player.Health = uint32(float32(s.player.MaxHealth) * restorePercent)
 		s.player.Powers[0] = uint32(float32(s.player.MaxPowers[0]) * restorePercent) // mana
