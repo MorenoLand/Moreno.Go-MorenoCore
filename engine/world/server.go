@@ -104,6 +104,7 @@ type session struct {
 	lastSwing          time.Time
 	lastRegenTick      time.Time
 	lastCastTime       time.Time
+	lastCombatTime     time.Time
 	logoutHook         bool
 	gossip             *gossipMenuState
 	gossipClosed       bool
@@ -269,9 +270,30 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 			continue
 		}
 
-		inCombat := sess.attackTarget != 0
+		inCombat := sess.attackTarget != 0 || (p.UnitFlags&unitFlagInCombat != 0)
 		fields := make(map[int]uint32)
 		changed := false
+
+		// Check combat drop: if no attack target, 5s passed since lastCombatTime, and no creatures targeting player
+		if p.UnitFlags&unitFlagInCombat != 0 && sess.attackTarget == 0 && now.Sub(sess.lastCombatTime) >= 5*time.Second {
+			hasAggro := false
+			s.motionMu.Lock()
+			if s.creatureMotion != nil {
+				for _, m := range s.creatureMotion {
+					if m != nil && m.InCombat && m.TargetGUID == sess.playerGUID {
+						hasAggro = true
+						break
+					}
+				}
+			}
+			s.motionMu.Unlock()
+			if !hasAggro {
+				p.UnitFlags &^= unitFlagInCombat
+				fields[unitFieldFlags] = unitFlagPlayerControlled | p.UnitFlags
+				changed = true
+				inCombat = false
+			}
+		}
 
 		// 1. Health regeneration (out of combat)
 		if !inCombat && p.Health < p.MaxHealth {
