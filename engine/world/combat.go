@@ -153,7 +153,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 					// Duel defeat: loser drops to 1 HP and kneels (TC: Player::DuelComplete)
 					playerSess.player.Health = 1
 					playerSess.sendPlayerUpdate()
-					s.endDuel(true, s.playerGUID)
+					s.endDuel(true, s.playerGUID, false)
 				} else {
 					playerSess.player.Health = 0
 					playerSess.sendPlayerUpdate()
@@ -375,6 +375,15 @@ func (s *session) handleDuelAccepted(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	// Initialize arbiter coordinates if not yet set
+	if s.duelArbiterX == 0 && s.duelArbiterY == 0 && partner != nil && partner.player != nil {
+		midX := s.player.X + (partner.player.X-s.player.X)/2
+		midY := s.player.Y + (partner.player.Y-s.player.Y)/2
+		midZ := s.player.Z
+		s.duelArbiterX, s.duelArbiterY, s.duelArbiterZ = midX, midY, midZ
+		partner.duelArbiterX, partner.duelArbiterY, partner.duelArbiterZ = midX, midY, midZ
+	}
+
 	// After 3-second countdown, set PLAYER_DUEL_TEAM to start the duel! (TC: Player::UpdateDuelFlag)
 	time.AfterFunc(3*time.Second, func() {
 		if s.duelPartner == 0 || s.player == nil {
@@ -396,33 +405,181 @@ func (s *session) handleDuelCancelled(ctx context.Context, payload []byte) bool 
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	s.endDuel(false, 0)
+	// Player surrendered in an active duel using /forfeit (TC: HandleDuelCancelledOpcode:66)
+	if s.player.DuelTeam != 0 && s.duelPartner != 0 {
+		s.endDuel(true, s.duelPartner, false)
+		return true
+	}
+	s.endDuel(false, 0, false)
 	return true
 }
 
-// endDuel cleans up duel flags, clears arbiter/team, and emits SMSG_DUEL_COMPLETE.
-// Reference: Player::DuelComplete (Player.cpp:7435-7450).
-func (s *session) endDuel(won bool, winnerGUID uint64) {
-	result := uint8(0) // 0 = interrupted / fled / cancelled
-	if won {
-		result = 1 // 1 = won
+// DuelCompleteType mirrors TrinityCore's DuelCompleteType enum.
+type DuelCompleteType uint8
+
+const (
+	DuelInterrupted DuelCompleteType = 0
+	DuelWon         DuelCompleteType = 1
+	DuelFled        DuelCompleteType = 2
+)
+
+// buildDuelWinner builds SMSG_DUEL_WINNER (0x16B).
+// Reference: Player::DuelComplete (Player.cpp:7353-7358).
+func buildDuelWinner(fled bool, winnerName, loserName string) []byte {
+	packet := protocol.NewBuffer(1 + len(winnerName) + 1 + len(loserName) + 1)
+	if fled {
+		packet.WriteU8(1)
+	} else {
+		packet.WriteU8(0)
 	}
+	packet.WriteCString(winnerName)
+	packet.WriteCString(loserName)
+	return packet.Bytes()
+}
+
+// castVisualSpell broadcasts SMSG_SPELL_GO for instant non-combat visual spells (e.g. kneel 7267, victory cheer 52852).
+func (s *session) castVisualSpell(spellID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	castPkt := protocol.NewBuffer(16)
+	castPkt.WritePackedGUID(s.playerGUID)
+	castPkt.WritePackedGUID(s.playerGUID)
+	castPkt.WriteU8(1)
+	castPkt.WriteU32(spellID)
+	castPkt.WriteU32(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), castPkt.Bytes(), s)
+	}
+}
+
+// checkDuelBounds checks distance to duel arbiter (flag).
+// > 50yd sends SMSG_DUEL_OUTOFBOUNDS and starts 10s timer.
+// <= 40yd sends SMSG_DUEL_INBOUNDS and resets timer.
+// > 10s out of bounds ends duel as fled.
+// Reference: Player::CheckDuelOutOfBounds (Player.cpp:7290-7321).
+func (s *session) checkDuelBounds() {
+	if s == nil || s.player == nil || s.player.DuelTeam == 0 || s.duelPartner == 0 || s.player.DuelArbiter == 0 {
+		return
+	}
+	dist := distance3D(s.player.X, s.player.Y, s.player.Z, s.duelArbiterX, s.duelArbiterY, s.duelArbiterZ)
+	now := time.Now()
+	if s.duelOutOfBounds.IsZero() {
+		if dist > 50.0 {
+			s.duelOutOfBounds = now.Add(10 * time.Second)
+			_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_OUTOFBOUNDS), []byte{}, true)
+			partner := s.duelPartner
+			time.AfterFunc(10*time.Second, func() {
+				if s.player != nil && s.player.DuelTeam != 0 && s.duelPartner == partner && !s.duelOutOfBounds.IsZero() && time.Now().After(s.duelOutOfBounds) {
+					s.checkDuelBounds()
+				}
+			})
+		}
+	} else {
+		if dist <= 40.0 {
+			s.duelOutOfBounds = time.Time{}
+			_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_INBOUNDS), []byte{}, true)
+		} else if now.After(s.duelOutOfBounds) {
+			s.endDuel(false, s.duelPartner, true)
+		}
+	}
+}
+
+// endDuel cleans up duel flags, clears arbiter/team, and emits SMSG_DUEL_COMPLETE and SMSG_DUEL_WINNER.
+// Reference: Player::DuelComplete (Player.cpp:7328-7442).
+func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
+	partnerGUID := s.duelPartner
+	var partner *session
+	if partnerGUID != 0 && s.server != nil {
+		partner = s.server.findSessionByGUID(partnerGUID)
+	}
+
+	duelEnded := won || fled
+	completeResult := uint8(0)
+	if duelEnded {
+		completeResult = 1
+	}
+
 	buf := protocol.NewBuffer(1)
-	buf.WriteU8(result)
-
-	s.player.DuelArbiter = 0
-	s.player.DuelTeam = 0
-	s.sendPlayerUpdate()
+	buf.WriteU8(completeResult)
 	_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
+	if partner != nil {
+		_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
+	}
 
-	if s.duelPartner != 0 && s.server != nil {
-		if partner := s.server.findSessionByGUID(s.duelPartner); partner != nil && partner.player != nil {
+	if duelEnded && winnerGUID != 0 {
+		var winnerSess, loserSess *session
+		if s.playerGUID == winnerGUID {
+			winnerSess = s
+			loserSess = partner
+		} else {
+			winnerSess = partner
+			loserSess = s
+		}
+
+		winnerName := ""
+		loserName := ""
+		if winnerSess != nil && winnerSess.player != nil {
+			winnerName = winnerSess.player.Name
+		}
+		if loserSess != nil && loserSess.player != nil {
+			loserName = loserSess.player.Name
+		}
+
+		winnerPkt := buildDuelWinner(fled, winnerName, loserName)
+		_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_WINNER), winnerPkt, true)
+		if partner != nil {
+			_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_WINNER), winnerPkt, true)
+		}
+		if s.server != nil && s.player != nil {
+			s.server.sessionsMu.RLock()
+			for target := range s.server.sessions {
+				if target == s || target == partner || !target.authed || !target.playerLoaded || target.player == nil {
+					continue
+				}
+				if target.player.Map == s.player.Map {
+					_ = target.write(uint16(protocol.OpcodeSMSG_DUEL_WINNER), winnerPkt, true)
+				}
+			}
+			s.server.sessionsMu.RUnlock()
+		}
+
+		// Spells: Winner casts 52852 (Victory cheer)
+		if winnerSess != nil {
+			winnerSess.castVisualSpell(52852)
+		}
+		// Loser casts 7267 (Beg / surrender kneel) if won normally
+		if !fled && loserSess != nil {
+			loserSess.castVisualSpell(7267)
+		}
+	}
+
+	// Stop combat on both
+	_ = s.sendAttackStop(s.attackTarget, false)
+	s.attackTarget = 0
+	if partner != nil {
+		_ = partner.sendAttackStop(partner.attackTarget, false)
+		partner.attackTarget = 0
+	}
+
+	// Clean up fields on s
+	if s.player != nil {
+		s.player.DuelArbiter = 0
+		s.player.DuelTeam = 0
+		s.sendPlayerUpdate()
+	}
+	s.duelPartner = 0
+	s.duelOutOfBounds = time.Time{}
+
+	// Clean up fields on partner
+	if partner != nil {
+		if partner.player != nil {
 			partner.player.DuelArbiter = 0
 			partner.player.DuelTeam = 0
 			partner.sendPlayerUpdate()
-			partner.duelPartner = 0
-			_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
 		}
-		s.duelPartner = 0
+		partner.duelPartner = 0
+		partner.duelOutOfBounds = time.Time{}
 	}
 }

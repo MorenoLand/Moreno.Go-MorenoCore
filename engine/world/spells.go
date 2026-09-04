@@ -243,6 +243,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.sendPlayerUpdate()
 			partner.sendPlayerUpdate()
 
+			midX := s.player.X + (partner.player.X-s.player.X)/2
+			midY := s.player.Y + (partner.player.Y-s.player.Y)/2
+			midZ := s.player.Z
+			s.duelArbiterX, s.duelArbiterY, s.duelArbiterZ = midX, midY, midZ
+			partner.duelArbiterX, partner.duelArbiterY, partner.duelArbiterZ = midX, midY, midZ
+			s.duelOutOfBounds = time.Time{}
+			partner.duelOutOfBounds = time.Time{}
+
 			reqBuf := protocol.NewBuffer(16)
 			reqBuf.WriteU64(arbiterGUID)
 			reqBuf.WriteU64(s.playerGUID)
@@ -383,7 +391,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 					// Duel defeat: loser drops to 1 HP and duel completes
 					playerSess.player.Health = 1
 					playerSess.sendPlayerUpdate()
-					s.endDuel(true, s.playerGUID)
+					s.endDuel(true, s.playerGUID, false)
 				} else {
 					playerSess.player.Health = 0
 					playerSess.sendPlayerUpdate()
