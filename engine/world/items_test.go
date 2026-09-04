@@ -563,3 +563,144 @@ func TestSyncEquipmentCachePreservesEnchantments(t *testing.T) {
 		t.Fatalf("expected db cache to contain '49623 3789', got %s", dbCache)
 	}
 }
+
+func TestInventoryTwoItemSwapAndEquipParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY(guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, count INTEGER, enchantments TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, name TEXT, InventoryType INTEGER, ContainerSlots INTEGER, BuyPrice INTEGER)",
+		"INSERT INTO characters VALUES (1, '')",
+		// Item entries:
+		"INSERT INTO item_template VALUES (10, 'Ring 1', 11, 0, 100)",
+		"INSERT INTO item_template VALUES (11, 'Ring 2', 11, 0, 100)",
+		"INSERT INTO item_template VALUES (20, '1H Sword', 13, 0, 200)",
+		"INSERT INTO item_template VALUES (21, 'Shield', 14, 0, 150)",
+		"INSERT INTO item_template VALUES (22, '2H Axe', 17, 0, 300)",
+		"INSERT INTO item_template VALUES (30, 'Small Bag', 18, 6, 50)",
+		"INSERT INTO item_template VALUES (40, 'Linen Cloth', 0, 0, 10)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: charStore, WorldStore: charStore}
+	sess := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1}}
+
+	// 1. Two-item swap in backpack: both slots occupied
+	// Slot 23 has item 1001, Slot 24 has item 1002
+	_, _ = db.Exec("INSERT INTO item_instance VALUES (1001, 40, 1, ''), (1002, 40, 1, '')")
+	_, _ = db.Exec("INSERT INTO character_inventory VALUES (1, 0, 23, 1001), (1, 0, 24, 1002)")
+
+	if !sess.handleSwapInvItem(context.Background(), []byte{24, 23}) {
+		t.Fatal("handleSwapInvItem failed for occupied slots")
+	}
+	var s23, s24 int64
+	_ = db.QueryRow("SELECT item FROM character_inventory WHERE guid = 1 AND bag = 0 AND slot = 23").Scan(&s23)
+	_ = db.QueryRow("SELECT item FROM character_inventory WHERE guid = 1 AND bag = 0 AND slot = 24").Scan(&s24)
+	if s23 != 1002 || s24 != 1001 {
+		t.Fatalf("expected slots swapped (23->1002, 24->1001), got 23->%d, 24->%d", s23, s24)
+	}
+
+	// 2. Equipped bag logic:
+	// Insert bag item 2001 (entry 30, invType 18) into slot 19
+	// Put item 3001 inside bag 2001 at slot 0
+	_, _ = db.Exec("INSERT INTO item_instance VALUES (2001, 30, 1, ''), (3001, 40, 5, '')")
+	_, _ = db.Exec("INSERT INTO character_inventory VALUES (1, 0, 19, 2001), (1, 2001, 0, 3001)")
+
+	// Attempting to move non-empty bag from slot 19 to slot 25 should fail
+	if !sess.handleSwapInvItem(context.Background(), []byte{25, 19}) {
+		t.Fatal("expected handleSwapInvItem to return true even on error")
+	}
+	var bagSlot int
+	_ = db.QueryRow("SELECT slot FROM character_inventory WHERE guid = 1 AND item = 2001").Scan(&bagSlot)
+	if bagSlot != 19 {
+		t.Fatalf("non-empty bag should NOT move from slot 19, but got slot %d", bagSlot)
+	}
+
+	// Move item 3001 out of bag 19 into backpack slot 25 using handleSwapItem
+	if !sess.handleSwapItem(context.Background(), []byte{0, 25, 19, 0}) {
+		t.Fatal("handleSwapItem moving out of bag failed")
+	}
+	var itemBag, itemSlot int
+	_ = db.QueryRow("SELECT bag, slot FROM character_inventory WHERE guid = 1 AND item = 3001").Scan(&itemBag, &itemSlot)
+	if itemBag != 0 || itemSlot != 25 {
+		t.Fatalf("expected item 3001 to be at bag 0 slot 25, got bag %d slot %d", itemBag, itemSlot)
+	}
+
+	// Now bag 2001 is empty: move bag 2001 from slot 19 to slot 26
+	if !sess.handleSwapInvItem(context.Background(), []byte{26, 19}) {
+		t.Fatal("handleSwapInvItem failed for empty bag")
+	}
+	_ = db.QueryRow("SELECT slot FROM character_inventory WHERE guid = 1 AND item = 2001").Scan(&bagSlot)
+	if bagSlot != 26 {
+		t.Fatalf("expected empty bag to move to slot 26, got %d", bagSlot)
+	}
+
+	// 3. Ring auto-equip to secondary slot:
+	// Put Ring 1 (item 4001, entry 10) in slot 10 (Finger1)
+	// Put Ring 2 (item 4002, entry 11) in backpack slot 27
+	_, _ = db.Exec("INSERT INTO item_instance VALUES (4001, 10, 1, ''), (4002, 11, 1, '')")
+	_, _ = db.Exec("INSERT INTO character_inventory VALUES (1, 0, 10, 4001), (1, 0, 27, 4002)")
+
+	if !sess.handleAutoEquipItem(context.Background(), []byte{0, 27}) {
+		t.Fatal("handleAutoEquipItem for ring failed")
+	}
+	var r1Slot, r2Slot int
+	_ = db.QueryRow("SELECT slot FROM character_inventory WHERE guid = 1 AND item = 4001").Scan(&r1Slot)
+	_ = db.QueryRow("SELECT slot FROM character_inventory WHERE guid = 1 AND item = 4002").Scan(&r2Slot)
+	if r1Slot != 10 || r2Slot != 11 {
+		t.Fatalf("expected Ring 1 at 10 and Ring 2 at 11, got r1=%d, r2=%d", r1Slot, r2Slot)
+	}
+
+	// 4. 2-Handed weapon equipping with offhand occupied:
+	// Slot 15: 1H Sword (item 5001)
+	// Slot 16: Shield (item 5002)
+	// Slot 28: 2H Axe (item 5003)
+	_, _ = db.Exec("INSERT INTO item_instance VALUES (5001, 20, 1, ''), (5002, 21, 1, ''), (5003, 22, 1, '')")
+	_, _ = db.Exec("INSERT INTO character_inventory VALUES (1, 0, 15, 5001), (1, 0, 16, 5002), (1, 0, 28, 5003)")
+
+	if !sess.handleAutoEquipItem(context.Background(), []byte{0, 28}) {
+		t.Fatal("handleAutoEquipItem for 2H weapon failed")
+	}
+	var mhItem, ohItem, shieldBag, shieldSlot int64
+	_ = db.QueryRow("SELECT COALESCE(item, 0) FROM character_inventory WHERE guid = 1 AND bag = 0 AND slot = 15").Scan(&mhItem)
+	_ = db.QueryRow("SELECT COALESCE(item, 0) FROM character_inventory WHERE guid = 1 AND bag = 0 AND slot = 16").Scan(&ohItem)
+	_ = db.QueryRow("SELECT bag, slot FROM character_inventory WHERE guid = 1 AND item = 5002").Scan(&shieldBag, &shieldSlot)
+
+	if mhItem != 5003 {
+		t.Fatalf("expected 2H Axe (5003) at slot 15, got %d", mhItem)
+	}
+	if ohItem != 0 {
+		t.Fatalf("expected slot 16 (offhand) to be empty after 2H equip, got item %d", ohItem)
+	}
+	if shieldBag != 0 || shieldSlot < 23 || shieldSlot > 38 {
+		t.Fatalf("expected shield (5002) to be unequipped to backpack, got bag %d slot %d", shieldBag, shieldSlot)
+	}
+
+	// 5. High GUID masking test for handleAutoEquipItemSlot:
+	// Pass raw 64-bit GUID: 0x4000000000000000 | 5001 (1H Sword currently in backpack)
+	var swordSlot int
+	_ = db.QueryRow("SELECT slot FROM character_inventory WHERE guid = 1 AND item = 5001").Scan(&swordSlot)
+	rawGuid := uint64(0x4000000000000000) | uint64(5001)
+	slotBuf := protocol.NewBuffer(9)
+	slotBuf.WriteU64(rawGuid)
+	slotBuf.WriteU8(15) // equip to mainhand
+
+	if !sess.handleAutoEquipItemSlot(context.Background(), slotBuf.Bytes()) {
+		t.Fatal("handleAutoEquipItemSlot with high GUID failed")
+	}
+	_ = db.QueryRow("SELECT slot FROM character_inventory WHERE guid = 1 AND item = 5001").Scan(&swordSlot)
+	if swordSlot != 15 {
+		t.Fatalf("expected 1H sword (5001) equipped to slot 15 via high GUID, got slot %d", swordSlot)
+	}
+}
