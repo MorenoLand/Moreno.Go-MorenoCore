@@ -178,6 +178,7 @@ type playerState struct {
 	QuestLog         [playerQuestLogSlots]questLogEntry
 	MountDisplayID   uint32
 	StandState       uint8
+	TotemSlots       [4]uint64
 	PlayerFieldBytes uint32
 	SelfResSpell     uint32
 	DuelArbiter      uint64

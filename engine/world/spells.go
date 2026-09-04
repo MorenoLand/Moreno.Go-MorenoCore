@@ -814,25 +814,86 @@ func (s *session) handleGetMirrorImageData(ctx context.Context, payload []byte) 
 }
 
 // handleTotemDestroyed processes CMSG_TOTEM_DESTROYED (0x413).
-// Reference: WorldSession::HandleTotemDestroyed (SpellHandler.cpp:787).
+// Reference: WorldSession::HandleTotemDestroyed (SpellHandler.cpp:582).
 func (s *session) handleTotemDestroyed(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	slotID := payload[0]
+	if slotID >= 4 {
+		return true
+	}
+	s.player.TotemSlots[slotID] = 0
+
+	// Broadcast SMSG_TOTEM_CREATED with duration 0 and empty GUID to clear client totem frame
+	resp := protocol.NewBuffer(17)
+	resp.WriteU8(slotID)
+	resp.WriteU64(0)
+	resp.WriteU32(0)
+	resp.WriteU32(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_TOTEM_CREATED), resp.Bytes(), true)
 	s.debug("totem destroyed", "account", s.accountName, "slot", slotID)
 	return true
 }
 
 // handleSpellClick processes CMSG_SPELLCLICK (0x410).
-// Reference: WorldSession::HandleSpellClick (SpellHandler.cpp:800).
+// Reference: WorldSession::HandleSpellClick (SpellHandler.cpp:616) -> Unit::HandleSpellClick (Unit.cpp:12982).
 func (s *session) handleSpellClick(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	targetGUID, _ := r.ReadU64()
-	s.debug("spell click", "account", s.accountName, "target", targetGUID)
+	targetGUID, err := r.ReadU64()
+	if err != nil || targetGUID == 0 {
+		return true
+	}
+
+	npcEntry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+	s.debug("spell click", "account", s.accountName, "target", targetGUID, "entry", npcEntry)
+
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
+	}
+
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT spell_id, cast_flags, user_type FROM npc_spellclick_spells WHERE npc_entry = ?", npcEntry)
+	if err != nil {
+		return true
+	}
+	defer rows.Close()
+
+	type spellClick struct {
+		spellID   uint32
+		castFlags uint8
+		userType  uint8
+	}
+	var clicks []spellClick
+	for rows.Next() {
+		var sp, cf, ut uint32
+		if err := rows.Scan(&sp, &cf, &ut); err == nil && sp > 0 {
+			clicks = append(clicks, spellClick{
+				spellID:   sp,
+				castFlags: uint8(cf),
+				userType:  uint8(ut),
+			})
+		}
+	}
+
+	for _, click := range clicks {
+		targetUnit := targetGUID
+		if click.castFlags&0x02 != 0 { // NPC_CLICK_CAST_TARGET_CLICKER
+			targetUnit = s.playerGUID
+		}
+
+		if s.server.Data != nil {
+			if spell, found, err := s.server.Data.Spell(click.spellID); err == nil && found {
+				targetData := protocol.SpellTargetData{
+					Flags:    protocol.SpellTargetFlagUnitWireMask,
+					UnitGUID: targetUnit,
+				}
+				s.finishSpellCast(ctx, 0, click.spellID, spell, targetData)
+			}
+		}
+	}
 	return true
 }
 
@@ -1012,28 +1073,48 @@ func (s *session) applyGlyph(ctx context.Context, slot uint8, glyphPropID uint16
 }
 
 // handleUpdateMissileTrajectory processes CMSG_UPDATE_MISSILE_TRAJECTORY (0x462).
-// Reference: WorldSession::HandleUpdateMissileTrajectory (SpellHandler.cpp:860).
+// Reference: WorldSession::HandleUpdateMissileTrajectory (MiscHandler.cpp:1545).
 func (s *session) handleUpdateMissileTrajectory(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 45 {
 		return true
 	}
 	r := protocol.NewReader(payload)
 	guid, _ := r.ReadU64()
 	spellID, _ := r.ReadU32()
-	s.debug("update missile trajectory", "account", s.accountName, "guid", guid, "spell", spellID)
+	elevation, _ := r.ReadF32()
+	speed, _ := r.ReadF32()
+	fireX, _ := r.ReadF32()
+	fireY, _ := r.ReadF32()
+	fireZ, _ := r.ReadF32()
+	impactX, _ := r.ReadF32()
+	impactY, _ := r.ReadF32()
+	impactZ, _ := r.ReadF32()
+	moveStop, _ := r.ReadU8()
+
+	s.debug("update missile trajectory", "account", s.accountName, "guid", guid, "spell", spellID, "elevation", elevation, "speed", speed, "fire", []float32{fireX, fireY, fireZ}, "impact", []float32{impactX, impactY, impactZ}, "moveStop", moveStop)
+
+	if moveStop != 0 && r.Remaining() >= 4 {
+		opcode, _ := r.ReadU32()
+		s.handleMovement(ctx, opcode, payload[r.Position():])
+	}
 	return true
 }
 
 // handleUpdateProjectilePosition processes CMSG_UPDATE_PROJECTILE_POSITION (0x4BE).
-// Reference: WorldSession::HandleUpdateProjectilePosition (SpellHandler.cpp:875).
+// Reference: WorldSession::HandleUpdateProjectilePosition (SpellHandler.cpp:816).
 func (s *session) handleUpdateProjectilePosition(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 25 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	guid, _ := r.ReadU64()
+	casterGuid, _ := r.ReadU64()
 	spellID, _ := r.ReadU32()
-	s.debug("update projectile position", "account", s.accountName, "guid", guid, "spell", spellID)
+	castCount, _ := r.ReadU8()
+	hitX, _ := r.ReadF32()
+	hitY, _ := r.ReadF32()
+	hitZ, _ := r.ReadF32()
+
+	s.debug("update projectile position", "account", s.accountName, "guid", casterGuid, "spell", spellID, "castCount", castCount, "hit", []float32{hitX, hitY, hitZ})
 	return true
 }
 
