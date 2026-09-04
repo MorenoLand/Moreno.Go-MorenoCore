@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math/rand"
 	"strconv"
 	"strings"
 	"time"
@@ -738,6 +739,12 @@ const (
 	equipErrCanOnlyDoWithEmptyBags         = 31
 	equipErrYouAreDead                     = 38
 	equipErrCantDoRightNow                 = 39
+	equipErrStackableCantBeWrapped         = 43
+	equipErrEquippedCantBeWrapped          = 44
+	equipErrWrappedCantBeWrapped           = 45
+	equipErrBoundCantBeWrapped             = 46
+	equipErrUniqueCantBeWrapped            = 47
+	equipErrBagsCantBeWrapped              = 48
 	equipErrInvFull                        = 50
 )
 
@@ -1055,27 +1062,88 @@ func (s *session) handleOpenItem(ctx context.Context, payload []byte) bool {
 	bagIndex := payload[0]
 	slot := payload[1]
 
-	itemGUID, _, _, err := s.inventoryItemAt(ctx, bagIndex, slot)
+	itemGUID, itemEntry, _, err := s.inventoryItemAt(ctx, bagIndex, slot)
 	if err != nil || itemGUID == 0 {
 		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
 
-	// Unwrap or open item: check if item has wrapped flag / gift
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
-		var giftEntry uint32
-		err := cdb.QueryRowContext(ctx, "SELECT entry FROM character_gifts WHERE item_guid = ?", itemGUID).Scan(&giftEntry)
+		var giftEntry, giftFlags uint32
+		err := cdb.QueryRowContext(ctx, "SELECT entry, flags FROM character_gifts WHERE item_guid = ?", itemGUID).Scan(&giftEntry, &giftFlags)
 		if err == nil && giftEntry > 0 {
-			// Unwrapping: restore original entry and delete gift record
-			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ? WHERE guid = ?", giftEntry, itemGUID)
+			// Unwrapping: restore original entry, flags, and delete gift record
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = ? WHERE guid = ?", giftEntry, giftFlags, itemGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_gifts WHERE item_guid = ?", itemGUID)
 			_ = s.sendInventoryItems(ctx)
 			return true
 		}
+
+		// Container opening: check item_loot_template
+		var lootSource *sql.DB
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			lootSource = s.server.WorldStore.DB
+		} else {
+			lootSource = cdb
+		}
+
+		if lootSource != nil {
+			rows, qErr := lootSource.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0)
+				FROM item_loot_template AS l
+				LEFT JOIN item_template AS t ON t.entry = l.Item
+				WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, itemEntry)
+			if qErr == nil {
+				loot := &activeLootState{
+					TargetGUID: uint64(itemGUID),
+					LootType:   1,
+					Items:      make(map[uint8]lootItem),
+				}
+				var lSlot uint8 = 0
+				for rows.Next() {
+					var itemID int64
+					var chance float64
+					var minCount, maxCount, displayID int64
+					if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID); err == nil {
+						roll := rand.Float64() * 100.0
+						if chance <= 0 || roll <= chance {
+							count := uint32(minCount)
+							if maxCount > minCount {
+								count += uint32(rand.Intn(int(maxCount - minCount + 1)))
+							}
+							if count == 0 {
+								count = 1
+							}
+							loot.Items[lSlot] = lootItem{
+								Slot:          lSlot,
+								ItemEntry:     uint32(itemID),
+								Count:         count,
+								DisplayInfoID: uint32(displayID),
+							}
+							lSlot++
+							if lSlot >= 16 {
+								break
+							}
+						}
+					}
+				}
+				rows.Close()
+
+				if len(loot.Items) > 0 {
+					s.server.lootMu.Lock()
+					if s.server.creatureLoot == nil {
+						s.server.creatureLoot = make(map[uint64]*activeLootState)
+					}
+					s.server.creatureLoot[uint64(itemGUID)] = loot
+					s.server.lootMu.Unlock()
+					s.activeLoot = loot
+					return s.sendLootResponse(loot) == nil
+				}
+			}
+		}
 	}
 
-	// Send loot response for openable item
+	// Default empty loot response if no items
 	buf := protocol.NewBuffer(32)
 	buf.WriteU64(uint64(itemGUID))
 	buf.WriteU8(1)  // LOOT_CORPSE / LOOT_ITEM
@@ -1130,7 +1198,7 @@ func (s *session) handlePageTextQuery(ctx context.Context, payload []byte) bool 
 }
 
 // handleWrapItem processes CMSG_WRAP_ITEM (0x1D3).
-// Reference: WorldSession::HandleWrapItemOpcode (ItemHandler.cpp:802).
+// Reference: WorldSession::HandleWrapItemOpcode (ItemHandler.cpp:836).
 func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
@@ -1145,17 +1213,49 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
-	targetGUID, targetEntry, _, err := s.inventoryItemAt(ctx, itemBag, itemSlot)
+	targetGUID, targetEntry, targetCount, err := s.inventoryItemAt(ctx, itemBag, itemSlot)
 	if err != nil || targetGUID == 0 {
 		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
 
+	// Cheat check: cannot wrap gift with itself
+	if giftGUID == targetGUID {
+		s.sendEquipError(equipErrWrappedCantBeWrapped, uint64(targetGUID))
+		return true
+	}
+
+	// Equipped items cannot be wrapped
+	if itemBag == 0 && itemSlot < equipSlotEnd {
+		s.sendEquipError(equipErrEquippedCantBeWrapped, uint64(targetGUID))
+		return true
+	}
+
+	// Stackable items (count > 1) cannot be wrapped
+	if targetCount > 1 {
+		s.sendEquipError(equipErrStackableCantBeWrapped, uint64(targetGUID))
+		return true
+	}
+
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
+
+		// Already wrapped check
+		var existingGift uint32
+		if err := cdb.QueryRowContext(ctx, "SELECT entry FROM character_gifts WHERE item_guid = ? LIMIT 1", targetGUID).Scan(&existingGift); err == nil && existingGift != 0 {
+			s.sendEquipError(equipErrWrappedCantBeWrapped, uint64(targetGUID))
+			return true
+		}
+
 		// Consume gift wrapper from inventory
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, giftBag, giftSlot)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", giftGUID)
+		var wrapperCount uint32
+		_ = cdb.QueryRowContext(ctx, "SELECT count FROM item_instance WHERE guid = ?", giftGUID).Scan(&wrapperCount)
+		if wrapperCount > 1 {
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", giftGUID)
+		} else {
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, giftBag, giftSlot)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", giftGUID)
+		}
 
 		// Record original entry in character_gifts
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_gifts (guid, item_guid, entry, flags) VALUES (?, ?, ?, 0)", s.playerGUID, targetGUID, targetEntry)
@@ -1176,7 +1276,8 @@ func (s *session) handleWrapItem(ctx context.Context, payload []byte) bool {
 		case 21830:
 			wrappedEntry = 21831
 		}
-		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ? WHERE guid = ?", wrappedEntry, targetGUID)
+		// Set itemEntry = wrappedEntry and flags |= 0x8 (ITEM_FIELD_FLAG_WRAPPED)
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ?, flags = flags | 8 WHERE guid = ?", wrappedEntry, targetGUID)
 		_ = s.sendInventoryItems(ctx)
 	}
 	return true
@@ -1193,24 +1294,44 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 	itemGUID, _ := r.ReadU64()
 	_, _ = r.ReadU8() // guildBank
 
-	if s.server == nil || s.server.CharactersStore == nil || s.server.WorldStore == nil {
+	if s.server == nil || s.server.CharactersStore == nil {
 		return true
 	}
 	cdb := s.server.CharactersStore.DB
-	wdb := s.server.WorldStore.DB
-	if cdb == nil || wdb == nil {
+	if cdb == nil {
 		return true
+	}
+	var wdb *sql.DB
+	if s.server.WorldStore != nil {
+		wdb = s.server.WorldStore.DB
+	}
+
+	getMaxDurability := func(entry uint32) uint32 {
+		var maxD uint32
+		if wdb != nil {
+			_ = wdb.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ?", entry).Scan(&maxD)
+		}
+		if maxD == 0 && cdb != nil {
+			_ = cdb.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ?", entry).Scan(&maxD)
+		}
+		return maxD
 	}
 
 	if itemGUID != 0 {
 		rawGUID := itemGUID & 0x0000FFFFFFFFFFFF
 		var itemEntry, durability uint32
-		err := cdb.QueryRowContext(ctx, "SELECT itemEntry, durability FROM item_instance WHERE guid = ? AND owner_guid = ?", rawGUID, s.playerGUID).Scan(&itemEntry, &durability)
+		err := cdb.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.durability
+			FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND (ci.item = ? OR ii.guid = ?) LIMIT 1`,
+			s.playerGUID, rawGUID, rawGUID).Scan(&itemEntry, &durability)
 		if err != nil {
-			return true
+			err = cdb.QueryRowContext(ctx, "SELECT itemEntry, durability FROM item_instance WHERE guid = ?", rawGUID).Scan(&itemEntry, &durability)
+			if err != nil {
+				return true
+			}
 		}
-		var maxDurability uint32
-		_ = wdb.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ?", itemEntry).Scan(&maxDurability)
+		maxDurability := getMaxDurability(itemEntry)
 		if maxDurability > durability {
 			cost := (maxDurability - durability) * 10
 			if s.player.Money >= cost {
@@ -1227,25 +1348,36 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 			cost uint32
 			maxD uint32
 		}
+		type rawItem struct {
+			guid  uint64
+			entry uint32
+			curD  uint32
+		}
+		var rawItems []rawItem
 		rows, err := cdb.QueryContext(ctx,
-			`SELECT ii.guid, ii.itemEntry, ii.durability, it.MaxDurability
+			`SELECT ii.guid, ii.itemEntry, ii.durability
 			 FROM character_inventory AS ci
 			 JOIN item_instance AS ii ON ii.guid = ci.item
-			 JOIN item_template AS it ON it.entry = ii.itemEntry
-			 WHERE ci.guid = ? AND it.MaxDurability > ii.durability`, s.playerGUID)
+			 WHERE ci.guid = ?`, s.playerGUID)
 		if err == nil {
-			var toRepair []repairItem
-			var totalCost uint32
 			for rows.Next() {
-				var guid uint64
-				var entry, curD, maxD uint32
-				if err := rows.Scan(&guid, &entry, &curD, &maxD); err == nil && maxD > curD {
-					cost := (maxD - curD) * 10
-					totalCost += cost
-					toRepair = append(toRepair, repairItem{guid: guid, cost: cost, maxD: maxD})
+				var it rawItem
+				if err := rows.Scan(&it.guid, &it.entry, &it.curD); err == nil {
+					rawItems = append(rawItems, it)
 				}
 			}
 			rows.Close()
+
+			var toRepair []repairItem
+			var totalCost uint32
+			for _, it := range rawItems {
+				maxD := getMaxDurability(it.entry)
+				if maxD > it.curD {
+					cost := (maxD - it.curD) * 10
+					totalCost += cost
+					toRepair = append(toRepair, repairItem{guid: it.guid, cost: cost, maxD: maxD})
+				}
+			}
 
 			if len(toRepair) > 0 {
 				if s.player.Money >= totalCost {

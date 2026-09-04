@@ -823,3 +823,220 @@ func TestHandleSocketGemsParity(t *testing.T) {
 		t.Fatalf("expected socketed gems deleted from character_inventory, found %d", count)
 	}
 }
+
+func TestGiftWrappingAndOpeningAndRepairParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY(guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, count INTEGER, flags INTEGER, durability INTEGER, enchantments TEXT)",
+		"CREATE TABLE character_gifts (guid INTEGER, item_guid INTEGER PRIMARY KEY, entry INTEGER, flags INTEGER)",
+		"CREATE TABLE item_loot_template (Entry INTEGER, Item INTEGER, Chance REAL, MinCount INTEGER, MaxCount INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, name TEXT, InventoryType INTEGER, ContainerSlots INTEGER, BuyPrice INTEGER, MaxDurability INTEGER, displayid INTEGER)",
+		"INSERT INTO characters VALUES (1, 10000, '')",
+		// Item templates
+		"INSERT INTO item_template VALUES (5042, 'Red Ribbon', 0, 0, 5, 0, 10)",
+		"INSERT INTO item_template VALUES (5043, 'Red Gift Box', 0, 0, 5, 0, 11)",
+		"INSERT INTO item_template VALUES (1234, 'Iron Sword', 13, 0, 50, 80, 20)",
+		"INSERT INTO item_template VALUES (5555, 'Thick-shelled Clam', 0, 0, 10, 0, 30)",
+		"INSERT INTO item_template VALUES (7777, 'Clam Meat', 0, 0, 5, 0, 40)",
+		"INSERT INTO item_template VALUES (8001, 'Iron Shield', 14, 0, 100, 100, 50)",
+		"INSERT INTO item_template VALUES (8002, 'Steel Mace', 13, 0, 150, 100, 60)",
+		// Item loot
+		"INSERT INTO item_loot_template VALUES (5555, 7777, 100.0, 2, 2)",
+		// Inventory items
+		// 1001: Wrapper in slot 23
+		"INSERT INTO item_instance VALUES (1001, 5042, 1, 0, 0, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 1001)",
+		// 1002: Sword in slot 24
+		"INSERT INTO item_instance VALUES (1002, 1234, 1, 0, 80, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 24, 1002)",
+		// 2001: Clam in slot 25
+		"INSERT INTO item_instance VALUES (2001, 5555, 1, 0, 0, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 25, 2001)",
+		// 3001: Damaged shield (20/100) in slot 26
+		"INSERT INTO item_instance VALUES (3001, 8001, 1, 0, 20, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 26, 3001)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c, s := net.Pipe()
+	defer c.Close()
+	defer s.Close()
+
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{
+		CharactersStore: charStore,
+		WorldStore:      charStore,
+		creatureLoot:    make(map[uint64]*activeLootState),
+	}
+	sess := &session{
+		server:       srv,
+		conn:         s,
+		playerGUID:   1,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:   1,
+			Money:  10000,
+			Health: 1000,
+		},
+	}
+
+	pChan := make(chan []byte, 8)
+	opChan := make(chan uint16, 8)
+	go func() {
+		for {
+			op, data, err := readServerFrame(c, nil)
+			if err != nil {
+				return
+			}
+			opChan <- op
+			pChan <- data
+		}
+	}()
+
+	ctx := context.Background()
+
+	// 1. Gift Wrapping: Wrap item 1002 with wrapper 1001
+	wrapPayload := []byte{0, 23, 0, 24}
+	if !sess.handleWrapItem(ctx, wrapPayload) {
+		t.Fatal("handleWrapItem failed")
+	}
+
+	// Verify wrapper deleted
+	var wrapperCount int
+	_ = db.QueryRow("SELECT count(*) FROM item_instance WHERE guid = 1001").Scan(&wrapperCount)
+	if wrapperCount != 0 {
+		t.Fatal("expected wrapper item 1001 deleted")
+	}
+
+	// Verify target item wrapped: entry changed to 5043, flags has 8
+	var wrappedEntry, wrappedFlags uint32
+	if err := db.QueryRow("SELECT itemEntry, flags FROM item_instance WHERE guid = 1002").Scan(&wrappedEntry, &wrappedFlags); err != nil {
+		t.Fatal(err)
+	}
+	if wrappedEntry != 5043 || (wrappedFlags&8) == 0 {
+		t.Fatalf("expected wrapped item entry 5043 with flag 8, got entry=%d flags=%d", wrappedEntry, wrappedFlags)
+	}
+
+	// Verify character_gifts record
+	var giftOriginalEntry uint32
+	if err := db.QueryRow("SELECT entry FROM character_gifts WHERE item_guid = 1002").Scan(&giftOriginalEntry); err != nil {
+		t.Fatal(err)
+	}
+	if giftOriginalEntry != 1234 {
+		t.Fatalf("expected original entry 1234 recorded in character_gifts, got %d", giftOriginalEntry)
+	}
+
+	// 2. Unwrapping: Open wrapped item 1002 (slot 24)
+	openPayload := []byte{0, 24}
+	if !sess.handleOpenItem(ctx, openPayload) {
+		t.Fatal("handleOpenItem unwrapping failed")
+	}
+
+	// Verify item 1002 restored to 1234
+	if err := db.QueryRow("SELECT itemEntry FROM item_instance WHERE guid = 1002").Scan(&wrappedEntry); err != nil {
+		t.Fatal(err)
+	}
+	if wrappedEntry != 1234 {
+		t.Fatalf("expected restored entry 1234 after unwrap, got %d", wrappedEntry)
+	}
+
+	// Verify character_gifts deleted
+	var giftCount int
+	_ = db.QueryRow("SELECT count(*) FROM character_gifts WHERE item_guid = 1002").Scan(&giftCount)
+	if giftCount != 0 {
+		t.Fatal("expected character_gifts record deleted after unwrap")
+	}
+
+	// 3. Container Loot: Open clam 2001 (slot 25)
+drainLoop:
+	for {
+		select {
+		case <-opChan:
+			<-pChan
+		default:
+			break drainLoop
+		}
+	}
+
+	openClam := []byte{0, 25}
+	if !sess.handleOpenItem(ctx, openClam) {
+		t.Fatal("handleOpenItem container failed")
+	}
+
+	select {
+	case op := <-opChan:
+		data := <-pChan
+		if op != uint16(protocol.OpcodeSMSG_LOOT_RESPONSE) {
+			t.Fatalf("expected SMSG_LOOT_RESPONSE (0x160), got 0x%04X", op)
+		}
+		r := protocol.NewReader(data)
+		lGUID, _ := r.ReadU64()
+		lType, _ := r.ReadU8()
+		_, _ = r.ReadU32() // gold
+		count, _ := r.ReadU8()
+		if lGUID != 2001 || lType != 1 || count != 1 {
+			t.Fatalf("unexpected loot response: guid=%d type=%d count=%d", lGUID, lType, count)
+		}
+		_, _ = r.ReadU8() // slot 0
+		lootItemEntry, _ := r.ReadU32()
+		lootItemCount, _ := r.ReadU32()
+		if lootItemEntry != 7777 || lootItemCount != 2 {
+			t.Fatalf("expected 2x item 7777 in clam loot, got %dx %d", lootItemCount, lootItemEntry)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for SMSG_LOOT_RESPONSE for open item")
+	}
+
+	// 4. Single Item Repair: Repair shield 3001 (durability 20 -> 100, cost 800)
+	repBuf := protocol.NewBuffer(17)
+	repBuf.WriteU64(999)  // npcGUID
+	repBuf.WriteU64(3001) // itemGUID
+	repBuf.WriteU8(0)     // guildBank = 0
+
+	if !sess.handleRepairItem(ctx, repBuf.Bytes()) {
+		t.Fatal("handleRepairItem single item failed")
+	}
+	if sess.player.Money != 9200 {
+		t.Fatalf("expected player money 9200 after 800 repair, got %d", sess.player.Money)
+	}
+	var shieldD uint32
+	_ = db.QueryRow("SELECT durability FROM item_instance WHERE guid = 3001").Scan(&shieldD)
+	if shieldD != 100 {
+		t.Fatalf("expected shield durability 100, got %d", shieldD)
+	}
+
+	// 5. All Items Repair:
+	// Damage shield back to 60 (cost 400) and add damaged mace 3002 (durability 50/100, cost 500). Total cost 900.
+	_, _ = db.Exec("UPDATE item_instance SET durability = 60 WHERE guid = 3001")
+	_, _ = db.Exec("INSERT INTO item_instance VALUES (3002, 8002, 1, 0, 50, '')")
+	_, _ = db.Exec("INSERT INTO character_inventory VALUES (1, 0, 27, 3002)")
+
+	repAllBuf := protocol.NewBuffer(17)
+	repAllBuf.WriteU64(999) // npcGUID
+	repAllBuf.WriteU64(0)   // itemGUID = 0 (all items)
+	repAllBuf.WriteU8(0)    // guildBank = 0
+
+	if !sess.handleRepairItem(ctx, repAllBuf.Bytes()) {
+		t.Fatal("handleRepairItem all items failed")
+	}
+	if sess.player.Money != 8300 {
+		t.Fatalf("expected player money 8300 after repair all (9200 - 900), got %d", sess.player.Money)
+	}
+	var maceD uint32
+	_ = db.QueryRow("SELECT durability FROM item_instance WHERE guid = 3001").Scan(&shieldD)
+	_ = db.QueryRow("SELECT durability FROM item_instance WHERE guid = 3002").Scan(&maceD)
+	if shieldD != 100 || maceD != 100 {
+		t.Fatalf("expected both items repaired to 100, got shield=%d mace=%d", shieldD, maceD)
+	}
+}
