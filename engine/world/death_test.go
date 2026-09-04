@@ -728,7 +728,19 @@ func TestHandleHearthAndResurrect(t *testing.T) {
 func TestDurabilityLossOnDeath(t *testing.T) {
 	player := &playerState{GUID: 9, Health: 0, MaxHealth: 100}
 	state, clientConn, server := newDeathTestSession(t, player)
-	drainServerFrames(t, clientConn)
+
+	frames := make(chan uint16, 16)
+	go func() {
+		_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		for {
+			opcode, _, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				close(frames)
+				return
+			}
+			frames <- opcode
+		}
+	}()
 
 	cdb := server.CharactersStore.DB
 
@@ -759,6 +771,27 @@ func TestDurabilityLossOnDeath(t *testing.T) {
 	}
 	if durBag != 100 {
 		t.Fatalf("expected inventory item durability 100 (unaffected by death), got %d", durBag)
+	}
+
+	foundDurPkt := false
+	timeout := time.After(2 * time.Second)
+collect:
+	for {
+		select {
+		case op, ok := <-frames:
+			if !ok {
+				break collect
+			}
+			if op == uint16(protocol.OpcodeSMSG_DURABILITY_DAMAGE_DEATH) {
+				foundDurPkt = true
+				break collect
+			}
+		case <-timeout:
+			break collect
+		}
+	}
+	if !foundDurPkt {
+		t.Fatal("expected SMSG_DURABILITY_DAMAGE_DEATH packet on death")
 	}
 }
 
