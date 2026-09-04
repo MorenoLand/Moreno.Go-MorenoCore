@@ -236,6 +236,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			s.duelPartner = targetGUID
 			partner.duelPartner = s.playerGUID
 			arbiterGUID := uint64(s.playerGUID) | (uint64(0xF110) << 48)
+			s.player.DuelArbiter = arbiterGUID
+			partner.player.DuelArbiter = arbiterGUID
+			s.player.DuelTeam = 0
+			partner.player.DuelTeam = 0
+			s.sendPlayerUpdate()
+			partner.sendPlayerUpdate()
+
 			reqBuf := protocol.NewBuffer(16)
 			reqBuf.WriteU64(arbiterGUID)
 			reqBuf.WriteU64(s.playerGUID)

@@ -47,6 +47,8 @@ const (
 	unitFieldChosenTitle                        = 1195
 	unitFieldAmmoID                             = 1198
 	unitFieldPlayerSelfResSpell                 = 1199 // PLAYER_SELF_RES_SPELL = UNIT_END + 0x041B
+	playerFieldDuelArbiter                      = 148  // PLAYER_DUEL_ARBITER = UNIT_END + 0x0000 (Size 2)
+	playerFieldDuelTeam                         = 156  // PLAYER_DUEL_TEAM = UNIT_END + 0x0008 (Size 1)
 	playerQuestLogStart                         = 158  // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
 	playerQuestLogSlots                         = 25
 	playerSkillInfoStart                        = 636
@@ -177,6 +179,8 @@ type playerState struct {
 	StandState       uint8
 	PlayerFieldBytes uint32
 	SelfResSpell     uint32
+	DuelArbiter      uint64
+	DuelTeam         uint32
 	UnitFlags        uint32
 	HomebindMap      uint32
 	HomebindZone     uint32
@@ -939,6 +943,13 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		values[playerFieldKnownTitles+i] = state.KnownTitles[i]
 	}
 	values[unitFieldAmmoID] = state.AmmoID
+	if state.DuelArbiter != 0 {
+		values[playerFieldDuelArbiter] = uint32(state.DuelArbiter)
+		values[playerFieldDuelArbiter+1] = uint32(state.DuelArbiter >> 32)
+	}
+	if state.DuelTeam != 0 {
+		values[playerFieldDuelTeam] = state.DuelTeam
+	}
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		entry := state.QuestLog[slot]
 		base := playerQuestLogStart + slot*5
