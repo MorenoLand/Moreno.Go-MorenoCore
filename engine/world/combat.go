@@ -115,7 +115,11 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		s.sendPlayerUpdate()
 	}
 	s.debug("attack started", "account", s.accountName, "guid", victim)
-	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(s.playerGUID, victim), true)
+	startPayload := buildAttackStart(s.playerGUID, victim)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s)
+	}
 	if distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) <= meleeAttackRange+2.0 {
 		s.executeMeleeSwing(ctx, target)
 	}
@@ -143,11 +147,19 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 	if damage >= target.Health {
 		overkill = damage - target.Health
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), buildAttackerStateUpdate(s.playerGUID, target.GUID, damage, overkill), true)
+	asuPayload := buildAttackerStateUpdate(s.playerGUID, target.GUID, damage, overkill)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPayload, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPayload, s)
+	}
 
 	// If target is an online player (e.g. duel opponent or PvP)
 	if s.server != nil {
 		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil && playerSess.player != nil {
+			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
+				playerSess.player.UnitFlags |= unitFlagInCombat
+			}
+			playerSess.lastCombatTime = time.Now()
 			if damage >= playerSess.player.Health {
 				if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
 					// Duel defeat: loser drops to 1 HP and kneels (TC: Player::DuelComplete)
@@ -159,12 +171,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 					playerSess.sendPlayerUpdate()
 					playerSess.killPlayer(ctx)
 				}
+				_ = s.sendAttackStop(target.GUID, true)
+				s.attackTarget = 0
 			} else {
 				playerSess.player.Health -= damage
 				playerSess.sendPlayerUpdate()
 			}
-			_ = s.sendAttackStop(target.GUID, true)
-			s.attackTarget = 0
 			return
 		}
 	}
@@ -246,7 +258,12 @@ func (s *session) handleSetSheathed(payload []byte) bool {
 }
 
 func (s *session) sendAttackStop(victim uint64, nowDead bool) error {
-	return s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), buildAttackStop(s.playerGUID, victim, nowDead), true)
+	payload := buildAttackStop(s.playerGUID, victim, nowDead)
+	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), payload, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), payload, s)
+	}
+	return nil
 }
 
 func buildAttackStart(attacker, victim uint64) []byte {

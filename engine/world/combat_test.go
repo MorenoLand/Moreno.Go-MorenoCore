@@ -631,4 +631,166 @@ func TestDuelOutOfBoundsAndInBounds(t *testing.T) {
 	}
 }
 
+func TestPvPMeleeSwingContinuationAndNearbyBroadcast(t *testing.T) {
+	attClient, attServer := net.Pipe()
+	defer attClient.Close()
+	defer attServer.Close()
+
+	vicClient, vicServer := net.Pipe()
+	defer vicClient.Close()
+	defer vicServer.Close()
+
+	srv := &Server{
+		sessions: make(map[*session]struct{}),
+	}
+
+	attSess := &session{
+		server:       srv,
+		conn:         attServer,
+		authed:       true,
+		playerLoaded: true,
+		playerGUID:   10,
+		player: &playerState{
+			GUID:      10,
+			Map:       0,
+			X:         0,
+			Y:         0,
+			Z:         0,
+			Health:    1000,
+			MaxHealth: 1000,
+			Level:     80,
+		},
+	}
+
+	vicSess := &session{
+		server:       srv,
+		conn:         vicServer,
+		authed:       true,
+		playerLoaded: true,
+		playerGUID:   20,
+		player: &playerState{
+			GUID:      20,
+			Map:       0,
+			X:         2, // within melee range
+			Y:         0,
+			Z:         0,
+			Health:    1000,
+			MaxHealth: 1000,
+			Level:     80,
+		},
+	}
+
+	srv.sessions[attSess] = struct{}{}
+	srv.sessions[vicSess] = struct{}{}
+
+	attOpcodes := make(chan uint16, 16)
+	vicOpcodes := make(chan uint16, 16)
+
+	go func() {
+		for {
+			op, _, err := readServerFrame(attClient, nil)
+			if err != nil {
+				return
+			}
+			if op != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && op != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+				attOpcodes <- op
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			op, _, err := readServerFrame(vicClient, nil)
+			if err != nil {
+				return
+			}
+			if op != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && op != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+				vicOpcodes <- op
+			}
+		}
+	}()
+
+	// 1. Attacker attacks victim
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(20)
+	if !attSess.handleAttackSwing(context.Background(), payload.Bytes()) {
+		t.Fatal("handleAttackSwing failed")
+	}
+
+	// Attacker receives SMSG_ATTACK_START and SMSG_ATTACKERSTATEUPDATE (initial swing)
+	var opAtt1, opAtt2 uint16
+	select {
+	case opAtt1 = <-attOpcodes:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for attacker SMSG_ATTACK_START")
+	}
+	if opAtt1 != uint16(protocol.OpcodeSMSG_ATTACK_START) {
+		t.Fatalf("expected SMSG_ATTACK_START (0x143), got 0x%04X", opAtt1)
+	}
+
+	select {
+	case opAtt2 = <-attOpcodes:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for attacker SMSG_ATTACKERSTATEUPDATE")
+	}
+	if opAtt2 != uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE) {
+		t.Fatalf("expected SMSG_ATTACKERSTATEUPDATE (0x14A), got 0x%04X", opAtt2)
+	}
+
+	// Victim ALSO receives SMSG_ATTACK_START and SMSG_ATTACKERSTATEUPDATE via broadcast!
+	var opVic1, opVic2 uint16
+	select {
+	case opVic1 = <-vicOpcodes:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for victim SMSG_ATTACK_START broadcast")
+	}
+	if opVic1 != uint16(protocol.OpcodeSMSG_ATTACK_START) {
+		t.Fatalf("victim expected SMSG_ATTACK_START (0x143), got 0x%04X", opVic1)
+	}
+
+	select {
+	case opVic2 = <-vicOpcodes:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for victim SMSG_ATTACKERSTATEUPDATE broadcast")
+	}
+	if opVic2 != uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE) {
+		t.Fatalf("victim expected SMSG_ATTACKERSTATEUPDATE (0x14A), got 0x%04X", opVic2)
+	}
+
+	// 2. Crucial parity check: attacker MUST STILL BE ATTACKING!
+	if attSess.attackTarget != 20 {
+		t.Fatalf("expected attacker to maintain attackTarget=20, got %d", attSess.attackTarget)
+	}
+	if vicSess.player.Health >= 1000 {
+		t.Fatalf("expected victim to take damage, health is %d", vicSess.player.Health)
+	}
+	if vicSess.player.UnitFlags&unitFlagInCombat == 0 {
+		t.Fatal("expected victim to enter combat")
+	}
+
+	// 3. Attacker stops attack explicitly
+	attSess.handleAttackStop()
+	select {
+	case op := <-attOpcodes:
+		if op != uint16(protocol.OpcodeSMSG_ATTACK_STOP) {
+			t.Fatalf("expected SMSG_ATTACK_STOP (0x144), got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for attacker SMSG_ATTACK_STOP")
+	}
+
+	select {
+	case op := <-vicOpcodes:
+		if op != uint16(protocol.OpcodeSMSG_ATTACK_STOP) {
+			t.Fatalf("expected victim to receive SMSG_ATTACK_STOP broadcast, got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for victim SMSG_ATTACK_STOP broadcast")
+	}
+
+	if attSess.attackTarget != 0 {
+		t.Fatalf("expected attacker target 0 after stop, got %d", attSess.attackTarget)
+	}
+}
+
 
