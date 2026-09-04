@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"net"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -314,4 +316,319 @@ func TestPlayerSpellDamageAndHeal(t *testing.T) {
 		t.Fatal("expected sess2 to have unitFlagInCombat set")
 	}
 }
+
+func TestDuelForfeitAndWinnerPacket(t *testing.T) {
+	serverConn1, clientConn1 := net.Pipe()
+	defer serverConn1.Close()
+	defer clientConn1.Close()
+
+	serverConn2, clientConn2 := net.Pipe()
+	defer serverConn2.Close()
+	defer clientConn2.Close()
+
+	srv := &Server{
+		Config:   config.Default(),
+		sessions: make(map[*session]struct{}),
+	}
+	sess1 := &session{
+		server:       srv,
+		conn:         serverConn1,
+		playerLoaded: true,
+		authed:       true,
+		playerGUID:   100,
+		player:       &playerState{GUID: 100, Name: "Alice", Map: 0, X: 0, Y: 0, Z: 0, Health: 100, MaxHealth: 100},
+	}
+	sess2 := &session{
+		server:       srv,
+		conn:         serverConn2,
+		playerLoaded: true,
+		authed:       true,
+		playerGUID:   200,
+		player:       &playerState{GUID: 200, Name: "Bob", Map: 0, X: 10, Y: 0, Z: 0, Health: 100, MaxHealth: 100},
+	}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+
+	sess1.duelPartner = 200
+	sess2.duelPartner = 100
+	sess1.player.DuelTeam = 1
+	sess2.player.DuelTeam = 2
+	sess1.player.DuelArbiter = 0xF110000000000001
+	sess2.player.DuelArbiter = 0xF110000000000001
+
+	var winnerPkt1 []byte
+	var mu sync.Mutex
+
+	go func() {
+		for {
+			op, data, err := readServerFrame(clientConn1, nil)
+			if err != nil {
+				return
+			}
+			if op == uint16(protocol.OpcodeSMSG_DUEL_WINNER) {
+				mu.Lock()
+				winnerPkt1 = append([]byte(nil), data...)
+				mu.Unlock()
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			_, _, err := readServerFrame(clientConn2, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Bob forfeits the duel via handleDuelCancelled
+	ctx := context.Background()
+	if !sess2.handleDuelCancelled(ctx, nil) {
+		t.Fatal("handleDuelCancelled returned false")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Both players must have duel state cleared
+	if sess1.player.DuelTeam != 0 || sess2.player.DuelTeam != 0 {
+		t.Fatalf("expected DuelTeam 0, got %d and %d", sess1.player.DuelTeam, sess2.player.DuelTeam)
+	}
+	if sess1.duelPartner != 0 || sess2.duelPartner != 0 {
+		t.Fatalf("expected duelPartner 0, got %d and %d", sess1.duelPartner, sess2.duelPartner)
+	}
+
+	// Verify winner packet received on sess1
+	mu.Lock()
+	defer mu.Unlock()
+	if len(winnerPkt1) == 0 {
+		t.Fatal("expected SMSG_DUEL_WINNER packet")
+	}
+	reader := protocol.NewReader(winnerPkt1)
+	fled, err := reader.ReadU8()
+	if err != nil || fled != 0 {
+		t.Fatalf("expected fled 0, got %d (err: %v)", fled, err)
+	}
+	winner, err := reader.ReadCString()
+	if err != nil || winner != "Alice" {
+		t.Fatalf("expected winner 'Alice', got '%s' (err: %v)", winner, err)
+	}
+	loser, err := reader.ReadCString()
+	if err != nil || loser != "Bob" {
+		t.Fatalf("expected loser 'Bob', got '%s' (err: %v)", loser, err)
+	}
+}
+
+func TestDuelCancelBeforeStartInterrupted(t *testing.T) {
+	serverConn1, clientConn1 := net.Pipe()
+	defer serverConn1.Close()
+	defer clientConn1.Close()
+
+	srv := &Server{
+		Config:   config.Default(),
+		sessions: make(map[*session]struct{}),
+	}
+	sess1 := &session{
+		server:       srv,
+		conn:         serverConn1,
+		playerLoaded: true,
+		authed:       true,
+		playerGUID:   100,
+		player:       &playerState{GUID: 100, Name: "Alice", Map: 0, Health: 100, MaxHealth: 100},
+	}
+	srv.sessions[sess1] = struct{}{}
+	sess1.duelPartner = 200
+	sess1.player.DuelTeam = 0 // not started yet (countdown or requested)
+
+	completeReceived := make(chan uint8, 1)
+	winnerReceived := make(chan bool, 1)
+
+	go func() {
+		for {
+			op, data, err := readServerFrame(clientConn1, nil)
+			if err != nil {
+				return
+			}
+			if op == uint16(protocol.OpcodeSMSG_DUEL_COMPLETE) && len(data) >= 1 {
+				completeReceived <- data[0]
+			}
+			if op == uint16(protocol.OpcodeSMSG_DUEL_WINNER) {
+				winnerReceived <- true
+			}
+		}
+	}()
+
+	ctx := context.Background()
+	sess1.handleDuelCancelled(ctx, nil)
+
+	select {
+	case res := <-completeReceived:
+		if res != 0 {
+			t.Fatalf("expected SMSG_DUEL_COMPLETE result 0 (interrupted), got %d", res)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for SMSG_DUEL_COMPLETE")
+	}
+
+	select {
+	case <-winnerReceived:
+		t.Fatal("unexpected SMSG_DUEL_WINNER on interrupted duel")
+	case <-time.After(50 * time.Millisecond):
+		// Expected: no winner packet
+	}
+}
+
+func TestDuelOutOfBoundsAndInBounds(t *testing.T) {
+	serverConn1, clientConn1 := net.Pipe()
+	defer serverConn1.Close()
+	defer clientConn1.Close()
+
+	serverConn2, clientConn2 := net.Pipe()
+	defer serverConn2.Close()
+	defer clientConn2.Close()
+
+	srv := &Server{
+		Config:   config.Default(),
+		sessions: make(map[*session]struct{}),
+	}
+	sess1 := &session{
+		server:       srv,
+		conn:         serverConn1,
+		playerLoaded: true,
+		authed:       true,
+		playerGUID:   100,
+		player:       &playerState{GUID: 100, Name: "Alice", Map: 0, X: 0, Y: 0, Z: 0, Health: 100, MaxHealth: 100},
+		duelArbiterX: 0,
+		duelArbiterY: 0,
+		duelArbiterZ: 0,
+	}
+	sess2 := &session{
+		server:       srv,
+		conn:         serverConn2,
+		playerLoaded: true,
+		authed:       true,
+		playerGUID:   200,
+		player:       &playerState{GUID: 200, Name: "Bob", Map: 0, X: 5, Y: 0, Z: 0, Health: 100, MaxHealth: 100},
+		duelArbiterX: 0,
+		duelArbiterY: 0,
+		duelArbiterZ: 0,
+	}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+
+	sess1.duelPartner = 200
+	sess2.duelPartner = 100
+	sess1.player.DuelTeam = 1
+	sess2.player.DuelTeam = 2
+	sess1.player.DuelArbiter = 0xF110000000000001
+	sess2.player.DuelArbiter = 0xF110000000000001
+
+	opcodes := make(chan uint16, 20)
+	var winnerPayload []byte
+	var mu sync.Mutex
+
+	go func() {
+		for {
+			op, data, err := readServerFrame(clientConn1, nil)
+			if err != nil {
+				return
+			}
+			opcodes <- op
+			if op == uint16(protocol.OpcodeSMSG_DUEL_WINNER) {
+				mu.Lock()
+				winnerPayload = append([]byte(nil), data...)
+				mu.Unlock()
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			_, _, err := readServerFrame(clientConn2, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// 1. Move player 1 beyond 50 yards (X = 55)
+	sess1.player.X = 55
+	sess1.checkDuelBounds()
+
+	select {
+	case op := <-opcodes:
+		if op != uint16(protocol.OpcodeSMSG_DUEL_OUTOFBOUNDS) {
+			t.Fatalf("expected SMSG_DUEL_OUTOFBOUNDS, got 0x%04X", op)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for SMSG_DUEL_OUTOFBOUNDS")
+	}
+
+	if sess1.duelOutOfBounds.IsZero() {
+		t.Fatal("expected duelOutOfBounds to be set")
+	}
+
+	// 2. Move player 1 back in bounds (<= 40 yards, X = 35)
+	sess1.player.X = 35
+	sess1.checkDuelBounds()
+
+	select {
+	case op := <-opcodes:
+		if op != uint16(protocol.OpcodeSMSG_DUEL_INBOUNDS) {
+			t.Fatalf("expected SMSG_DUEL_INBOUNDS, got 0x%04X", op)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for SMSG_DUEL_INBOUNDS")
+	}
+
+	if !sess1.duelOutOfBounds.IsZero() {
+		t.Fatal("expected duelOutOfBounds to be reset to zero")
+	}
+
+	// 3. Move player 1 out of bounds again and simulate 10s timeout expiry (fled)
+	sess1.player.X = 60
+	sess1.checkDuelBounds()
+
+	// Flush OUTOFBOUNDS packet
+	select {
+	case op := <-opcodes:
+		if op != uint16(protocol.OpcodeSMSG_DUEL_OUTOFBOUNDS) {
+			t.Fatalf("expected SMSG_DUEL_OUTOFBOUNDS, got 0x%04X", op)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timed out waiting for second SMSG_DUEL_OUTOFBOUNDS")
+	}
+
+	// Expire the out of bounds timer
+	sess1.duelOutOfBounds = time.Now().Add(-1 * time.Second)
+	sess1.checkDuelBounds()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify duel ended
+	if sess1.player.DuelTeam != 0 || sess2.player.DuelTeam != 0 {
+		t.Fatalf("expected DuelTeam 0 after fled, got %d and %d", sess1.player.DuelTeam, sess2.player.DuelTeam)
+	}
+
+	// Verify SMSG_DUEL_WINNER was received with fled=1, winner=Bob, loser=Alice
+	mu.Lock()
+	defer mu.Unlock()
+	if len(winnerPayload) == 0 {
+		t.Fatal("expected SMSG_DUEL_WINNER on flee")
+	}
+	reader := protocol.NewReader(winnerPayload)
+	fled, err := reader.ReadU8()
+	if err != nil || fled != 1 {
+		t.Fatalf("expected fled 1, got %d", fled)
+	}
+	winner, err := reader.ReadCString()
+	if err != nil || winner != "Bob" {
+		t.Fatalf("expected winner Bob, got %s", winner)
+	}
+	loser, err := reader.ReadCString()
+	if err != nil || loser != "Alice" {
+		t.Fatalf("expected loser Alice, got %s", loser)
+	}
+}
+
 
