@@ -322,3 +322,127 @@ func TestSummonRequestAndResponseFlow(t *testing.T) {
 		t.Fatal("expected summon state cleared after teleport")
 	}
 }
+
+func TestVehicleSeatsAndPassengerFlow(t *testing.T) {
+	srv := &Server{
+		sessions: make(map[*session]struct{}),
+	}
+
+	driver := &session{
+		server:       srv,
+		authed:       true,
+		playerLoaded: true,
+		playerGUID:   100,
+		player: &playerState{
+			GUID: 100,
+			Map:  0,
+			X:    100,
+			Y:    100,
+			Z:    10,
+		},
+	}
+
+	passenger := &session{
+		server:       srv,
+		authed:       true,
+		playerLoaded: true,
+		playerGUID:   200,
+		player: &playerState{
+			GUID:           200,
+			Map:            0,
+			X:              102,
+			Y:              100,
+			Z:              10,
+			MountDisplayID: 55,
+		},
+	}
+
+	srv.sessions[driver] = struct{}{}
+	srv.sessions[passenger] = struct{}{}
+
+	ctx := context.Background()
+
+	// 1. Passenger enters driver vehicle
+	enterBuf := protocol.NewBuffer(9)
+	enterBuf.WriteU64(100)
+	enterBuf.WriteU8(1)
+	if !passenger.handlePlayerVehicleEnter(ctx, enterBuf.Bytes()) {
+		t.Fatal("handlePlayerVehicleEnter failed")
+	}
+	if passenger.player.VehicleGUID != 100 || passenger.player.VehicleSeat != 1 {
+		t.Fatalf("expected passenger in vehicle 100 seat 1, got veh=%d seat=%d",
+			passenger.player.VehicleGUID, passenger.player.VehicleSeat)
+	}
+	if passenger.player.MountDisplayID != 0 {
+		t.Fatal("expected passenger dismounted upon entering vehicle")
+	}
+
+	// 2. Next seat
+	if !passenger.handleRequestVehicleNextSeat(ctx, nil) {
+		t.Fatal("handleRequestVehicleNextSeat failed")
+	}
+	if passenger.player.VehicleSeat != 2 {
+		t.Fatalf("expected seat 2, got %d", passenger.player.VehicleSeat)
+	}
+
+	// 3. Prev seat
+	if !passenger.handleRequestVehiclePrevSeat(ctx, nil) {
+		t.Fatal("handleRequestVehiclePrevSeat failed")
+	}
+	if passenger.player.VehicleSeat != 1 {
+		t.Fatalf("expected seat 1, got %d", passenger.player.VehicleSeat)
+	}
+
+	// 4. Switch seat
+	if !passenger.handleRequestVehicleSwitchSeat(ctx, []byte{3}) {
+		t.Fatal("handleRequestVehicleSwitchSeat failed")
+	}
+	if passenger.player.VehicleSeat != 3 {
+		t.Fatalf("expected seat 3, got %d", passenger.player.VehicleSeat)
+	}
+
+	// 5. Change seats on controlled vehicle
+	changeBuf := protocol.NewBuffer(9)
+	changeBuf.WriteU64(100)
+	changeBuf.WriteU8(4)
+	if !passenger.handleChangeSeatsOnControlledVehicle(ctx, changeBuf.Bytes()) {
+		t.Fatal("handleChangeSeatsOnControlledVehicle failed")
+	}
+	if passenger.player.VehicleSeat != 4 {
+		t.Fatalf("expected seat 4, got %d", passenger.player.VehicleSeat)
+	}
+
+	// 6. Driver ejects passenger
+	ejectBuf := protocol.NewBuffer(8)
+	ejectBuf.WriteU64(200)
+	if !driver.handleControllerEjectPassenger(ctx, ejectBuf.Bytes()) {
+		t.Fatal("handleControllerEjectPassenger failed")
+	}
+	if passenger.player.VehicleGUID != 0 || passenger.player.VehicleSeat != 0 {
+		t.Fatalf("expected passenger ejected, got veh=%d seat=%d",
+			passenger.player.VehicleGUID, passenger.player.VehicleSeat)
+	}
+
+	// 7. Passenger re-enters, driver dismisses vehicle
+	if !passenger.handlePlayerVehicleEnter(ctx, enterBuf.Bytes()) {
+		t.Fatal("handlePlayerVehicleEnter failed")
+	}
+	if passenger.player.VehicleGUID != 100 {
+		t.Fatal("expected passenger re-entered vehicle")
+	}
+	if !driver.handleDismissControlledVehicle(ctx, nil) {
+		t.Fatal("handleDismissControlledVehicle failed")
+	}
+	if passenger.player.VehicleGUID != 0 {
+		t.Fatal("expected passenger ejected on driver vehicle dismiss")
+	}
+
+	// 8. Passenger self exit
+	_ = passenger.handlePlayerVehicleEnter(ctx, enterBuf.Bytes())
+	if !passenger.handleRequestVehicleExit(ctx, nil) {
+		t.Fatal("handleRequestVehicleExit failed")
+	}
+	if passenger.player.VehicleGUID != 0 {
+		t.Fatal("expected passenger exited vehicle")
+	}
+}
