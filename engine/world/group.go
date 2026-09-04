@@ -29,6 +29,8 @@ type groupState struct {
 	DungeonDiff   uint8
 	RaidDiff      uint8
 	IsRaid        bool
+	IsLFG         bool
+	LFGDungeonID  uint32
 	TargetIcons   [8]uint64 // raid target icons, index=icon, value=target GUID
 	counter       uint32
 }
@@ -200,6 +202,10 @@ func (s *Server) findGroupByID(id uint64) *groupState {
 	s.groupsMu.RLock()
 	defer s.groupsMu.RUnlock()
 	return s.groups[id]
+}
+
+func (s *Server) getGroup(id uint64) *groupState {
+	return s.findGroupByID(id)
 }
 
 func (s *Server) broadcastGroupList(g *groupState) {

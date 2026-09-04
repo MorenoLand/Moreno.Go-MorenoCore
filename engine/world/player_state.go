@@ -151,6 +151,11 @@ type playerState struct {
 	Y                float32
 	Z                float32
 	Orientation      float32
+	LfgEntryPointMap uint32
+	LfgEntryPointX   float32
+	LfgEntryPointY   float32
+	LfgEntryPointZ   float32
+	LfgEntryPointO   float32
 	ExtraFlags       uint32
 	AtLogin          uint32
 	Zone             uint32
