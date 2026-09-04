@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -200,11 +201,16 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, itemGUID, itemEntry, s.playerGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, itemGUID)
 		s.sendMailNotify(uint64(s.playerGUID))
-		// Send profit mail to seller
+		// Send profit mail to seller (delayed by 1 hour)
 		var sellerMailID int64
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&sellerMailID)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, 2, 41, 0, ?, ?, 'Auction successful: Item', '', 0, ?, ?, ?, 0, 0)",
-			sellerMailID, s.playerGUID, ownerGUID, now+30*86400, now, price)
+			sellerMailID, s.playerGUID, ownerGUID, now+30*86400, now+3600, price)
+		// Send auction invoice / sale pending notice mail to seller (immediate)
+		var invoiceMailID int64
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(id), 0) + 1 FROM mail").Scan(&invoiceMailID)
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail (id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, has_items, expire_time, deliver_time, money, cod, checked) VALUES (?, 2, 41, 0, ?, ?, 'Auction sale pending: Item', '', 0, ?, ?, 0, 0, 0)",
+			invoiceMailID, s.playerGUID, ownerGUID, now+30*86400, now)
 		s.sendMailNotify(uint64(ownerGUID))
 		_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(auctionID, 1, 0), true)
 	} else {
@@ -425,7 +431,66 @@ func (s *session) handleAuctionListPendingSales(ctx context.Context, payload []b
 		r := protocol.NewReader(payload)
 		_, _ = r.ReadU64() // auctioneer GUID (reference AuctionHouseHandler.cpp:816)
 	}
-	buf := protocol.NewBuffer(4)
-	buf.WriteU32(0) // count = 0 pending sales
+
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		buf := protocol.NewBuffer(4)
+		buf.WriteU32(0)
+		return s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES), buf.Bytes(), true) == nil
+	}
+
+	now := time.Now().Unix()
+	rows, err := cdb.QueryContext(ctx, `SELECT m.subject, COALESCE(c.name, 'Buyer'), m.money, m.deliver_time
+		FROM mail AS m
+		LEFT JOIN characters AS c ON c.guid = m.sender
+		WHERE m.receiver = ? AND m.messageType = 2 AND m.money > 0 AND m.deliver_time > ? ORDER BY m.deliver_time ASC LIMIT 50`, s.playerGUID, now)
+	if err != nil {
+		buf := protocol.NewBuffer(4)
+		buf.WriteU32(0)
+		return s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES), buf.Bytes(), true) == nil
+	}
+
+	type pendingSale struct {
+		itemName  string
+		buyerName string
+		bid       uint32
+		buyout    uint32
+		timeLeft  float32
+	}
+	var sales []pendingSale
+
+	for rows.Next() {
+		var subject, buyerName string
+		var money, deliverTime int64
+		if err := rows.Scan(&subject, &buyerName, &money, &deliverTime); err == nil {
+			itemName := strings.TrimPrefix(subject, "Auction successful: ")
+			if itemName == "" {
+				itemName = "Item"
+			}
+			var timeLeft float32
+			if deliverTime > now {
+				timeLeft = float32(deliverTime-now) / 3600.0
+			}
+			sales = append(sales, pendingSale{
+				itemName:  itemName,
+				buyerName: buyerName,
+				bid:       uint32(money),
+				buyout:    uint32(money),
+				timeLeft:  timeLeft,
+			})
+		}
+	}
+	rows.Close()
+
+	buf := protocol.NewBuffer(4 + len(sales)*64)
+	buf.WriteU32(uint32(len(sales)))
+	for _, ps := range sales {
+		buf.WriteCString(ps.itemName)
+		buf.WriteCString(ps.buyerName)
+		buf.WriteU32(ps.bid)
+		buf.WriteU32(ps.buyout)
+		buf.WriteF32(ps.timeLeft)
+	}
+
 	return s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES), buf.Bytes(), true) == nil
 }

@@ -3,6 +3,8 @@ package world
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -78,6 +80,21 @@ const (
 	errGuildNotEnoughMoney    uint32 = 26
 	errGuildBankFull          uint32 = 28
 	errGuildItemNotFound      uint32 = 29
+)
+
+// Guild bank event log types mirroring TrinityCore Guild.h:185-196.
+const (
+	guildBankLogDepositItem   uint8 = 1
+	guildBankLogWithdrawItem  uint8 = 2
+	guildBankLogMoveItem      uint8 = 3
+	guildBankLogDepositMoney  uint8 = 4
+	guildBankLogWithdrawMoney uint8 = 5
+	guildBankLogRepairMoney   uint8 = 6
+	guildBankLogMoveItem2     uint8 = 7
+	guildBankLogBuySlot       uint8 = 9
+
+	guildBankMaxTabs      uint8 = 6
+	guildBankMoneyLogsTab uint8 = 100
 )
 
 func (s *session) sendGuildCommandResult(cmdType uint32, param string, errCode uint32) {
@@ -1113,6 +1130,141 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 	return s.write(uint16(protocol.OpcodeSMSG_GUILD_BANK_LIST), buf.Bytes(), true) == nil
 }
 
+func (s *session) logGuildBankEvent(ctx context.Context, guildID uint32, tabID uint8, eventType uint8, playerGUID uint64, itemOrMoney uint32, stackCount uint32, destTabID uint8) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || guildID == 0 {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+
+	dbTabID := tabID
+	if eventType == guildBankLogDepositMoney || eventType == guildBankLogWithdrawMoney || eventType == guildBankLogRepairMoney {
+		dbTabID = guildBankMoneyLogsTab
+	}
+
+	var maxLogGuid uint32
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(LogGuid), 0) FROM guild_bank_eventlog WHERE guildid = ? AND TabId = ?", guildID, dbTabID).Scan(&maxLogGuid)
+	nextLogGuid := maxLogGuid + 1
+	now := uint32(time.Now().Unix())
+
+	_, _ = cdb.ExecContext(ctx, `INSERT INTO guild_bank_eventlog (guildid, LogGuid, TabId, EventType, PlayerGuid, ItemOrMoney, ItemStackCount, DestTabId, TimeStamp)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		guildID, nextLogGuid, dbTabID, eventType, uint32(playerGUID), itemOrMoney, stackCount, destTabID, now)
+
+	// Keep up to 25 logs per tab
+	rows, err := cdb.QueryContext(ctx, "SELECT LogGuid FROM guild_bank_eventlog WHERE guildid = ? AND TabId = ? ORDER BY TimeStamp DESC, LogGuid DESC", guildID, dbTabID)
+	if err == nil {
+		var logGuids []uint32
+		for rows.Next() {
+			var lg uint32
+			if err := rows.Scan(&lg); err == nil {
+				logGuids = append(logGuids, lg)
+			}
+		}
+		rows.Close()
+		if len(logGuids) > 25 {
+			for _, lg := range logGuids[25:] {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_eventlog WHERE guildid = ? AND TabId = ? AND LogGuid = ?", guildID, dbTabID, lg)
+			}
+		}
+	}
+}
+
+func (s *session) checkGuildBankRights(ctx context.Context, guildID uint32, tabID uint8, checkDeposit bool) bool {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	var rank uint32
+	err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, guildID).Scan(&rank)
+	if err != nil {
+		return false
+	}
+	if rank == 0 {
+		return true // Guild Master has all rights
+	}
+	var gbright uint32
+	err = cdb.QueryRowContext(ctx, "SELECT gbright FROM guild_bank_right WHERE guildid = ? AND TabId = ? AND rid = ?", guildID, tabID, rank).Scan(&gbright)
+	if err != nil {
+		return false
+	}
+	if gbright&0x01 == 0 {
+		return false
+	}
+	if checkDeposit && (gbright&0x02 == 0) {
+		return false
+	}
+	return true
+}
+
+func (s *session) checkAndConsumeGuildBankWithdraw(ctx context.Context, guildID uint32, tabID uint8) bool {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || tabID >= guildBankMaxTabs {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	var rank uint32
+	err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, guildID).Scan(&rank)
+	if err != nil {
+		return false
+	}
+	if rank == 0 {
+		return true
+	}
+	var gbright, slotPerDay uint32
+	err = cdb.QueryRowContext(ctx, "SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = ? AND TabId = ? AND rid = ?", guildID, tabID, rank).Scan(&gbright, &slotPerDay)
+	if err != nil || gbright&0x01 == 0 || slotPerDay == 0 {
+		return false
+	}
+	if slotPerDay != 0xFFFFFFFF {
+		tabCol := fmt.Sprintf("tab%d", tabID)
+		var exists int
+		_ = cdb.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&exists)
+		if exists == 0 {
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member_withdraw (guid, tab0, tab1, tab2, tab3, tab4, tab5, money) VALUES (?, 0, 0, 0, 0, 0, 0, 0)", s.playerGUID)
+		}
+		var currentWithdrawn uint32
+		_ = cdb.QueryRowContext(ctx, "SELECT "+tabCol+" FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&currentWithdrawn)
+		if currentWithdrawn >= slotPerDay {
+			return false
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE guild_member_withdraw SET "+tabCol+" = "+tabCol+" + 1 WHERE guid = ?", s.playerGUID)
+	}
+	return true
+}
+
+func (s *session) checkAndConsumeGuildBankMoneyWithdraw(ctx context.Context, guildID uint32, amount uint32) bool {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	cdb := s.server.CharactersStore.DB
+	var rank uint32
+	err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, guildID).Scan(&rank)
+	if err != nil {
+		return false
+	}
+	if rank == 0 {
+		return true
+	}
+	var bankMoneyPerDay uint32
+	err = cdb.QueryRowContext(ctx, "SELECT BankMoneyPerDay FROM guild_rank WHERE guildid = ? AND rid = ?", guildID, rank).Scan(&bankMoneyPerDay)
+	if err != nil || bankMoneyPerDay == 0 {
+		return false
+	}
+	if bankMoneyPerDay != 0xFFFFFFFF {
+		var exists int
+		_ = cdb.QueryRowContext(ctx, "SELECT 1 FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&exists)
+		if exists == 0 {
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member_withdraw (guid, tab0, tab1, tab2, tab3, tab4, tab5, money) VALUES (?, 0, 0, 0, 0, 0, 0, 0)", s.playerGUID)
+		}
+		var currentWithdrawn uint32
+		_ = cdb.QueryRowContext(ctx, "SELECT money FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&currentWithdrawn)
+		if currentWithdrawn+amount > bankMoneyPerDay {
+			return false
+		}
+		_, _ = cdb.ExecContext(ctx, "UPDATE guild_member_withdraw SET money = money + ? WHERE guid = ?", amount, s.playerGUID)
+	}
+	return true
+}
+
 // handleGuildBankSwapItems processes CMSG_GUILD_BANK_SWAP_ITEMS (0x3E9).
 // Reference: WorldSession::HandleGuildBankSwapItems (GuildHandler.cpp:320).
 func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) bool {
@@ -1138,6 +1290,26 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		bankSlot1, _ := r.ReadU8()
 		_, _ = r.ReadU32() // itemID1
 
+		if bankTab >= guildBankMaxTabs || bankTab1 >= guildBankMaxTabs {
+			return true
+		}
+
+		// Permissions check
+		if !s.checkGuildBankRights(ctx, guildID, bankTab, false) || !s.checkGuildBankRights(ctx, guildID, bankTab1, false) {
+			s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
+			return true
+		}
+		if bankTab != bankTab1 {
+			if !s.checkGuildBankRights(ctx, guildID, bankTab1, true) {
+				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
+				return true
+			}
+			if !s.checkAndConsumeGuildBankWithdraw(ctx, guildID, bankTab) {
+				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildWithdrawLimit)
+				return true
+			}
+		}
+
 		var item1, item2 uint64
 		_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot).Scan(&item1)
 		_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab1, bankSlot1).Scan(&item2)
@@ -1145,15 +1317,29 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ? AND ((TabId = ? AND SlotId = ?) OR (TabId = ? AND SlotId = ?))", guildID, bankTab, bankSlot, bankTab1, bankSlot1)
 		if item1 != 0 {
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab1, bankSlot1, item1)
+			if bankTab != bankTab1 {
+				var itemEntry, count uint32
+				_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", item1).Scan(&itemEntry, &count)
+				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogMoveItem, s.playerGUID, itemEntry, count, bankTab1)
+			}
 		}
 		if item2 != 0 {
 			_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, item2)
+			if bankTab != bankTab1 {
+				var itemEntry2, count2 uint32
+				_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", item2).Scan(&itemEntry2, &count2)
+				s.logGuildBankEvent(ctx, guildID, bankTab1, guildBankLogMoveItem, s.playerGUID, itemEntry2, count2, bankTab)
+			}
 		}
 	} else {
 		bankTab, _ = r.ReadU8()
 		bankSlot, _ := r.ReadU8()
 		_, _ = r.ReadU32() // itemID
 		autoStore, _ := r.ReadU8()
+
+		if bankTab >= guildBankMaxTabs {
+			return true
+		}
 
 		var containerSlot, containerItemSlot, toSlot uint8
 		if autoStore != 0 {
@@ -1171,23 +1357,63 @@ func (s *session) handleGuildBankSwapItems(ctx context.Context, payload []byte) 
 
 		if toSlot != 0 {
 			// Bank -> Player Inventory (Withdraw)
+			if !s.checkGuildBankRights(ctx, guildID, bankTab, false) {
+				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
+				return true
+			}
+			if !s.checkAndConsumeGuildBankWithdraw(ctx, guildID, bankTab) {
+				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildWithdrawLimit)
+				return true
+			}
+
 			var bankItemGUID uint64
 			err := cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot).Scan(&bankItemGUID)
 			if err == nil && bankItemGUID > 0 {
+				var existingInvItem uint64
+				_ = cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot).Scan(&existingInvItem)
+
+				var itemEntry, count uint32
+				_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", bankItemGUID).Scan(&itemEntry, &count)
+
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot)
 				_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, containerSlot, containerItemSlot, bankItemGUID)
 				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, bankItemGUID)
+
+				if existingInvItem > 0 {
+					_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, existingInvItem)
+					_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = 0 WHERE guid = ?", existingInvItem)
+				}
+
+				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogWithdrawItem, s.playerGUID, itemEntry, count, 0)
 				_ = s.sendInventoryItems(ctx)
 				s.sendPlayerUpdate()
 			}
 		} else {
 			// Player Inventory -> Bank (Deposit)
+			if !s.checkGuildBankRights(ctx, guildID, bankTab, true) {
+				s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildPermissions)
+				return true
+			}
+
 			var invItemGUID uint64
 			err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot).Scan(&invItemGUID)
 			if err == nil && invItemGUID > 0 {
+				var existingBankItem uint64
+				_ = cdb.QueryRowContext(ctx, "SELECT item_guid FROM guild_bank_item WHERE guildid = ? AND TabId = ? AND SlotId = ?", guildID, bankTab, bankSlot).Scan(&existingBankItem)
+
+				var itemEntry, count uint32
+				_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", invItemGUID).Scan(&itemEntry, &count)
+
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, containerSlot, containerItemSlot)
 				_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_bank_item (guildid, TabId, SlotId, item_guid) VALUES (?, ?, ?, ?)", guildID, bankTab, bankSlot, invItemGUID)
 				_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = 0 WHERE guid = ?", invItemGUID)
+
+				if existingBankItem > 0 {
+					_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, containerSlot, containerItemSlot, existingBankItem)
+					_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, existingBankItem)
+				}
+
+				s.logGuildBankEvent(ctx, guildID, bankTab, guildBankLogDepositItem, s.playerGUID, itemEntry, count, 0)
 				_ = s.sendInventoryItems(ctx)
 				s.sendPlayerUpdate()
 			}
@@ -1245,6 +1471,7 @@ func (s *session) handleGuildBankBuyTab(ctx context.Context, payload []byte) boo
 	_, _ = cdb.ExecContext(ctx, "INSERT OR IGNORE INTO guild_bank_tab (guildid, TabId, TabName, TabIcon, TabText) VALUES (?, ?, ?, 'INV_Misc_Bag_08', '')",
 		guildID, tabID, "Tab "+string(rune('1'+tabID)))
 
+	s.logGuildBankEvent(ctx, uint32(guildID), tabID, guildBankLogBuySlot, s.playerGUID, 0, 0, 0)
 	s.sendPlayerUpdate()
 	return s.sendGuildBankList(ctx, bankerGUID, tabID, true)
 }
@@ -1318,6 +1545,7 @@ func (s *session) handleGuildBankDepositMoney(ctx context.Context, payload []byt
 	s.sendPlayerMoneyUpdate()
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET BankMoney = BankMoney + ? WHERE guildid = ?", amount, guildID)
+	s.logGuildBankEvent(ctx, uint32(guildID), 0, guildBankLogDepositMoney, s.playerGUID, amount, 0, 0)
 
 	return s.sendGuildBankList(ctx, bankerGUID, 0, false)
 }
@@ -1350,10 +1578,16 @@ func (s *session) handleGuildBankWithdrawMoney(ctx context.Context, payload []by
 		return true
 	}
 
+	if !s.checkAndConsumeGuildBankMoneyWithdraw(ctx, uint32(guildID), amount) {
+		s.sendGuildCommandResult(guildCmdMoveItem, "", errGuildWithdrawLimit)
+		return true
+	}
+
 	s.player.Money += amount
 	s.sendPlayerMoneyUpdate()
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE guild SET BankMoney = BankMoney - ? WHERE guildid = ?", amount, guildID)
+	s.logGuildBankEvent(ctx, uint32(guildID), 0, guildBankLogWithdrawMoney, s.playerGUID, amount, 0, 0)
 
 	return s.sendGuildBankList(ctx, bankerGUID, 0, false)
 }
@@ -1367,18 +1601,124 @@ func (s *session) handleGuildBankLogQuery(ctx context.Context, payload []byte) b
 		tabID, _ = r.ReadU8()
 	}
 
-	buf := protocol.NewBuffer(8)
+	cdb := s.server.CharactersStore.DB
+	var guildID int64
+	if s.player != nil {
+		guildID = int64(s.player.GuildID)
+	}
+	if cdb == nil || guildID == 0 || tabID > guildBankMaxTabs {
+		buf := protocol.NewBuffer(2)
+		buf.WriteU8(tabID)
+		buf.WriteU8(0) // 0 entries
+		return s.write(uint16(protocol.OpcodeMSG_GUILD_BANK_LOG_QUERY), buf.Bytes(), true) == nil
+	}
+
+	dbTabID := tabID
+	if tabID == guildBankMaxTabs {
+		dbTabID = guildBankMoneyLogsTab
+	}
+
+	rows, err := cdb.QueryContext(ctx, "SELECT EventType, PlayerGuid, ItemOrMoney, ItemStackCount, DestTabId, TimeStamp FROM guild_bank_eventlog WHERE guildid = ? AND TabId = ? ORDER BY TimeStamp DESC, LogGuid DESC LIMIT 25", guildID, dbTabID)
+	if err != nil {
+		buf := protocol.NewBuffer(2)
+		buf.WriteU8(tabID)
+		buf.WriteU8(0)
+		return s.write(uint16(protocol.OpcodeMSG_GUILD_BANK_LOG_QUERY), buf.Bytes(), true) == nil
+	}
+
+	type logRecord struct {
+		eventType      uint8
+		playerGUID     uint64
+		itemOrMoney    uint32
+		itemStackCount uint32
+		destTabID      uint8
+		timeOffset     uint32
+	}
+	var entries []logRecord
+	now := uint32(time.Now().Unix())
+
+	for rows.Next() {
+		var et uint8
+		var pGuid uint32
+		var iom uint32
+		var cnt uint32
+		var dt uint8
+		var ts uint32
+		if err := rows.Scan(&et, &pGuid, &iom, &cnt, &dt, &ts); err == nil {
+			toff := uint32(0)
+			if now > ts {
+				toff = now - ts
+			}
+			entries = append(entries, logRecord{
+				eventType:      et,
+				playerGUID:     uint64(pGuid),
+				itemOrMoney:    iom,
+				itemStackCount: cnt,
+				destTabID:      dt,
+				timeOffset:     toff,
+			})
+		}
+	}
+	rows.Close()
+
+	buf := protocol.NewBuffer(2 + len(entries)*20)
 	buf.WriteU8(tabID)
-	buf.WriteU8(0) // 0 entries
-	_ = s.write(uint16(protocol.OpcodeMSG_GUILD_BANK_LOG_QUERY), buf.Bytes(), true)
-	return true
+	buf.WriteU8(uint8(len(entries)))
+
+	for _, e := range entries {
+		buf.WriteU8(e.eventType)
+		buf.WriteU64(e.playerGUID)
+		switch e.eventType {
+		case guildBankLogDepositItem, guildBankLogWithdrawItem:
+			buf.WriteU32(e.itemOrMoney)
+			buf.WriteU32(e.itemStackCount)
+		case guildBankLogMoveItem, guildBankLogMoveItem2:
+			buf.WriteU32(e.itemOrMoney)
+			buf.WriteU32(e.itemStackCount)
+			buf.WriteU8(e.destTabID)
+		default:
+			buf.WriteU32(e.itemOrMoney)
+		}
+		buf.WriteU32(e.timeOffset)
+	}
+
+	return s.write(uint16(protocol.OpcodeMSG_GUILD_BANK_LOG_QUERY), buf.Bytes(), true) == nil
 }
 
 // handleGuildBankMoneyWithdrawn processes MSG_GUILD_BANK_MONEY_WITHDRAWN (0x3FE).
 // Reference: WorldSession::HandleGuildBankMoneyWithdrawn (GuildHandler.cpp:238).
 func (s *session) handleGuildBankMoneyWithdrawn(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	remaining := int32(0)
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil && s.player.GuildID != 0 {
+		var rank uint32
+		if err := cdb.QueryRowContext(ctx, "SELECT rank FROM guild_member WHERE guid = ? AND guildid = ?", s.playerGUID, s.player.GuildID).Scan(&rank); err == nil {
+			if rank == 0 {
+				var bankMoney int64
+				_ = cdb.QueryRowContext(ctx, "SELECT BankMoney FROM guild WHERE guildid = ?", s.player.GuildID).Scan(&bankMoney)
+				remaining = int32(bankMoney)
+			} else {
+				var bankMoneyPerDay uint32
+				_ = cdb.QueryRowContext(ctx, "SELECT BankMoneyPerDay FROM guild_rank WHERE guildid = ? AND rid = ?", s.player.GuildID, rank).Scan(&bankMoneyPerDay)
+				if bankMoneyPerDay == 0xFFFFFFFF {
+					var bankMoney int64
+					_ = cdb.QueryRowContext(ctx, "SELECT BankMoney FROM guild WHERE guildid = ?", s.player.GuildID).Scan(&bankMoney)
+					remaining = int32(bankMoney)
+				} else if bankMoneyPerDay > 0 {
+					var withdrawn uint32
+					_ = cdb.QueryRowContext(ctx, "SELECT money FROM guild_member_withdraw WHERE guid = ?", s.playerGUID).Scan(&withdrawn)
+					if bankMoneyPerDay > withdrawn {
+						remaining = int32(bankMoneyPerDay - withdrawn)
+					}
+				}
+			}
+		}
+	}
 	buf := protocol.NewBuffer(8)
-	buf.WriteI32(1000000) // remaining withdraw money
+	buf.WriteI32(remaining)
 	_ = s.write(uint16(protocol.OpcodeMSG_GUILD_BANK_MONEY_WITHDRAWN), buf.Bytes(), true)
 	return true
 }
