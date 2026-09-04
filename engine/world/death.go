@@ -118,6 +118,7 @@ func (s *session) killPlayer(ctx context.Context) {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET death_expire_time = ? WHERE guid = ?", s.deathExpireTime, s.playerGUID)
 	}
 	s.durabilityLossAll(ctx, 0.10, false)
+	_ = s.write(uint16(protocol.OpcodeSMSG_DURABILITY_DAMAGE_DEATH), []byte{}, true)
 	s.debug("player killed", "account", s.accountName, "guid", s.playerGUID)
 }
 
