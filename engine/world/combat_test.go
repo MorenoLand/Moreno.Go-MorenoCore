@@ -6,6 +6,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -232,3 +233,85 @@ func TestDuelLifecycleAndMeleeResolution(t *testing.T) {
 		t.Fatalf("expected duelPartner 0 after duel ended, got %d and %d", sess1.duelPartner, sess2.duelPartner)
 	}
 }
+
+func TestPlayerSpellDamageAndHeal(t *testing.T) {
+	serverConn1, clientConn1 := net.Pipe()
+	defer serverConn1.Close()
+	defer clientConn1.Close()
+
+	serverConn2, clientConn2 := net.Pipe()
+	defer serverConn2.Close()
+	defer clientConn2.Close()
+
+	srv := &Server{
+		Config:   config.Default(),
+		sessions: make(map[*session]struct{}),
+	}
+	sess1 := &session{
+		server:       srv,
+		conn:         serverConn1,
+		playerLoaded: true,
+		playerGUID:   10,
+		player:       &playerState{GUID: 10, Map: 0, X: 0, Y: 0, Z: 0, Health: 100, MaxHealth: 100},
+	}
+	sess2 := &session{
+		server:       srv,
+		conn:         serverConn2,
+		playerLoaded: true,
+		playerGUID:   20,
+		player:       &playerState{GUID: 20, Map: 0, X: 1, Y: 0, Z: 0, Health: 30, MaxHealth: 100},
+	}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+
+	// Drain client connections
+	go func() {
+		for {
+			_, _, err := readServerFrame(clientConn1, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		for {
+			_, _, err := readServerFrame(clientConn2, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	ctx := context.Background()
+
+	// 1. Test executeSpellHeal on sess2 (30 HP -> +40 HP = 70 HP)
+	sess1.executeSpellHeal(ctx, 20, 2050, 40) // Lesser Heal
+	if sess2.player.Health != 70 {
+		t.Fatalf("expected sess2 health 70 after heal, got %d", sess2.player.Health)
+	}
+
+	// 2. Set duel and test executeSpellDamage (70 HP - 100 dmg = lethal)
+	sess1.duelPartner = 20
+	sess2.duelPartner = 10
+	sess1.player.DuelTeam = 1
+	sess2.player.DuelTeam = 2
+
+	sess1.executeSpellDamage(ctx, 20, 133, 100) // Fireball
+
+	// In a duel, lethal damage caps health at 1 and ends duel
+	if sess2.player.Health != 1 {
+		t.Fatalf("expected sess2 health 1 after lethal duel spell, got %d", sess2.player.Health)
+	}
+	if sess1.player.DuelTeam != 0 || sess2.player.DuelTeam != 0 {
+		t.Fatalf("expected duel to end, got DuelTeam %d and %d", sess1.player.DuelTeam, sess2.player.DuelTeam)
+	}
+
+	// 3. Verify unitFlagInCombat was set on attacker and victim
+	if sess1.player.UnitFlags&unitFlagInCombat == 0 {
+		t.Fatal("expected sess1 to have unitFlagInCombat set")
+	}
+	if sess2.player.UnitFlags&unitFlagInCombat == 0 {
+		t.Fatal("expected sess2 to have unitFlagInCombat set")
+	}
+}
+

@@ -99,6 +99,7 @@ const (
 	playerFieldModHealingDonePct                = 1194
 	playerFieldCombatRating1                    = 1231 // 1231..1255
 	unitFlagPlayerControlled             uint32 = 0x00000008
+	unitFlagInCombat                     uint32 = 0x00080000
 )
 
 // questCompleteStateFlag sets the per-slot complete bit the client reads
