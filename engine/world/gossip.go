@@ -74,8 +74,32 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 			if npcFlags&0x70 != 0 { // UNIT_NPC_FLAG_TRAINER (0x10, 0x20, 0x40)
 				return s.sendTrainerList(ctx, guid)
 			}
-			if npcFlags&0x380 != 0 { // UNIT_NPC_FLAG_VENDOR (0x80, 0x100, 0x200)
+			if npcFlags&0x1F80 != 0 { // UNIT_NPC_FLAG_VENDOR (0x80..0x1000)
 				return s.sendVendorList(ctx, guid)
+			}
+			if npcFlags&0x2000 != 0 { // UNIT_NPC_FLAG_FLIGHTMASTER (0x2000)
+				return s.sendTaxiMenu(ctx, guid)
+			}
+			if npcFlags&0x20000 != 0 { // UNIT_NPC_FLAG_BANKER (0x20000)
+				bank := protocol.NewBuffer(8)
+				bank.WriteU64(guid)
+				return s.write(uint16(protocol.OpcodeSMSG_SHOW_BANK), bank.Bytes(), true) == nil
+			}
+			if npcFlags&0x80000 != 0 { // UNIT_NPC_FLAG_TABARDDESIGNER (0x80000)
+				tabard := protocol.NewBuffer(8)
+				tabard.WriteU64(guid)
+				return s.write(uint16(protocol.OpcodeMSG_TABARDVENDOR_ACTIVATE), tabard.Bytes(), true) == nil
+			}
+			if npcFlags&0x200000 != 0 { // UNIT_NPC_FLAG_AUCTIONEER (0x200000)
+				auction := protocol.NewBuffer(9)
+				auction.WriteU64(guid)
+				auction.WriteU8(1)
+				return s.write(uint16(protocol.OpcodeMSG_AUCTION_HELLO), auction.Bytes(), true) == nil
+			}
+			if npcFlags&0x400000 != 0 { // UNIT_NPC_FLAG_STABLEMASTER (0x400000)
+				stableBuf := protocol.NewBuffer(8)
+				stableBuf.WriteU64(guid)
+				return s.handleListStabledPets(ctx, stableBuf.Bytes())
 			}
 		}
 		// Reference Player::SendPreparedQuest (single-quest fast-open):
@@ -158,7 +182,7 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 		// menu), 3 vendor, 4 taxivendor, 5 trainer, 8 innkeeper, 9 banker,
 		// 13 auctioneer. The old code treated 2/3/4 as vendor/taxi/trainer,
 		// so selecting a vendor (3) opened the flight map instead.
-		if item.Action == 3 { // GOSSIP_OPTION_VENDOR / ARMORER
+		if item.Action == 3 || item.Action == 15 { // GOSSIP_OPTION_VENDOR / GOSSIP_OPTION_ARMORER
 			s.sendVendorList(ctx, guid)
 			s.gossipClosed = true
 		} else if item.Action == 4 { // GOSSIP_OPTION_TAXIVENDOR
@@ -181,12 +205,33 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			if err := s.write(uint16(protocol.OpcodeSMSG_SHOW_BANK), bank.Bytes(), true); err != nil {
 				return false
 			}
+		} else if item.Action == 11 { // GOSSIP_OPTION_TABARDDESIGNER
+			s.gossipClosed = true
+			tabard := protocol.NewBuffer(8)
+			tabard.WriteU64(guid)
+			if err := s.write(uint16(protocol.OpcodeMSG_TABARDVENDOR_ACTIVATE), tabard.Bytes(), true); err != nil {
+				return false
+			}
 		} else if item.Action == 13 { // GOSSIP_OPTION_AUCTIONEER
 			s.gossipClosed = true
 			auction := protocol.NewBuffer(9)
 			auction.WriteU64(guid)
 			auction.WriteU8(1)
 			if err := s.write(uint16(protocol.OpcodeMSG_AUCTION_HELLO), auction.Bytes(), true); err != nil {
+				return false
+			}
+		} else if item.Action == 14 { // GOSSIP_OPTION_STABLEPET
+			s.gossipClosed = true
+			stableBuf := protocol.NewBuffer(8)
+			stableBuf.WriteU64(guid)
+			return s.handleListStabledPets(ctx, stableBuf.Bytes())
+		} else if item.Action == 16 { // GOSSIP_OPTION_UNLEARNTALENTS
+			s.gossipClosed = true
+			wipeBuf := protocol.NewBuffer(12)
+			wipeBuf.WriteU64(guid)
+			cost := uint32(100000) // 10 gold base reset cost
+			wipeBuf.WriteU32(cost)
+			if err := s.write(uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM), wipeBuf.Bytes(), true); err != nil {
 				return false
 			}
 		} else if item.Action == 1 && item.ActionMenuID != 0 {

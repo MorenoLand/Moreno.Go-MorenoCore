@@ -2,6 +2,8 @@ package world
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -324,14 +326,86 @@ func (s *session) handleUnstablePet(ctx context.Context, payload []byte) bool {
 // HandlePetCastSpellOpcode (241), HandlePetLearnTalent (265), HandlePetRename
 // (284), HandlePetSetAction (328), HandlePetSpellAutocastOpcode (365),
 
+// handlePetAction processes CMSG_PET_ACTION (0x175).
+// Reference: WorldSession::HandlePetAction (PetHandler.cpp:73-259).
 func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 	if len(payload) < 12 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	petGUID, _ := r.ReadU64()
-	action, _ := r.ReadU32()
-	s.debug("pet action", "account", s.accountName, "pet", petGUID, "action", action)
+	petGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	action, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	var targetGUID uint64
+	if len(payload) >= 20 {
+		targetGUID, _ = r.ReadU64()
+	}
+
+	spellOrAction := action & 0x00FFFFFF
+	actFlag := uint8((action >> 24) & 0xFF)
+
+	const (
+		actCommand  uint8 = 0x07
+		actReaction uint8 = 0x06
+		actDisabled uint8 = 0x81
+		actEnabled  uint8 = 0xC1
+		actPassive  uint8 = 0x01
+
+		commandStay    uint32 = 0
+		commandFollow  uint32 = 1
+		commandAttack  uint32 = 2
+		commandAbandon uint32 = 3
+
+		reactPassive    uint32 = 0
+		reactDefensive  uint32 = 1
+		reactAggressive uint32 = 2
+
+		aiReactionHostile uint32 = 2
+	)
+
+	switch actFlag {
+	case actCommand:
+		switch spellOrAction {
+		case commandAttack:
+			// Send hostile AI reaction (plays pet attack sound/growl)
+			reactionBuf := protocol.NewBuffer(12)
+			reactionBuf.WriteU64(petGUID)
+			reactionBuf.WriteU32(aiReactionHostile)
+			_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), true)
+			s.debug("pet attack command", "account", s.accountName, "pet", petGUID, "target", targetGUID)
+		case commandFollow:
+			s.debug("pet follow command", "account", s.accountName, "pet", petGUID)
+		case commandStay:
+			s.debug("pet stay command", "account", s.accountName, "pet", petGUID)
+		case commandAbandon:
+			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID)
+			}
+			buf := protocol.NewBuffer(8)
+			buf.WriteU64(0)
+			_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
+			s.debug("pet abandoned via command", "account", s.accountName, "pet", petGUID)
+		}
+	case actReaction:
+		// Save react state (0 = passive, 1 = defensive, 2 = aggressive)
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_pet SET Reactstate = ? WHERE owner = ? AND slot = 0", spellOrAction, s.playerGUID)
+		}
+		s.debug("pet reaction state changed", "account", s.accountName, "pet", petGUID, "react", spellOrAction)
+	case actDisabled, actEnabled, actPassive:
+		if targetGUID != 0 {
+			reactionBuf := protocol.NewBuffer(12)
+			reactionBuf.WriteU64(petGUID)
+			reactionBuf.WriteU32(aiReactionHostile)
+			_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), true)
+		}
+		s.debug("pet cast spell action", "account", s.accountName, "pet", petGUID, "spell", spellOrAction, "target", targetGUID)
+	}
 	return true
 }
 
@@ -431,10 +505,67 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	petGUID, _ := r.ReadU64()
-	slot, _ := r.ReadU32()
-	action, _ := r.ReadU32()
-	s.debug("pet set action", "account", s.accountName, "pet", petGUID, "slot", slot, "action", action)
+	petGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	count := 1
+	if len(payload) >= 24 {
+		count = 2
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return true
+	}
+
+	var existingAbdata string
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(abdata, '') FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&existingAbdata)
+
+	type actionSlot struct {
+		actType uint8
+		action  uint32
+	}
+	slots := make([]actionSlot, 10)
+	slots[0] = actionSlot{actType: 0x07, action: 2} // Attack
+	slots[1] = actionSlot{actType: 0x07, action: 1} // Follow
+	slots[2] = actionSlot{actType: 0x07, action: 0} // Stay
+	slots[7] = actionSlot{actType: 0x06, action: 2} // Aggressive
+	slots[8] = actionSlot{actType: 0x06, action: 1} // Defensive
+	slots[9] = actionSlot{actType: 0x06, action: 0} // Passive
+
+	if existingAbdata != "" {
+		tokens := strings.Fields(existingAbdata)
+		if len(tokens) == 20 {
+			for i := 0; i < 10; i++ {
+				t, _ := strconv.ParseUint(tokens[i*2], 10, 8)
+				a, _ := strconv.ParseUint(tokens[i*2+1], 10, 32)
+				slots[i] = actionSlot{actType: uint8(t), action: uint32(a)}
+			}
+		}
+	}
+
+	for i := 0; i < count; i++ {
+		pos, pErr := r.ReadU32()
+		data, dErr := r.ReadU32()
+		if pErr != nil || dErr != nil || pos >= 10 {
+			continue
+		}
+		aType := uint8((data >> 24) & 0xFF)
+		aAction := data & 0x00FFFFFF
+		slots[pos] = actionSlot{actType: aType, action: aAction}
+	}
+
+	var sb strings.Builder
+	for i, sl := range slots {
+		if i > 0 {
+			sb.WriteByte(' ')
+		}
+		sb.WriteString(strconv.FormatUint(uint64(sl.actType), 10))
+		sb.WriteByte(' ')
+		sb.WriteString(strconv.FormatUint(uint64(sl.action), 10))
+	}
+	_, _ = cdb.ExecContext(ctx, "UPDATE character_pet SET abdata = ? WHERE owner = ? AND slot = 0", sb.String(), s.playerGUID)
+	s.debug("pet set action updated", "account", s.accountName, "pet", petGUID)
 	return true
 }
 
@@ -445,12 +576,26 @@ func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bo
 		return true
 	}
 	r := protocol.NewReader(payload)
-	petGUID, _ := r.ReadU64()
-	spellID, _ := r.ReadU32()
-	state, _ := r.ReadU8()
-	petNumber := uint32(petGUID & 0xFFFFFF)
+	petGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	spellID, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	state, err := r.ReadU8()
+	if err != nil {
+		return false
+	}
+	petNumber := uint32(petGUID & 0xFFFFFFFF)
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE pet_spell SET active = ? WHERE guid = ? AND spell = ?", state, petNumber, spellID)
+		res, execErr := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE pet_spell SET active = ? WHERE guid = ? AND spell = ?", state, petNumber, spellID)
+		if execErr == nil {
+			if rows, _ := res.RowsAffected(); rows == 0 {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petNumber, spellID, state)
+			}
+		}
 	}
 	s.debug("pet spell autocast", "account", s.accountName, "pet", petNumber, "spell", spellID, "state", state)
 	return true
@@ -482,9 +627,9 @@ func (s *session) handleRequestPetInfo(ctx context.Context, payload []byte) bool
 		return true
 	}
 
-	var petID, entry, modelID, level int64
-	var petName string
-	err := cdb.QueryRowContext(ctx, "SELECT id, entry, modelid, level, name FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName)
+	var petID, entry, modelID, level, reactState int64
+	var petName, abdata string
+	err := cdb.QueryRowContext(ctx, "SELECT id, entry, modelid, level, name, COALESCE(Reactstate, 1), COALESCE(abdata, '') FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName, &reactState, &abdata)
 	if err != nil {
 		// No active pet
 		buf := protocol.NewBuffer(8)
@@ -499,43 +644,64 @@ func (s *session) handleRequestPetInfo(ctx context.Context, payload []byte) bool
 	buf.WriteU64(petGUID)
 	buf.WriteU16(0) // family
 	buf.WriteU32(0) // duration (0 = permanent)
-	buf.WriteU8(1)  // react state (1 = DEFENSIVE)
+	buf.WriteU8(uint8(reactState))  // react state (0 = passive, 1 = defensive, 2 = aggressive)
 	buf.WriteU8(1)  // command state (1 = FOLLOW)
 	buf.WriteU16(0) // flags
 
-	// Query pet spells for slots 3..6
-	var petSpells []uint32
-	rows, sErr := cdb.QueryContext(ctx, "SELECT spell, active FROM pet_spell WHERE guid = ?", petID)
-	if sErr == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var spID, active int64
-			if rows.Scan(&spID, &active) == nil {
-				actType := uint32(0x81) // ACT_DISABLED (castable)
-				if active != 0 {
-					actType = 0xC1 // ACT_ENABLED (autocast)
-				}
-				petSpells = append(petSpells, uint32(spID)|(actType<<24))
+	// Check if custom action bar was saved
+	hasCustomAB := false
+	var customSlots [10]uint32
+	if abdata != "" {
+		tokens := strings.Fields(abdata)
+		if len(tokens) == 20 {
+			hasCustomAB = true
+			for i := 0; i < 10; i++ {
+				t, _ := strconv.ParseUint(tokens[i*2], 10, 8)
+				a, _ := strconv.ParseUint(tokens[i*2+1], 10, 32)
+				customSlots[i] = uint32(a) | (uint32(t) << 24)
 			}
 		}
 	}
 
-	// 10 action bar slots (CharmInfo::InitPetActionBar, Unit.cpp:9942)
-	buf.WriteU32(0x07000002) // Slot 0: Attack (COMMAND_ATTACK = 2 | ACT_COMMAND = 0x07)
-	buf.WriteU32(0x07000001) // Slot 1: Follow (COMMAND_FOLLOW = 1 | ACT_COMMAND = 0x07)
-	buf.WriteU32(0x07000000) // Slot 2: Stay   (COMMAND_STAY = 0 | ACT_COMMAND = 0x07)
-
-	for i := 0; i < 4; i++ {
-		if i < len(petSpells) {
-			buf.WriteU32(petSpells[i])
-		} else {
-			buf.WriteU32(0)
+	if hasCustomAB {
+		for i := 0; i < 10; i++ {
+			buf.WriteU32(customSlots[i])
 		}
-	}
+	} else {
+		// Query pet spells for slots 3..6
+		var petSpells []uint32
+		rows, sErr := cdb.QueryContext(ctx, "SELECT spell, active FROM pet_spell WHERE guid = ?", petID)
+		if sErr == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var spID, active int64
+				if rows.Scan(&spID, &active) == nil {
+					actType := uint32(0x81) // ACT_DISABLED (castable)
+					if active != 0 {
+						actType = 0xC1 // ACT_ENABLED (autocast)
+					}
+					petSpells = append(petSpells, uint32(spID)|(actType<<24))
+				}
+			}
+		}
 
-	buf.WriteU32(0x06000002) // Slot 7: Aggressive (REACT_AGGRESSIVE = 2 | ACT_REACTION = 0x06)
-	buf.WriteU32(0x06000001) // Slot 8: Defensive  (REACT_DEFENSIVE = 1 | ACT_REACTION = 0x06)
-	buf.WriteU32(0x06000000) // Slot 9: Passive    (REACT_PASSIVE = 0 | ACT_REACTION = 0x06)
+		// 10 action bar slots (CharmInfo::InitPetActionBar, Unit.cpp:9942)
+		buf.WriteU32(0x07000002) // Slot 0: Attack (COMMAND_ATTACK = 2 | ACT_COMMAND = 0x07)
+		buf.WriteU32(0x07000001) // Slot 1: Follow (COMMAND_FOLLOW = 1 | ACT_COMMAND = 0x07)
+		buf.WriteU32(0x07000000) // Slot 2: Stay   (COMMAND_STAY = 0 | ACT_COMMAND = 0x07)
+
+		for i := 0; i < 4; i++ {
+			if i < len(petSpells) {
+				buf.WriteU32(petSpells[i])
+			} else {
+				buf.WriteU32(0)
+			}
+		}
+
+		buf.WriteU32(0x06000002) // Slot 7: Aggressive (REACT_AGGRESSIVE = 2 | ACT_REACTION = 0x06)
+		buf.WriteU32(0x06000001) // Slot 8: Defensive  (REACT_DEFENSIVE = 1 | ACT_REACTION = 0x06)
+		buf.WriteU32(0x06000000) // Slot 9: Passive    (REACT_PASSIVE = 0 | ACT_REACTION = 0x06)
+	}
 
 	buf.WriteU8(0) // additional spells count
 	buf.WriteU8(0) // cooldown count
