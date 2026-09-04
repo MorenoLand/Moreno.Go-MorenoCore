@@ -130,6 +130,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 
 	// Interrupt any existing spell cast (TC: Unit::InterruptNonMeleeSpells)
 	s.interruptCurrentCast()
+	s.interruptCurrentChannel()
 
 	castTime := uint32(0)
 	s.lastCastTime = time.Now()
@@ -143,8 +144,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if castTime > 0 {
 		s.castMu.Lock()
 		castState := &activeCastState{
-			CastID:  castID,
-			SpellID: spellID,
+			CastID:       castID,
+			SpellID:      spellID,
+			StartAt:      time.Now(),
+			CastTimeMs:   castTime,
+			InterruptFlg: spell.InterruptFlags,
 		}
 		castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
 			s.castMu.Lock()
@@ -188,6 +192,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 
 	castTimeStamp := uint32(time.Now().UnixMilli())
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, target), true)
+
+	// Reference Spell::handle_immediate: channeled spells begin their timed
+	// channel lifecycle after the cast completes.
+	if isChanneledSpell(spell) {
+		s.startChannel(castID, spellID, spell, targetGUID)
+	}
 
 	pType := spell.PowerType
 	cost := s.calculateSpellPowerCost(spell)
@@ -592,9 +602,12 @@ func (s *session) handleCancelCast(payload []byte) bool {
 }
 
 func (s *session) handleCancelChanneling(payload []byte) bool {
-	reader := protocol.NewReader(payload)
-	_, err := reader.ReadU32()
-	return err == nil || len(payload) == 0
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	// Reference: cancel clears the running channel and its bar.
+	s.interruptCurrentChannel()
+	return true
 }
 
 func (s *session) handleCancelAura(payload []byte) bool {
@@ -1189,4 +1202,281 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 
 	// 6. Send talents info update
 	_ = s.sendTalentsInfo(false)
+}
+
+// Channel and pushback state machine, mirroring the reference:
+//   - Spell::handle_immediate / SendChannelStart (Spell.cpp:3568/4661):
+//     channeled spells (SPELL_ATTR1_CHANNELED_1 0x04 | CHANNELED_2 0x40 in
+//     AttributesEx field 6) start a channel after SPELL_GO, announced with
+//     MSG_CHANNEL_START (packed caster GUID, spell id, duration) and periodic
+//     effect ticks every EffectAuraPeriod milliseconds.
+//   - Spell::Delayed (Spell.cpp:7250): a player taking damage while casting a
+//     spell with SPELL_INTERRUPT_FLAG_PUSH_BACK 0x02 loses 500ms per hit, at
+//     most twice per cast, clamped to the remaining cast time, announced via
+//     SMSG_SPELL_DELAYED (packed caster GUID, delay).
+//   - Spell::DelayedChannel (Spell.cpp:7290): a channeling player taking
+//     damage on a spell with CHANNEL_FLAG_DELAY 0x4000 loses 25% of the total
+//     channel duration per hit, at most twice, announced via MSG_CHANNEL_UPDATE.
+//   - Movement interrupts: movement flags cancel the active cast and channel
+//     (movement.go), matching reference movement-cast interruption.
+
+const (
+	spellAttr1Channeled1   uint32 = 0x04
+	spellAttr1Channeled2   uint32 = 0x40
+	spellInterruptPushBack uint32 = 0x02
+	channelFlagDelay       uint32 = 0x4000
+	maxSpellPushbacks      int    = 2
+	defaultCastPushbackMs  uint32 = 500
+)
+
+// activeChannelState tracks one running channeled spell.
+type activeChannelState struct {
+	CastID     uint8
+	SpellID    uint32
+	TargetGUID uint64
+	Spell      wotlk.Spell
+	DurationMs uint32
+	Remaining  time.Duration
+	PeriodMs   uint32
+	Pushbacks  int
+	Timer      *time.Timer
+	TickTimer  *time.Timer
+	Stopped    bool
+}
+
+func isChanneledSpell(spell wotlk.Spell) bool {
+	return spell.AttributesEx1&(spellAttr1Channeled1|spellAttr1Channeled2) != 0
+}
+
+// sendChannelUpdate mirrors Spell::SendChannelUpdate: packed caster GUID plus
+// remaining channel milliseconds; zero clears the client channel bar.
+func (s *session) sendChannelUpdate(remainingMs uint32) {
+	packet := protocol.NewBuffer(12)
+	packet.WritePackedGUID(s.playerGUID)
+	packet.WriteU32(remainingMs)
+	_ = s.write(uint16(protocol.OpcodeMSG_CHANNEL_UPDATE), packet.Bytes(), true)
+}
+
+// startChannel begins the channeled phase of a finished cast: broadcast the
+// channel start, schedule periodic ticks, and arm completion.
+func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, targetGUID uint64) {
+	if s.player == nil || s.server.Data == nil {
+		return
+	}
+	var durationMs int32 = 0
+	if value, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level)); err == nil && ok {
+		durationMs = value
+	}
+	if durationMs <= 0 {
+		return // instant or infinite channels have no timed lifecycle here
+	}
+	period := uint32(0)
+	for _, effect := range spell.Effects {
+		if effect.Effect != 0 && effect.AuraPeriod > period {
+			period = effect.AuraPeriod
+		}
+	}
+	channel := &activeChannelState{
+		CastID:     castID,
+		SpellID:    spellID,
+		TargetGUID: targetGUID,
+		Spell:      spell,
+		DurationMs: uint32(durationMs),
+		Remaining:  time.Duration(durationMs) * time.Millisecond,
+		PeriodMs:   period,
+	}
+	s.castMu.Lock()
+	s.activeChannel = channel
+	s.castMu.Unlock()
+
+	packet := protocol.NewBuffer(16)
+	packet.WritePackedGUID(s.playerGUID)
+	packet.WriteU32(spellID)
+	packet.WriteU32(uint32(durationMs))
+	_ = s.write(uint16(protocol.OpcodeMSG_CHANNEL_START), packet.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_CHANNEL_START), packet.Bytes(), s)
+	}
+
+	channel.Timer = time.AfterFunc(channel.Remaining, func() { s.finishChannel() })
+	if period > 0 && period <= uint32(durationMs) {
+		channel.TickTimer = time.AfterFunc(time.Duration(period)*time.Millisecond, func() { s.channelTick() })
+	}
+	s.debug("channel started", "account", s.accountName, "spell", spellID, "duration_ms", durationMs, "period_ms", period)
+}
+
+// finishChannel completes the channel: clear state and zero the bar.
+func (s *session) finishChannel() {
+	s.castMu.Lock()
+	channel := s.activeChannel
+	if channel == nil || channel.Stopped {
+		s.castMu.Unlock()
+		return
+	}
+	s.activeChannel = nil
+	if channel.Timer != nil {
+		channel.Timer.Stop()
+	}
+	if channel.TickTimer != nil {
+		channel.TickTimer.Stop()
+	}
+	channel.Stopped = true
+	spellID := channel.SpellID
+	s.castMu.Unlock()
+
+	s.sendChannelUpdate(0)
+	s.debug("channel finished", "account", s.accountName, "spell", spellID)
+}
+
+// interruptCurrentChannel stops the active channel without the completion
+// path (movement, new cast, cancel).
+func (s *session) interruptCurrentChannel() {
+	s.castMu.Lock()
+	channel := s.activeChannel
+	if channel == nil || channel.Stopped {
+		s.castMu.Unlock()
+		return
+	}
+	s.activeChannel = nil
+	if channel.Timer != nil {
+		channel.Timer.Stop()
+	}
+	if channel.TickTimer != nil {
+		channel.TickTimer.Stop()
+	}
+	channel.Stopped = true
+	s.castMu.Unlock()
+
+	s.sendChannelUpdate(0)
+}
+
+// channelTick applies one periodic effect tick of the channeled spell and
+// schedules the next while the channel is alive.
+func (s *session) channelTick() {
+	s.castMu.Lock()
+	channel := s.activeChannel
+	if channel == nil || channel.Stopped {
+		s.castMu.Unlock()
+		return
+	}
+	next := time.Duration(channel.PeriodMs) * time.Millisecond
+	spell := channel.Spell
+	targetGUID := channel.TargetGUID
+	remaining := channel.Remaining
+	s.castMu.Unlock()
+
+	ctx := context.Background()
+	for _, effect := range spell.Effects {
+		if effect.Effect == 0 {
+			continue
+		}
+		amount := uint32(effect.BasePoints + 1)
+		if amount == 0 {
+			continue
+		}
+		switch effect.Effect {
+		case 2, 87, 108, 17: // damage effects tick on the target
+			if targetGUID != 0 && targetGUID != s.playerGUID {
+				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount)
+			}
+		case 6, 10, 136, 105: // auras and heals tick on the target or caster
+			if targetGUID != 0 && targetGUID != s.playerGUID {
+				s.executeSpellDamage(ctx, targetGUID, spell.ID, amount)
+			} else {
+				s.executeSpellHeal(ctx, s.playerGUID, spell.ID, amount)
+			}
+		}
+	}
+
+	s.castMu.Lock()
+	channel = s.activeChannel
+	if channel == nil || channel.Stopped {
+		s.castMu.Unlock()
+		return
+	}
+	remaining -= next
+	if remaining > 0 {
+		channel.TickTimer = time.AfterFunc(next, func() { s.channelTick() })
+		s.castMu.Unlock()
+		return
+	}
+	s.castMu.Unlock()
+}
+
+// delayCurrentCast mirrors Spell::Delayed: called when the player takes
+// damage during a timed cast. Requires SPELL_INTERRUPT_FLAG_PUSH_BACK, at
+// most two pushbacks per cast, 500ms each clamped to remaining time, and
+// announces SMSG_SPELL_DELAYED.
+func (s *session) delayCurrentCast() {
+	if s.player == nil {
+		return
+	}
+	s.castMu.Lock()
+	cast := s.activeCast
+	if cast == nil || cast.CastTimeMs == 0 || cast.InterruptFlg&spellInterruptPushBack == 0 || cast.Pushbacks >= maxSpellPushbacks {
+		s.castMu.Unlock()
+		return
+	}
+	elapsed := time.Since(cast.StartAt)
+	remaining := time.Duration(cast.CastTimeMs)*time.Millisecond - elapsed
+	if remaining <= 0 {
+		s.castMu.Unlock()
+		return
+	}
+	delay := time.Duration(defaultCastPushbackMs) * time.Millisecond
+	if delay > remaining {
+		delay = remaining
+	}
+	cast.Pushbacks++
+	newRemaining := remaining + delay
+	cast.StartAt = time.Now().Add(-(time.Duration(cast.CastTimeMs)*time.Millisecond - newRemaining))
+	if cast.Timer != nil {
+		cast.Timer.Reset(newRemaining)
+	}
+	pushbacks := cast.Pushbacks
+	spellID := cast.SpellID
+	s.castMu.Unlock()
+
+	packet := protocol.NewBuffer(8)
+	packet.WritePackedGUID(s.playerGUID)
+	packet.WriteU32(uint32(delay.Milliseconds()))
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_DELAYED), packet.Bytes(), true)
+	s.debug("cast pushed back", "account", s.accountName, "spell", spellID, "delay_ms", delay.Milliseconds(), "count", pushbacks)
+}
+
+// delayCurrentChannel mirrors Spell::DelayedChannel: called when the player
+// takes damage while channeling. Requires CHANNEL_FLAG_DELAY, at most two
+// pushbacks, 25% of the total channel duration per hit, announced via
+// MSG_CHANNEL_UPDATE with the new remaining time.
+func (s *session) delayCurrentChannel() {
+	if s.player == nil {
+		return
+	}
+	s.castMu.Lock()
+	channel := s.activeChannel
+	if channel == nil || channel.Stopped || channel.Spell.ChannelInterrupt&channelFlagDelay == 0 || channel.Pushbacks >= maxSpellPushbacks {
+		s.castMu.Unlock()
+		return
+	}
+	delayMs := channel.DurationMs / 4 // 25% of total duration per hit
+	if delayMs == 0 {
+		s.castMu.Unlock()
+		return
+	}
+	if time.Duration(delayMs)*time.Millisecond >= channel.Remaining {
+		delayMs = uint32(channel.Remaining.Milliseconds())
+		channel.Remaining = 0
+	} else {
+		channel.Remaining -= time.Duration(delayMs) * time.Millisecond
+	}
+	channel.Pushbacks++
+	remaining := channel.Remaining
+	if channel.Timer != nil {
+		channel.Timer.Reset(remaining)
+	}
+	spellID := channel.SpellID
+	s.castMu.Unlock()
+
+	s.sendChannelUpdate(uint32(remaining.Milliseconds()))
+	s.debug("channel pushed back", "account", s.accountName, "spell", spellID, "delay_ms", delayMs, "count", channel.Pushbacks)
 }

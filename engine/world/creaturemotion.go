@@ -115,11 +115,11 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 			Map:   mapID,
 			HomeX: x, HomeY: y, HomeZ: z,
 			X: x, Y: y, Z: z,
-			Speed:    walkSpeed,
-			RunSpeed: creatureBaseRunSpeed,
-			MoveType: moveType,
-			Wander:   wander,
-			Health:   100,
+			Speed:     walkSpeed,
+			RunSpeed:  creatureBaseRunSpeed,
+			MoveType:  moveType,
+			Wander:    wander,
+			Health:    100,
 			MaxHealth: 100,
 		}
 		if walkSpeed <= 0 {
@@ -389,6 +389,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					target.Sess.killPlayer(ctx)
 				} else {
 					target.Sess.player.Health -= damage
+					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
+					target.Sess.delayCurrentCast()
+					target.Sess.delayCurrentChannel()
 				}
 				logPkt := buildSpellNonMeleeDamageLog(target.GUID, motion.GUID, spellID, damage, overkill, schoolMask)
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
@@ -471,6 +474,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				target.Sess.killPlayer(ctx)
 			} else {
 				target.Sess.player.Health -= damage
+				// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
+				target.Sess.delayCurrentCast()
+				target.Sess.delayCurrentChannel()
 			}
 			target.Sess.lastCombatTime = now
 			if target.Sess.player != nil && target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
@@ -719,5 +725,3 @@ func (s *Server) loadCreatureSpells(ctx context.Context, entry uint32) []uint32 
 	}
 	return spells
 }
-
-
