@@ -127,6 +127,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
 		return true
 	}
+
+	// Interrupt any existing spell cast (TC: Unit::InterruptNonMeleeSpells)
+	s.interruptCurrentCast()
+
 	castTime := uint32(0)
 	s.lastCastTime = time.Now()
 	if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
@@ -137,9 +141,23 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 
 	if castTime > 0 {
-		time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
+		s.castMu.Lock()
+		castState := &activeCastState{
+			CastID:  castID,
+			SpellID: spellID,
+		}
+		castState.Timer = time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
+			s.castMu.Lock()
+			if castState.Cancelled {
+				s.castMu.Unlock()
+				return
+			}
+			s.activeCast = nil
+			s.castMu.Unlock()
 			s.finishSpellCast(context.Background(), castID, spellID, spell, target)
 		})
+		s.activeCast = castState
+		s.castMu.Unlock()
 	} else {
 		s.finishSpellCast(context.Background(), castID, spellID, spell, target)
 	}
@@ -152,6 +170,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if s.player == nil {
 		return
 	}
+	s.castMu.Lock()
+	if s.activeCast != nil && s.activeCast.CastID == castID && s.activeCast.SpellID == spellID {
+		s.activeCast = nil
+	}
+	s.castMu.Unlock()
+
 	hitTargets := []uint64{s.playerGUID}
 	if isSelfCastOnly(spell) {
 		hitTargets[0] = s.playerGUID
@@ -466,14 +490,46 @@ func spellCastIgnoreReason(spell wotlk.Spell, found, learned bool) string {
 	return "unavailable"
 }
 
+func (s *session) interruptCurrentCast() {
+	s.castMu.Lock()
+	if s.activeCast != nil {
+		if s.activeCast.Timer != nil {
+			s.activeCast.Timer.Stop()
+		}
+		s.activeCast.Cancelled = true
+		castID := s.activeCast.CastID
+		spellID := s.activeCast.SpellID
+		s.activeCast = nil
+		s.castMu.Unlock()
+
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 24), true) // SPELL_FAILED_INTERRUPTED = 24
+		return
+	}
+	s.castMu.Unlock()
+}
+
 func (s *session) handleCancelCast(payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	if _, err := reader.ReadU8(); err != nil {
-		return false
+	castID, _ := reader.ReadU8()
+	spellID, _ := reader.ReadU32()
+
+	s.castMu.Lock()
+	if s.activeCast != nil {
+		if s.activeCast.Timer != nil {
+			s.activeCast.Timer.Stop()
+		}
+		s.activeCast.Cancelled = true
+		curCastID := s.activeCast.CastID
+		curSpellID := s.activeCast.SpellID
+		s.activeCast = nil
+		s.castMu.Unlock()
+
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, 24), true) // SPELL_FAILED_INTERRUPTED = 24
+		return true
 	}
-	if _, err := reader.ReadU32(); err != nil {
-		return false
-	}
+	s.castMu.Unlock()
+
+	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 24), true)
 	return true
 }
 

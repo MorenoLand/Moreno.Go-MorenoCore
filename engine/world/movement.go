@@ -89,6 +89,9 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	}
 	info.Flags &^= movementRoot
 	info.Flags = sanitizeMovementFlags(info.Flags)
+	if info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling) != 0 {
+		s.interruptCurrentCast()
+	}
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
 	if opcode == uint32(protocol.OpcodeMSG_MOVE_STOP) || opcode == uint32(protocol.OpcodeMSG_MOVE_HEARTBEAT) || opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

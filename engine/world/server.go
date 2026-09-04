@@ -131,6 +131,15 @@ type session struct {
 	bgQueues           [2]bgQueueEntry
 	afkReporters       map[uint64]struct{}
 	targetGlyphSlot    uint8
+	activeCast         *activeCastState
+	castMu             sync.Mutex
+}
+
+type activeCastState struct {
+	CastID    uint8
+	SpellID   uint32
+	Timer     *time.Timer
+	Cancelled bool
 }
 
 type bgQueueEntry struct {
