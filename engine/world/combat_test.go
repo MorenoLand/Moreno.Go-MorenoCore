@@ -152,3 +152,83 @@ func TestHandleSetSheathed(t *testing.T) {
 		t.Fatalf("expected sheath state 1, got %d", state.player.SheathState)
 	}
 }
+
+func TestDuelLifecycleAndMeleeResolution(t *testing.T) {
+	serverConn1, clientConn1 := net.Pipe()
+	defer serverConn1.Close()
+	defer clientConn1.Close()
+
+	serverConn2, clientConn2 := net.Pipe()
+	defer serverConn2.Close()
+	defer clientConn2.Close()
+
+	srv := &Server{sessions: make(map[*session]struct{})}
+	sess1 := &session{
+		conn:         serverConn1,
+		authed:       true,
+		playerLoaded: true,
+		server:       srv,
+		playerGUID:   10,
+		player:       &playerState{GUID: 10, Map: 0, X: 0, Y: 0, Z: 0, Health: 100, MaxHealth: 100, AttackTime: 2000, MinDamage: 10, MaxDamage: 10},
+	}
+	sess2 := &session{
+		conn:         serverConn2,
+		authed:       true,
+		playerLoaded: true,
+		server:       srv,
+		playerGUID:   20,
+		player:       &playerState{GUID: 20, Map: 0, X: 1, Y: 0, Z: 0, Health: 15, MaxHealth: 100},
+	}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+
+	// Set duel partnership
+	sess1.duelPartner = 20
+	sess2.duelPartner = 10
+	sess1.player.DuelArbiter = 0xF110000000000001
+	sess2.player.DuelArbiter = 0xF110000000000001
+	sess1.player.DuelTeam = 1
+	sess2.player.DuelTeam = 2
+
+	// Drain frames from clientConn1 and clientConn2
+	go func() {
+		for {
+			_, _, err := readServerFrame(clientConn1, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		for {
+			_, _, err := readServerFrame(clientConn2, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// sess1 attacks sess2 with lethal damage (15 HP target, ~10+ dmg)
+	target, ok := sess1.getCombatTarget(context.Background(), 20)
+	if !ok {
+		t.Fatal("expected getCombatTarget to find duel opponent player")
+	}
+	if target.Health != 15 {
+		t.Fatalf("expected target health 15, got %d", target.Health)
+	}
+
+	// Melee swing that brings duel partner to 0 HP
+	sess1.executeMeleeSwing(context.Background(), target)
+
+	// Loser's health must be 1 (never dies in a duel)
+	if sess2.player.Health != 1 {
+		t.Fatalf("expected loser health 1, got %d", sess2.player.Health)
+	}
+	// Duel team and arbiter must be cleared
+	if sess1.player.DuelTeam != 0 || sess2.player.DuelTeam != 0 {
+		t.Fatalf("expected DuelTeam 0, got %d and %d", sess1.player.DuelTeam, sess2.player.DuelTeam)
+	}
+	if sess1.duelPartner != 0 || sess2.duelPartner != 0 {
+		t.Fatalf("expected duelPartner 0 after duel ended, got %d and %d", sess1.duelPartner, sess2.duelPartner)
+	}
+}
