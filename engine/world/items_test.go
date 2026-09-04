@@ -749,8 +749,8 @@ func TestHandleSocketGemsParity(t *testing.T) {
 	srv := &Server{CharactersStore: charStore, WorldStore: charStore}
 	sess := &session{server: srv, conn: s, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1}}
 
-	pChan := make(chan []byte, 4)
-	opChan := make(chan uint16, 4)
+	pChan := make(chan []byte, 20)
+	opChan := make(chan uint16, 20)
 	go func() {
 		for {
 			op, data, err := readServerFrame(c, nil)
@@ -1038,5 +1038,205 @@ drainLoop:
 	_ = db.QueryRow("SELECT durability FROM item_instance WHERE guid = 3002").Scan(&maceD)
 	if shieldD != 100 || maceD != 100 {
 		t.Fatalf("expected both items repaired to 100, got shield=%d mace=%d", shieldD, maceD)
+	}
+}
+
+func TestInventoryStackMergingAndDespawnParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY(guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, count INTEGER, enchantments TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, name TEXT, InventoryType INTEGER, ContainerSlots INTEGER, BuyPrice INTEGER, stackable INTEGER)",
+		"INSERT INTO characters VALUES (1, 10000, '')",
+		"INSERT INTO item_template VALUES (50, 'Silk Cloth', 0, 0, 20, 20)",
+		"INSERT INTO item_instance VALUES (101, 50, 5, ''), (102, 50, 10, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 101), (1, 0, 24, 102)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c, s := net.Pipe()
+	defer c.Close()
+	defer s.Close()
+
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: charStore, WorldStore: charStore}
+	sess := &session{server: srv, conn: s, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1}}
+
+	opChan := make(chan uint16, 50)
+	pChan := make(chan []byte, 50)
+	go func() {
+		for {
+			op, data, err := readServerFrame(c, nil)
+			if err != nil {
+				return
+			}
+			opChan <- op
+			pChan <- data
+		}
+	}()
+
+	ctx := context.Background()
+
+	// 1. Merge stack from slot 23 (count 5) into slot 24 (count 10)
+	// Max stack is 20, so 5 fits entirely into 10 -> new count 15, item 101 deleted and despawned!
+	if !sess.handleSwapInvItem(ctx, []byte{24, 23}) {
+		t.Fatal("handleSwapInvItem failed for stack merge")
+	}
+
+	var count24 int64
+	if err := db.QueryRow("SELECT count FROM item_instance WHERE guid = 102").Scan(&count24); err != nil || count24 != 15 {
+		t.Fatalf("expected item 102 count 15, got %d, err %v", count24, err)
+	}
+
+	var count101 int
+	_ = db.QueryRow("SELECT COUNT(1) FROM item_instance WHERE guid = 101").Scan(&count101)
+	if count101 != 0 {
+		t.Fatalf("expected item 101 deleted from item_instance, count=%d", count101)
+	}
+
+	var slot23Count int
+	_ = db.QueryRow("SELECT COUNT(1) FROM character_inventory WHERE guid = 1 AND bag = 0 AND slot = 23").Scan(&slot23Count)
+	if slot23Count != 0 {
+		t.Fatalf("expected slot 23 empty, count=%d", slot23Count)
+	}
+
+	// Drain frames to find the despawn packet for item 101
+	foundDespawn := false
+	expectedGUID := uint64(101) | (uint64(0x4000) << 48)
+	drainLoop:
+	for {
+		select {
+		case op := <-opChan:
+			data := <-pChan
+			if op == uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) {
+				// Check if this update packet contains outOfRange for item 101
+				r := protocol.NewReader(data)
+				blockCount, _ := r.ReadU32()
+				for b := uint32(0); b < blockCount; b++ {
+					updateType, err := r.ReadU8()
+					if err != nil {
+						break
+					}
+					if updateType == protocol.UpdateOutOfRangeObjects {
+						numGUIDs, _ := r.ReadU32()
+						for g := uint32(0); g < numGUIDs; g++ {
+							packed, _ := r.ReadPackedGUID()
+							if packed == expectedGUID {
+								foundDespawn = true
+							}
+						}
+					}
+				}
+			}
+		case <-time.After(100 * time.Millisecond):
+			break drainLoop
+		}
+	}
+	if !foundDespawn {
+		t.Fatal("expected despawn packet for merged/destroyed item 101")
+	}
+
+	// 2. Partial stack merge:
+	// Insert item 103 (count 15) into slot 25
+	_, _ = db.Exec("INSERT INTO item_instance VALUES (103, 50, 15, '')")
+	_, _ = db.Exec("INSERT INTO character_inventory VALUES (1, 0, 25, 103)")
+
+	// Merge slot 24 (count 15) into slot 25 (count 15).
+	// Max stack is 20, so free space is 5. Slot 25 should become 20, slot 24 should become 10.
+	if !sess.handleSwapInvItem(ctx, []byte{25, 24}) {
+		t.Fatal("handleSwapInvItem failed for partial stack merge")
+	}
+
+	var count25 int64
+	_ = db.QueryRow("SELECT count FROM item_instance WHERE guid = 103").Scan(&count25)
+	_ = db.QueryRow("SELECT count FROM item_instance WHERE guid = 102").Scan(&count24)
+	if count25 != 20 || count24 != 10 {
+		t.Fatalf("expected partial merge: slot 25=20, slot 24=10, got slot25=%d slot24=%d", count25, count24)
+	}
+
+	// 3. Destroy item: Destroy item 103 (count 20) in slot 25
+	if !sess.handleDestroyItem(ctx, []byte{0, 25, 20}) {
+		t.Fatal("handleDestroyItem failed")
+	}
+	var count103 int
+	_ = db.QueryRow("SELECT COUNT(1) FROM item_instance WHERE guid = 103").Scan(&count103)
+	if count103 != 0 {
+		t.Fatalf("expected item 103 deleted, count=%d", count103)
+	}
+}
+
+func TestPlayerVisibleEquipmentUpdateParity(t *testing.T) {
+	c, s := net.Pipe()
+	defer c.Close()
+	defer s.Close()
+
+	srv := &Server{}
+	sess := &session{
+		server:       srv,
+		conn:         s,
+		playerGUID:   1,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:      1,
+			Equipment: "1234 0 0 0 5678 101", // slot 0 (head) = 1234, slot 2 (shoulders) = 5678 (enchant 101)
+		},
+	}
+
+	opChan := make(chan uint16, 10)
+	pChan := make(chan []byte, 10)
+	go func() {
+		for {
+			op, data, err := readServerFrame(c, nil)
+			if err != nil {
+				return
+			}
+			opChan <- op
+			pChan <- data
+		}
+	}()
+
+	sess.sendPlayerUpdate()
+
+	var op uint16
+	var data []byte
+	select {
+	case op = <-opChan:
+		data = <-pChan
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for sendPlayerUpdate")
+	}
+
+	if op == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		decompressed, err := protocol.DecompressUpdatePayload(data)
+		if err != nil {
+			t.Fatalf("failed to decompress: %v", err)
+		}
+		data = decompressed
+	} else if op != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) {
+		t.Fatalf("expected SMSG_UPDATE_OBJECT or SMSG_COMPRESSED_UPDATE_OBJECT, got 0x%04X", op)
+	}
+
+	r := protocol.NewReader(data)
+	blockCount, err := r.ReadU32()
+	if err != nil || blockCount == 0 {
+		t.Fatalf("invalid block count: %v", err)
+	}
+	updateType, _ := r.ReadU8()
+	if updateType != protocol.UpdateValues {
+		t.Fatalf("expected UpdateValues (0), got %d", updateType)
+	}
+	guid, _ := r.ReadPackedGUID()
+	if guid != 1 {
+		t.Fatalf("expected player GUID 1, got %d", guid)
 	}
 }

@@ -348,12 +348,14 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 		partnerSlots = partnerSlots[1:]
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", partner.playerGUID, it.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = 0, slot = ? WHERE item = ?", partner.playerGUID, targetSlot, it.ItemGUID)
+		s.despawnItem(it.ItemGUID)
 	}
 	for _, it := range partnerTradedItems {
 		targetSlot := sSlots[0]
 		sSlots = sSlots[1:]
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, it.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = 0, slot = ? WHERE item = ?", s.playerGUID, targetSlot, it.ItemGUID)
+		partner.despawnItem(it.ItemGUID)
 	}
 
 	_ = s.sendTradeStatus(tradeStatusTradeComplete, 0, 0, 0, 0)

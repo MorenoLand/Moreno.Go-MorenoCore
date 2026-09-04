@@ -92,6 +92,73 @@ func (s *session) swapInventoryCoordinates(ctx context.Context, itemA, bagA, slo
 	}
 }
 
+func (s *session) despawnItem(itemGUID uint64) {
+	if s == nil || itemGUID == 0 {
+		return
+	}
+	fullGUID := itemGUID
+	if fullGUID <= 0xFFFFFFFF {
+		fullGUID = itemGUID | (uint64(0x4000) << 48)
+	}
+	updates := protocol.NewUpdateData()
+	updates.AddOutOfRangeGUID(fullGUID)
+	packet, err := updates.BuildPacket(0)
+	if err == nil && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	}
+}
+
+func (s *session) tryMergeStacks(ctx context.Context, srcItemGUID, srcBagKey int64, srcSlot uint8, dstItemGUID, dstBagKey int64, dstSlot uint8) (bool, error) {
+	if srcItemGUID == 0 || dstItemGUID == 0 || srcItemGUID == dstItemGUID {
+		return false, nil
+	}
+	db := s.server.CharactersStore.DB
+	if db == nil {
+		return false, nil
+	}
+	var srcEntry, srcCount int64
+	if err := db.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", srcItemGUID).Scan(&srcEntry, &srcCount); err != nil {
+		return false, nil
+	}
+	var dstEntry, dstCount int64
+	if err := db.QueryRowContext(ctx, "SELECT itemEntry, count FROM item_instance WHERE guid = ?", dstItemGUID).Scan(&dstEntry, &dstCount); err != nil {
+		return false, nil
+	}
+	if srcEntry != dstEntry || srcEntry == 0 {
+		return false, nil
+	}
+	if srcCount <= 0 {
+		srcCount = 1
+	}
+	if dstCount <= 0 {
+		dstCount = 1
+	}
+	var maxStack int64 = 1
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(stackable, 1) FROM item_template WHERE entry = ?", srcEntry).Scan(&maxStack)
+	}
+	if maxStack <= 1 || dstCount >= maxStack {
+		return false, nil
+	}
+	freeSpace := maxStack - dstCount
+	if srcCount <= freeSpace {
+		newDstCount := dstCount + srcCount
+		_, _ = db.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", newDstCount, dstItemGUID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, srcBagKey, srcSlot)
+		_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", srcItemGUID)
+		s.despawnItem(uint64(srcItemGUID))
+	} else {
+		newDstCount := maxStack
+		newSrcCount := srcCount - freeSpace
+		_, _ = db.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", newDstCount, dstItemGUID)
+		_, _ = db.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", newSrcCount, srcItemGUID)
+	}
+	s.syncEquipmentCache(ctx)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
+	return true, nil
+}
+
 func (s *session) chooseAutoEquipSlot(ctx context.Context, invType uint8, itemEntry int64) (uint8, bool) {
 	db := s.server.CharactersStore.DB
 	if db == nil {
@@ -329,6 +396,12 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 	if srcItemGUID == 0 && dstItemGUID == 0 {
 		return true
 	}
+	if srcItemGUID != 0 && dstItemGUID != 0 {
+		if merged, _ := s.tryMergeStacks(ctx, srcItemGUID, 0, srcSlot, dstItemGUID, 0, dstSlot); merged {
+			s.debug("inventory items merged", "account", s.accountName, "src", srcSlot, "dst", dstSlot)
+			return true
+		}
+	}
 	// If un-equipping or moving an equipped bag, ensure it's empty
 	if srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd && srcItemGUID != 0 {
 		if !s.isBagEmpty(ctx, srcItemGUID) {
@@ -406,6 +479,12 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 	if srcItemGUID == 0 && dstItemGUID == 0 {
 		return true
 	}
+	if srcItemGUID != 0 && dstItemGUID != 0 {
+		if merged, _ := s.tryMergeStacks(ctx, srcItemGUID, srcBagKey, srcSlot, dstItemGUID, dstBagKey, dstSlot); merged {
+			s.debug("items merged across bags", "account", s.accountName, "srcBag", srcBag, "srcSlot", srcSlot, "dstBag", dstBag, "dstSlot", dstSlot)
+			return true
+		}
+	}
 
 	// If moving an equipped bag slot (bag 0, slot 19..22), check if empty
 	if srcBagKey == 0 && srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd && srcItemGUID != 0 {
@@ -479,6 +558,7 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 	if currentCount <= int64(count) || count == 0 {
 		_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
 		_, _ = db.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+		s.despawnItem(uint64(itemGUID))
 	} else {
 		_, _ = db.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
 	}
@@ -873,6 +953,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			} else {
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ?", s.playerGUID, bagKey, slot)
 				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", dbItemGUID)
+				s.despawnItem(uint64(dbItemGUID))
 			}
 			_ = s.sendInventoryItems(ctx)
 			s.sendPlayerUpdate()
@@ -886,7 +967,7 @@ func (s *session) inventoryBagKey(ctx context.Context, bag uint8) (int64, bool) 
 	if bag == 0 || bag == invSlotBag0 {
 		return 0, true
 	}
-	if bag < invSlotBagStart || bag >= invSlotBagEnd || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+	if (bag < invSlotBagStart || bag >= invSlotBagEnd) && (bag < 67 || bag > 73) || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return 0, false
 	}
 	var itemGUID int64
@@ -1612,16 +1693,7 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	newEncStr := strings.Join(encParts, " ")
 	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?", newEncStr, rawTargetGUID)
 
-	// Consume the socketed gems
-	for _, gemGUID := range gemGUIDs {
-		if gemGUID != 0 {
-			rawGemGUID := gemGUID & 0x0000FFFFFFFFFFFF
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", rawGemGUID, s.playerGUID)
-			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", rawGemGUID)
-		}
-	}
-
-	// Send SMSG_SOCKET_GEMS_RESULT (0x50B)
+	// Send SMSG_SOCKET_GEMS_RESULT (0x50B) first per TrinityCore HandleSocketOpcode
 	resBuf := protocol.NewBuffer(24)
 	resBuf.WriteU64(itemGUID)
 	resBuf.WriteU32(enchants[6])
@@ -1629,6 +1701,16 @@ func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	resBuf.WriteU32(enchants[12])
 	resBuf.WriteU32(enchants[15])
 	_ = s.write(uint16(protocol.OpcodeSMSG_SOCKET_GEMS_RESULT), resBuf.Bytes(), true)
+
+	// Consume the socketed gems
+	for _, gemGUID := range gemGUIDs {
+		if gemGUID != 0 {
+			rawGemGUID := gemGUID & 0x0000FFFFFFFFFFFF
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", rawGemGUID, s.playerGUID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", rawGemGUID)
+			s.despawnItem(rawGemGUID)
+		}
+	}
 
 	if targetBag == 0 && targetSlot < equipSlotEnd {
 		s.syncEquipmentCache(ctx)
