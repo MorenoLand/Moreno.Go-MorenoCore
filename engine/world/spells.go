@@ -364,6 +364,39 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask), true)
 
+	s.lastCombatTime = time.Now()
+	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
+		s.player.UnitFlags |= unitFlagInCombat
+		s.sendPlayerUpdate()
+	}
+
+	// If target is an online player (e.g. duel opponent or PvP)
+	if s.server != nil {
+		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil && playerSess.player != nil {
+			playerSess.lastCombatTime = time.Now()
+			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
+				playerSess.player.UnitFlags |= unitFlagInCombat
+			}
+			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask), true)
+			if damage >= playerSess.player.Health {
+				if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
+					// Duel defeat: loser drops to 1 HP and duel completes
+					playerSess.player.Health = 1
+					playerSess.sendPlayerUpdate()
+					s.endDuel(true, s.playerGUID)
+				} else {
+					playerSess.player.Health = 0
+					playerSess.sendPlayerUpdate()
+					playerSess.killPlayer(ctx)
+				}
+			} else {
+				playerSess.player.Health -= damage
+				playerSess.sendPlayerUpdate()
+			}
+			return
+		}
+	}
+
 	low := uint32(target.GUID & 0x00FFFFFF)
 	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(low, entry)
@@ -415,25 +448,35 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	if s.player == nil {
 		return
 	}
-	// Healing always applies to the player themselves (self-targeting heal spells);
-	// if targetGUID differs, it means party heal but we only track self health
 	if targetGUID == 0 {
 		targetGUID = s.playerGUID
 	}
+
+	targetSess := s
+	if targetGUID != s.playerGUID && s.server != nil {
+		if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
+			targetSess = other
+		}
+	}
+
 	effectiveHeal := heal
-	if s.player.Health+heal > s.player.MaxHealth {
-		effectiveHeal = s.player.MaxHealth - s.player.Health
-		s.player.Health = s.player.MaxHealth
+	if targetSess.player.Health+heal > targetSess.player.MaxHealth {
+		effectiveHeal = targetSess.player.MaxHealth - targetSess.player.Health
+		targetSess.player.Health = targetSess.player.MaxHealth
 	} else {
-		s.player.Health += heal
+		targetSess.player.Health += heal
 	}
 	overheal := heal - effectiveHeal
 
 	// TC Unit.cpp:6550: packet = packed(target), packed(healer), spellID, heal, overheal, absorb, crit, unused
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), buildSpellHealLog(targetGUID, s.playerGUID, spellID, heal, overheal, 0, false), true)
-	s.sendPlayerUpdate()
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", s.player.Health, s.playerGUID)
+	healPkt := buildSpellHealLog(targetGUID, s.playerGUID, spellID, heal, overheal, 0, false)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), healPkt, true)
+	if targetSess != s {
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), healPkt, true)
+	}
+	targetSess.sendPlayerUpdate()
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", targetSess.player.Health, targetSess.playerGUID)
 	}
 }
 

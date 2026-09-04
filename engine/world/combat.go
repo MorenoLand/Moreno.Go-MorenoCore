@@ -109,6 +109,11 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	}
 	s.attackTarget = victim
 	s.lastSwing = time.Now()
+	s.lastCombatTime = time.Now()
+	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
+		s.player.UnitFlags |= unitFlagInCombat
+		s.sendPlayerUpdate()
+	}
 	s.debug("attack started", "account", s.accountName, "guid", victim)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(s.playerGUID, victim), true)
 	if distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) <= meleeAttackRange+2.0 {

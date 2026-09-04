@@ -411,6 +411,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			} else {
 				target.Sess.player.Health -= damage
 			}
+			target.Sess.lastCombatTime = now
+			if target.Sess.player != nil && target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
+				target.Sess.player.UnitFlags |= unitFlagInCombat
+			}
 			_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), buildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill), true)
 			target.Sess.sendPlayerUpdate()
 			motion.LastAttack = now
@@ -430,6 +434,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.TargetGUID = p.GUID
 			motion.Moving = false
 			s.broadcastAIReaction(motion.Map, motion.GUID, 2) // AI_REACTION_HOSTILE
+			p.Sess.lastCombatTime = now
+			if p.Sess.player != nil && p.Sess.player.UnitFlags&unitFlagInCombat == 0 {
+				p.Sess.player.UnitFlags |= unitFlagInCombat
+				p.Sess.sendPlayerUpdate()
+			}
 			_ = p.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, p.GUID), true)
 			return
 		}
