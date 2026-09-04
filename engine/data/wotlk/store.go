@@ -772,3 +772,35 @@ func (s *Store) Map(id uint32) (MapEntry, bool, error) {
 		MaxPlayers:   maxPlayers,
 	}, true, nil
 }
+
+// GemPropertiesEntry represents a record from GemProperties.dbc.
+type GemPropertiesEntry struct {
+	ID        uint32
+	EnchantID uint32
+	Type      uint32
+}
+
+// GemProperties loads a record by ID from GemProperties.dbc.
+func (s *Store) GemProperties(id uint32) (GemPropertiesEntry, bool, error) {
+	file, err := s.File("GemProperties")
+	if err != nil {
+		return GemPropertiesEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return GemPropertiesEntry{}, false, nil
+	}
+	enchantID, err := record.Uint32(1)
+	if err != nil {
+		return GemPropertiesEntry{}, false, err
+	}
+	gemType, err := record.Uint32(4)
+	if err != nil {
+		return GemPropertiesEntry{}, false, err
+	}
+	return GemPropertiesEntry{
+		ID:        id,
+		EnchantID: enchantID,
+		Type:      gemType,
+	}, true, nil
+}
