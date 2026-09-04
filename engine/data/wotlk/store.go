@@ -134,6 +134,41 @@ type TalentEntry struct {
 	PrereqRank   uint32
 }
 
+// MapEntry mirrors TrinityCore's MapEntry (DBCStructure.h:1072, format "nxiixssssssssssssssssxix...").
+type MapEntry struct {
+	ID           uint32
+	InstanceType uint32
+	Flags        uint32
+	MapName      string
+	AreaTableID  uint32
+	CorpseMapID  int32
+	CorpseX      float32
+	CorpseY      float32
+	ExpansionID  uint32
+	RaidOffset   uint32
+	MaxPlayers   uint32
+}
+
+func (m MapEntry) IsDungeon() bool {
+	return m.InstanceType == 1 || m.InstanceType == 2
+}
+
+func (m MapEntry) IsNonRaidDungeon() bool {
+	return m.InstanceType == 1
+}
+
+func (m MapEntry) IsRaid() bool {
+	return m.InstanceType == 2
+}
+
+func (m MapEntry) IsBattleground() bool {
+	return m.InstanceType == 3
+}
+
+func (m MapEntry) IsBattleArena() bool {
+	return m.InstanceType == 4
+}
+
 const (
 	AreaFlagWintergrasp2 uint32 = 0x08000000 // AREA_FLAG_WINTERGRASP_2 (DBCEnums.h:274)
 )
@@ -669,4 +704,42 @@ func (s *Store) SpellDuration(id uint32, level uint32) (int32, bool, error) {
 		duration = maxDuration
 	}
 	return duration, true, nil
+}
+
+func (s *Store) Map(id uint32) (MapEntry, bool, error) {
+	file, err := s.File("Map")
+	if err != nil {
+		return MapEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return MapEntry{}, false, nil
+	}
+	instType, err := record.Uint32(2)
+	if err != nil {
+		return MapEntry{}, false, err
+	}
+	flags, _ := record.Uint32(3)
+	name, _ := record.String(5)
+	areaTableID, _ := record.Uint32(22)
+	corpseMapID, _ := record.Int32(59)
+	corpseX, _ := record.Float32(60)
+	corpseY, _ := record.Float32(61)
+	expansionID, _ := record.Uint32(63)
+	raidOffset, _ := record.Uint32(64)
+	maxPlayers, _ := record.Uint32(65)
+
+	return MapEntry{
+		ID:           id,
+		InstanceType: instType,
+		Flags:        flags,
+		MapName:      name,
+		AreaTableID:  areaTableID,
+		CorpseMapID:  corpseMapID,
+		CorpseX:      corpseX,
+		CorpseY:      corpseY,
+		ExpansionID:  expansionID,
+		RaidOffset:   raidOffset,
+		MaxPlayers:   maxPlayers,
+	}, true, nil
 }

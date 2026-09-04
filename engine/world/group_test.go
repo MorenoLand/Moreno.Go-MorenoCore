@@ -321,10 +321,10 @@ func TestRequestRaidInfoAndExtend(t *testing.T) {
 	}
 
 	// 2. Extend lock
-	extPayload := protocol.NewBuffer(6)
+	extPayload := protocol.NewBuffer(9)
 	extPayload.WriteU32(534)
-	extPayload.WriteU8(1)
-	extPayload.WriteU8(1) // extend = 1
+	extPayload.WriteU32(1) // difficulty is uint32
+	extPayload.WriteU8(1)  // extend = 1
 
 	doneExt := make(chan struct{})
 	go func() {
@@ -334,15 +334,21 @@ func TestRequestRaidInfoAndExtend(t *testing.T) {
 		close(doneExt)
 	}()
 
-	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	opcode2, payload2, err := readServerFrame(clientConn, nil)
-	if err != nil {
-		t.Fatal(err)
+	var payload2 []byte
+	for i := 0; i < 2; i++ {
+		_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		op, p, err := readServerFrame(clientConn, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if op == uint16(protocol.OpcodeSMSG_RAID_INSTANCE_INFO) {
+			payload2 = p
+		}
 	}
 	<-doneExt
 
-	if opcode2 != uint16(protocol.OpcodeSMSG_RAID_INSTANCE_INFO) {
-		t.Fatalf("expected refreshed SMSG_RAID_INSTANCE_INFO, got %x", opcode2)
+	if payload2 == nil {
+		t.Fatal("expected refreshed SMSG_RAID_INSTANCE_INFO")
 	}
 	r2 := protocol.NewReader(payload2)
 	_, _ = r2.ReadU32() // count = 1
