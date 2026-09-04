@@ -321,6 +321,17 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 		lfg.mu.Unlock()
 	}
 	s.debug("lfg set roles", "account", s.accountName, "roles", roles)
+
+	// SMSG_LFG_ROLE_CHOSEN (0x2BB): guid (8), ready (1), roles (4)
+	packet := protocol.NewBuffer(13)
+	packet.WriteU64(s.playerGUID)
+	packet.WriteU8(1)
+	packet.WriteU32(uint32(roles))
+	if s.groupID != 0 && s.server != nil {
+		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LFG_ROLE_CHOSEN), packet.Bytes())
+	} else {
+		_ = s.write(uint16(protocol.OpcodeSMSG_LFG_ROLE_CHOSEN), packet.Bytes(), true)
+	}
 	return true
 }
 
@@ -332,6 +343,10 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 	}
 	out := payload[0]
 	s.debug("lfg teleport", "account", s.accountName, "out", out)
+	// SMSG_LFG_TELEPORT_DENIED (0x200): error (4)
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(4) // LFG_TELEPORT_NOT_IN_LFG_GROUP
+	_ = s.write(uint16(protocol.OpcodeSMSG_LFG_TELEPORT_DENIED), packet.Bytes(), true)
 	return true
 }
 

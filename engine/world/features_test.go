@@ -1,9 +1,11 @@
 package world
 
 import (
+	"context"
 	"encoding/binary"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -97,5 +99,67 @@ func TestNPCBotAssignmentLimitsAndSpellOrdering(t *testing.T) {
 	}
 	if got := formatSpellList([]uint32{900, 100, 900, 300}); got != "100 300 900 900 " {
 		t.Fatalf("spell ordering=%q", got)
+	}
+}
+
+func TestLFGPlayerLockInfoAndSetRoles(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{sessions: make(map[*session]struct{})}
+	sess := &session{
+		conn:         serverConn,
+		authed:       true,
+		playerLoaded: true,
+		server:       srv,
+		playerGUID:   42,
+		player:       &playerState{GUID: 42, Name: "DungeonRunner"},
+	}
+
+	// 1. Test Player Lock Info Request
+	done := make(chan struct{})
+	go func() {
+		sess.handleLfdPlayerLockInfoRequest(context.Background(), nil)
+		close(done)
+	}()
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	op, data, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if op != uint16(protocol.OpcodeSMSG_LFG_PLAYER_INFO) {
+		t.Fatalf("expected SMSG_LFG_PLAYER_INFO (0x36F), got 0x%x", op)
+	}
+	if len(data) != 5 {
+		t.Fatalf("expected 5 bytes in SMSG_LFG_PLAYER_INFO, got %d", len(data))
+	}
+
+	// 2. Test Set Roles
+	rolesPayload := []byte{byte(LFGRoleTank | LFGRoleDamage)}
+
+	done2 := make(chan struct{})
+	go func() {
+		sess.handleLfgSetRoles(context.Background(), rolesPayload)
+		close(done2)
+	}()
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	op2, data2, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done2
+	if op2 != uint16(protocol.OpcodeSMSG_LFG_ROLE_CHOSEN) {
+		t.Fatalf("expected SMSG_LFG_ROLE_CHOSEN (0x2BB), got 0x%x", op2)
+	}
+	r := protocol.NewReader(data2)
+	guid, _ := r.ReadU64()
+	ready, _ := r.ReadU8()
+	roles, _ := r.ReadU32()
+	if guid != 42 || ready != 1 || roles != uint32(LFGRoleTank|LFGRoleDamage) {
+		t.Fatalf("unexpected role chosen fields: guid=%d ready=%d roles=%d", guid, ready, roles)
 	}
 }
