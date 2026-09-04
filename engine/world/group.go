@@ -4,10 +4,17 @@ import (
 	"context"
 	"encoding/binary"
 	"math/rand"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+)
+
+const (
+	memberFlagAssistant  uint8 = 0x01
+	memberFlagMainTank   uint8 = 0x02
+	memberFlagMainAssist uint8 = 0x04
 )
 
 // groupState holds all state for a 5-man or raid group.
@@ -24,6 +31,33 @@ type groupState struct {
 	IsRaid        bool
 	TargetIcons   [8]uint64 // raid target icons, index=icon, value=target GUID
 	counter       uint32
+}
+
+func (g *groupState) isLeader(guid uint64) bool {
+	return g.LeaderGUID == guid
+}
+
+func (g *groupState) isAssistant(guid uint64) bool {
+	for _, m := range g.Members {
+		if m.GUID == guid && (m.Flags&memberFlagAssistant != 0) {
+			return true
+		}
+	}
+	return false
+}
+
+func (g *groupState) isLeaderOrAssistant(guid uint64) bool {
+	return g.isLeader(guid) || g.isAssistant(guid)
+}
+
+func (g *groupState) countInSubGroup(subGroup uint8) int {
+	cnt := 0
+	for _, m := range g.Members {
+		if m.SubGroup == subGroup {
+			cnt++
+		}
+	}
+	return cnt
 }
 
 // groupMember mirrors Group::MemberSlot.
@@ -764,25 +798,23 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 	srv := s.server
 	srv.groupsMu.Lock()
 	g := srv.groups[s.groupID]
-	if g == nil || g.LeaderGUID != s.playerGUID {
+	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
 		srv.groupsMu.Unlock()
 		return false
 	}
 	const (
 		assignMainAssist = 0
 		assignMainTank   = 1
-		flagMainAssist   = 0x04
-		flagMainTank     = 0x02
 	)
 	clearFlag := uint8(0)
 	setFlag := uint8(0)
 	switch assignment {
 	case assignMainAssist:
-		clearFlag = flagMainAssist
-		setFlag = flagMainAssist
+		clearFlag = memberFlagMainAssist
+		setFlag = memberFlagMainAssist
 	case assignMainTank:
-		clearFlag = flagMainTank
-		setFlag = flagMainTank
+		clearFlag = memberFlagMainTank
+		setFlag = memberFlagMainTank
 	default:
 		srv.groupsMu.Unlock()
 		return false
@@ -805,9 +837,9 @@ func (s *session) handlePartyAssignment(_ context.Context, payload []byte) bool 
 }
 
 // handleReadyCheck processes MSG_RAID_READY_CHECK (0x322).
-// TrinityCore: WorldSession::HandleRaidReadyCheckOpcode.
+// TrinityCore: WorldSession::HandleRaidReadyCheckOpcode (GroupHandler.cpp:687).
 func (s *session) handleReadyCheck(_ context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.groupID == 0 {
+	if !s.playerLoaded || s.groupID == 0 || s.server == nil {
 		return false
 	}
 	srv := s.server
@@ -820,17 +852,27 @@ func (s *session) handleReadyCheck(_ context.Context, payload []byte) bool {
 
 	r := protocol.NewReader(payload)
 	if len(payload) == 0 {
-		// Request — must be leader/assistant
-		if g.LeaderGUID != s.playerGUID {
+		// Request — must be leader or assistant
+		if !g.isLeaderOrAssistant(s.playerGUID) {
 			return false
 		}
 		b := protocol.NewBuffer(8)
 		b.WriteU64(s.playerGUID)
 		pkt := b.Bytes()
+		srv.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_RAID_READY_CHECK), pkt)
+
+		// Offline ready check: send not-ready (0) for any offline members to leaders/assistants
 		srv.sessionsMu.RLock()
-		for sess := range srv.sessions {
-			if sess.groupID == s.groupID {
-				_ = sess.write(uint16(protocol.OpcodeMSG_RAID_READY_CHECK), pkt, true)
+		for _, m := range g.Members {
+			if srv.findSessionByGUID(m.GUID) == nil {
+				bOffline := protocol.NewBuffer(9)
+				bOffline.WriteU64(m.GUID)
+				bOffline.WriteU8(0) // 0 = not ready
+				for sess := range srv.sessions {
+					if sess.groupID == s.groupID && g.isLeaderOrAssistant(sess.playerGUID) {
+						_ = sess.write(uint16(protocol.OpcodeMSG_RAID_READY_CHECK_CONFIRM), bOffline.Bytes(), true)
+					}
+				}
 			}
 		}
 		srv.sessionsMu.RUnlock()
@@ -844,11 +886,31 @@ func (s *session) handleReadyCheck(_ context.Context, payload []byte) bool {
 		b.WriteU64(s.playerGUID)
 		b.WriteU8(state)
 		pkt := b.Bytes()
-		// Broadcast the reply to leader only
-		if leaderSess := srv.findSessionByGUID(g.LeaderGUID); leaderSess != nil {
-			_ = leaderSess.write(uint16(protocol.OpcodeMSG_RAID_READY_CHECK_CONFIRM), pkt, true)
+		// Broadcast the reply to leader and assistants (Group::BroadcastReadyCheck)
+		srv.sessionsMu.RLock()
+		for sess := range srv.sessions {
+			if sess.groupID == s.groupID && g.isLeaderOrAssistant(sess.playerGUID) {
+				_ = sess.write(uint16(protocol.OpcodeMSG_RAID_READY_CHECK_CONFIRM), pkt, true)
+			}
 		}
+		srv.sessionsMu.RUnlock()
 	}
+	return true
+}
+
+// handleRaidReadyCheckFinished processes MSG_RAID_READY_CHECK_FINISHED (0x3C6).
+// Reference: WorldSession::HandleRaidReadyCheckFinishedOpcode (GroupHandler.cpp:722).
+func (s *session) handleRaidReadyCheckFinished(_ context.Context, _ []byte) bool {
+	if !s.playerLoaded || s.player == nil || s.server == nil || s.groupID == 0 {
+		return true
+	}
+	s.server.groupsMu.RLock()
+	g := s.server.groups[s.groupID]
+	s.server.groupsMu.RUnlock()
+	if g == nil || !g.isLeaderOrAssistant(s.playerGUID) {
+		return true
+	}
+	s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_RAID_READY_CHECK_FINISHED), []byte{})
 	return true
 }
 
@@ -915,12 +977,85 @@ func (s *session) handleRandomRoll(_ context.Context, payload []byte) bool {
 }
 
 // handleGroupAssistantLeader processes CMSG_GROUP_ASSISTANT_LEADER (0x28F).
+// Reference: WorldSession::HandleGroupAssistantLeaderOpcode (GroupHandler.cpp:633).
 func (s *session) handleGroupAssistantLeader(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 9 || s.groupID == 0 || s.server == nil {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	guid, err := r.ReadU64()
+	if err != nil {
+		return true
+	}
+	apply, err := r.ReadU8()
+	if err != nil {
+		return true
+	}
+
+	s.server.groupsMu.Lock()
+	grp := s.server.groups[s.groupID]
+	if grp == nil || !grp.isLeader(s.playerGUID) {
+		s.server.groupsMu.Unlock()
+		return true
+	}
+
+	for i := range grp.Members {
+		if grp.Members[i].GUID == guid {
+			if apply != 0 {
+				grp.Members[i].Flags |= memberFlagAssistant
+			} else {
+				grp.Members[i].Flags &^= memberFlagAssistant
+			}
+			break
+		}
+	}
+	s.server.groupsMu.Unlock()
+
+	s.server.broadcastGroupList(grp)
 	return true
 }
 
 // handleGroupChangeSubGroup processes CMSG_GROUP_CHANGE_SUB_GROUP (0x27E).
+// Reference: WorldSession::HandleGroupChangeSubGroupOpcode (GroupHandler.cpp:600).
 func (s *session) handleGroupChangeSubGroup(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 2 || s.groupID == 0 || s.server == nil {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	name, err := r.ReadCString()
+	if err != nil {
+		return true
+	}
+	groupNr, err := r.ReadU8()
+	if err != nil || groupNr >= 8 { // MAX_RAID_SUBGROUPS = 8
+		return true
+	}
+
+	s.server.groupsMu.Lock()
+	grp := s.server.groups[s.groupID]
+	if grp == nil || !grp.isLeaderOrAssistant(s.playerGUID) {
+		s.server.groupsMu.Unlock()
+		return true
+	}
+
+	if grp.countInSubGroup(groupNr) >= 5 {
+		s.server.groupsMu.Unlock()
+		return true
+	}
+
+	var found bool
+	for i := range grp.Members {
+		if strings.EqualFold(grp.Members[i].Name, name) {
+			grp.Members[i].SubGroup = groupNr
+			found = true
+			break
+		}
+	}
+	s.server.groupsMu.Unlock()
+
+	if found {
+		s.server.broadcastGroupList(grp)
+	}
 	return true
 }
 
@@ -1232,16 +1367,17 @@ const (
 )
 
 const (
-	memberStatusOnline uint16 = 0x0001
-	memberStatusPvP    uint16 = 0x0002
-	memberStatusDead   uint16 = 0x0004
-	memberStatusGhost  uint16 = 0x0008
-	memberStatusAFK    uint16 = 0x0020
-	memberStatusDND    uint16 = 0x0040
+	memberStatusOffline uint16 = 0x0000
+	memberStatusOnline  uint16 = 0x0001
+	memberStatusPvP     uint16 = 0x0002
+	memberStatusDead    uint16 = 0x0004
+	memberStatusGhost   uint16 = 0x0008
+	memberStatusAFK     uint16 = 0x0020
+	memberStatusDND     uint16 = 0x0040
 )
 
 // handleRequestPartyMemberStats processes CMSG_REQUEST_PARTY_MEMBER_STATS (0x27F).
-// Reference: WorldSession::HandleRequestPartyMemberStatsOpcode (GroupHandler.cpp:320),
+// Reference: WorldSession::HandleRequestPartyMemberStatsOpcode (GroupHandler.cpp:920),
 // and GroupHandler::SendPartyMemberStats (GroupHandler.cpp:752).
 func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
@@ -1250,52 +1386,71 @@ func (s *session) handleRequestPartyMemberStats(ctx context.Context, payload []b
 	r := protocol.NewReader(payload)
 	targetGUID, _ := r.ReadU64()
 
-	if s.server != nil {
-		targetSess := s.server.findSessionByGUID(targetGUID)
-		if targetSess != nil && targetSess.player != nil {
-			tp := targetSess.player
-			mask := groupUpdateFlagStatus | groupUpdateFlagCurHP | groupUpdateFlagMaxHP |
-				groupUpdateFlagPowerType | groupUpdateFlagCurPower | groupUpdateFlagMaxPower |
-				groupUpdateFlagLevel | groupUpdateFlagZone | groupUpdateFlagPosition
+	if s.server == nil {
+		return true
+	}
 
-			var status uint16 = memberStatusOnline
-			if tp.Health == 0 {
-				if tp.PlayerFlags&playerFlagGhost != 0 {
-					status |= memberStatusGhost
-				} else {
-					status |= memberStatusDead
-				}
-			}
-			if tp.PlayerFlags&playerFlagAFK != 0 {
-				status |= memberStatusAFK
-			}
-			if tp.PlayerFlags&playerFlagDND != 0 {
-				status |= memberStatusDND
-			}
+	targetSess := s.server.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil {
+		// Player offline: send offline status packet (matching TC HandleRequestPartyMemberStatsOpcode)
+		buf := protocol.NewBuffer(16)
+		buf.WritePackedGUID(targetGUID)
+		buf.WriteU32(groupUpdateFlagStatus)
+		buf.WriteU16(memberStatusOffline)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), buf.Bytes(), true)
+		return true
+	}
 
-			powerType := classPowerType(tp.Class)
-			curPower := uint16(0)
-			maxPower := uint16(0)
-			if int(powerType) < len(tp.Powers) {
-				curPower = uint16(tp.Powers[powerType])
-				maxPower = uint16(tp.MaxPowers[powerType])
-			}
+	tp := targetSess.player
+	powerType := classPowerType(tp.Class)
+	mask := groupUpdateFlagStatus | groupUpdateFlagCurHP | groupUpdateFlagMaxHP |
+		groupUpdateFlagCurPower | groupUpdateFlagMaxPower |
+		groupUpdateFlagLevel | groupUpdateFlagZone | groupUpdateFlagPosition
 
-			buf := protocol.NewBuffer(64)
-			buf.WritePackedGUID(targetGUID)
-			buf.WriteU32(mask)
-			buf.WriteU16(status)
-			buf.WriteU32(tp.Health)
-			buf.WriteU32(tp.MaxHealth)
-			buf.WriteU8(powerType)
-			buf.WriteU16(curPower)
-			buf.WriteU16(maxPower)
-			buf.WriteU16(uint16(tp.Level))
-			buf.WriteU16(uint16(tp.Zone))
-			buf.WriteU16(uint16(tp.X))
-			buf.WriteU16(uint16(tp.Y))
-			_ = s.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), buf.Bytes(), true)
+	if powerType != 0 { // 0 = POWER_MANA
+		mask |= groupUpdateFlagPowerType
+	}
+
+	var status uint16 = memberStatusOnline
+	if tp.Health == 0 {
+		if tp.PlayerFlags&playerFlagGhost != 0 {
+			status |= memberStatusGhost
+		} else {
+			status |= memberStatusDead
 		}
 	}
+	if tp.PlayerFlags&0x02 != 0 {
+		status |= memberStatusPvP
+	}
+	if tp.PlayerFlags&playerFlagAFK != 0 {
+		status |= memberStatusAFK
+	}
+	if tp.PlayerFlags&playerFlagDND != 0 {
+		status |= memberStatusDND
+	}
+
+	curPower := uint16(0)
+	maxPower := uint16(0)
+	if int(powerType) < len(tp.Powers) {
+		curPower = uint16(tp.Powers[powerType])
+		maxPower = uint16(tp.MaxPowers[powerType])
+	}
+
+	buf := protocol.NewBuffer(64)
+	buf.WritePackedGUID(targetGUID)
+	buf.WriteU32(mask)
+	buf.WriteU16(status)
+	buf.WriteU32(tp.Health)
+	buf.WriteU32(tp.MaxHealth)
+	if mask&groupUpdateFlagPowerType != 0 {
+		buf.WriteU8(powerType)
+	}
+	buf.WriteU16(curPower)
+	buf.WriteU16(maxPower)
+	buf.WriteU16(uint16(tp.Level))
+	buf.WriteU16(uint16(tp.Zone))
+	buf.WriteU16(uint16(tp.X))
+	buf.WriteU16(uint16(tp.Y))
+	_ = s.write(uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS), buf.Bytes(), true)
 	return true
 }

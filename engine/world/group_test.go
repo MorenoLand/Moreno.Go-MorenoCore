@@ -361,3 +361,342 @@ func TestRequestRaidInfoAndExtend(t *testing.T) {
 		t.Fatalf("expected extended=1, got %d", ext2)
 	}
 }
+
+func TestRequestPartyMemberStats_Offline(t *testing.T) {
+	srv := newGroupTestServer()
+	alice := addSess(srv, 1, "Alice")
+	cConn, sConn := net.Pipe()
+	defer cConn.Close()
+	defer sConn.Close()
+	alice.conn = sConn
+
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(999) // non-existent/offline GUID
+
+	done := make(chan uint16, 1)
+	go func() {
+		op, p, _ := readServerFrame(cConn, nil)
+		r := protocol.NewReader(p)
+		guid, _ := r.ReadPackedGUID()
+		mask, _ := r.ReadU32()
+		status, _ := r.ReadU16()
+		if guid == 999 && mask == groupUpdateFlagStatus && status == memberStatusOffline {
+			done <- op
+		} else {
+			done <- 0
+		}
+	}()
+
+	if !alice.handleRequestPartyMemberStats(context.Background(), payload.Bytes()) {
+		t.Fatal("handleRequestPartyMemberStats failed")
+	}
+
+	select {
+	case op := <-done:
+		if op != uint16(protocol.OpcodeSMSG_PARTY_MEMBER_STATS) {
+			t.Fatalf("expected SMSG_PARTY_MEMBER_STATS, got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timed out waiting for offline party member stats")
+	}
+}
+
+func TestGroupAssistantLeader(t *testing.T) {
+	srv := newGroupTestServer()
+	alice := addSess(srv, 1, "Alice")
+	bob := addSess(srv, 2, "Bob")
+	grp := &groupState{
+		ID:         100,
+		LeaderGUID: 1,
+		Members: []groupMember{
+			{GUID: 1, Name: "Alice"},
+			{GUID: 2, Name: "Bob"},
+		},
+	}
+	srv.groups[100] = grp
+	alice.groupID = 100
+	bob.groupID = 100
+
+	cConnA, sConnA := net.Pipe()
+	defer cConnA.Close()
+	defer sConnA.Close()
+	alice.conn = sConnA
+
+	cConnB, sConnB := net.Pipe()
+	defer cConnB.Close()
+	defer sConnB.Close()
+	bob.conn = sConnB
+
+	go func() {
+		for {
+			_ = cConnA.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			if _, _, err := readServerFrame(cConnA, nil); err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		for {
+			_ = cConnB.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			if _, _, err := readServerFrame(cConnB, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	// 1. Non-leader Bob tries to grant assistant: should fail/ignore
+	p0 := protocol.NewBuffer(9)
+	p0.WriteU64(2)
+	p0.WriteU8(1)
+	_ = bob.handleGroupAssistantLeader(context.Background(), p0.Bytes())
+	if grp.isAssistant(2) {
+		t.Fatal("Bob should not be able to grant assistant to himself")
+	}
+
+	// 2. Leader Alice grants assistant to Bob
+	p1 := protocol.NewBuffer(9)
+	p1.WriteU64(2)
+	p1.WriteU8(1)
+	if !alice.handleGroupAssistantLeader(context.Background(), p1.Bytes()) {
+		t.Fatal("handleGroupAssistantLeader failed")
+	}
+	if !grp.isAssistant(2) {
+		t.Fatal("expected Bob to be assistant")
+	}
+
+	// 3. Leader Alice revokes assistant from Bob
+	p2 := protocol.NewBuffer(9)
+	p2.WriteU64(2)
+	p2.WriteU8(0)
+	if !alice.handleGroupAssistantLeader(context.Background(), p2.Bytes()) {
+		t.Fatal("handleGroupAssistantLeader failed")
+	}
+	if grp.isAssistant(2) {
+		t.Fatal("expected Bob assistant revoked")
+	}
+}
+
+func TestGroupChangeSubGroup(t *testing.T) {
+	srv := newGroupTestServer()
+	alice := addSess(srv, 1, "Alice")
+	bob := addSess(srv, 2, "Bob")
+	charlie := addSess(srv, 3, "Charlie")
+	grp := &groupState{
+		ID:         100,
+		LeaderGUID: 1,
+		IsRaid:     true,
+		Members: []groupMember{
+			{GUID: 1, Name: "Alice", SubGroup: 0},
+			{GUID: 2, Name: "Bob", SubGroup: 0, Flags: memberFlagAssistant},
+			{GUID: 3, Name: "Charlie", SubGroup: 0},
+		},
+	}
+	srv.groups[100] = grp
+	alice.groupID = 100
+	bob.groupID = 100
+	charlie.groupID = 100
+
+	// 1. Leader Alice moves Charlie to subgroup 3
+	p1 := protocol.NewBuffer(16)
+	p1.WriteCString("Charlie")
+	p1.WriteU8(3)
+	if !alice.handleGroupChangeSubGroup(context.Background(), p1.Bytes()) {
+		t.Fatal("handleGroupChangeSubGroup failed")
+	}
+	if grp.Members[2].SubGroup != 3 {
+		t.Fatalf("expected Charlie in subgroup 3, got %d", grp.Members[2].SubGroup)
+	}
+
+	// 2. Assistant Bob moves Charlie to subgroup 1
+	p2 := protocol.NewBuffer(16)
+	p2.WriteCString("Charlie")
+	p2.WriteU8(1)
+	if !bob.handleGroupChangeSubGroup(context.Background(), p2.Bytes()) {
+		t.Fatal("assistant handleGroupChangeSubGroup failed")
+	}
+	if grp.Members[2].SubGroup != 1 {
+		t.Fatalf("expected Charlie in subgroup 1, got %d", grp.Members[2].SubGroup)
+	}
+
+	// 3. Regular member Charlie tries to move Alice: should be rejected
+	p3 := protocol.NewBuffer(16)
+	p3.WriteCString("Alice")
+	p3.WriteU8(2)
+	_ = charlie.handleGroupChangeSubGroup(context.Background(), p3.Bytes())
+	if grp.Members[0].SubGroup != 0 {
+		t.Fatal("regular member should not be able to move subgroup")
+	}
+
+	// 4. Moving to invalid subgroup (>= 8) should be rejected
+	p4 := protocol.NewBuffer(16)
+	p4.WriteCString("Charlie")
+	p4.WriteU8(8)
+	_ = alice.handleGroupChangeSubGroup(context.Background(), p4.Bytes())
+	if grp.Members[2].SubGroup != 1 {
+		t.Fatal("invalid subgroup 8 should be rejected")
+	}
+}
+
+func TestPartyAssignment_LeaderAndAssistant(t *testing.T) {
+	srv := newGroupTestServer()
+	alice := addSess(srv, 1, "Alice")
+	bob := addSess(srv, 2, "Bob")
+	charlie := addSess(srv, 3, "Charlie")
+	grp := &groupState{
+		ID:         100,
+		LeaderGUID: 1,
+		Members: []groupMember{
+			{GUID: 1, Name: "Alice"},
+			{GUID: 2, Name: "Bob", Flags: memberFlagAssistant},
+			{GUID: 3, Name: "Charlie"},
+		},
+	}
+	srv.groups[100] = grp
+	alice.groupID = 100
+	bob.groupID = 100
+	charlie.groupID = 100
+
+	// 1. Leader Alice sets Charlie as Main Tank (1, apply 1)
+	p1 := protocol.NewBuffer(10)
+	p1.WriteU8(1) // Main Tank
+	p1.WriteU8(1) // apply
+	p1.WriteU64(3)
+	if !alice.handlePartyAssignment(context.Background(), p1.Bytes()) {
+		t.Fatal("handlePartyAssignment failed")
+	}
+	if grp.Members[2].Flags&memberFlagMainTank == 0 {
+		t.Fatal("expected Charlie to be Main Tank")
+	}
+
+	// 2. Assistant Bob sets Alice as Main Assist (0, apply 1)
+	p2 := protocol.NewBuffer(10)
+	p2.WriteU8(0) // Main Assist
+	p2.WriteU8(1) // apply
+	p2.WriteU64(1)
+	if !bob.handlePartyAssignment(context.Background(), p2.Bytes()) {
+		t.Fatal("assistant handlePartyAssignment failed")
+	}
+	if grp.Members[0].Flags&memberFlagMainAssist == 0 {
+		t.Fatal("expected Alice to be Main Assist")
+	}
+}
+
+func TestRaidReadyCheck_InitiateAndRespond(t *testing.T) {
+	srv := newGroupTestServer()
+	alice := addSess(srv, 1, "Alice")
+	bob := addSess(srv, 2, "Bob")
+	grp := &groupState{
+		ID:         100,
+		LeaderGUID: 1,
+		Members: []groupMember{
+			{GUID: 1, Name: "Alice"},
+			{GUID: 2, Name: "Bob"},
+			{GUID: 3, Name: "OfflineDave"},
+		},
+	}
+	srv.groups[100] = grp
+	alice.groupID = 100
+	bob.groupID = 100
+
+	cConnA, sConnA := net.Pipe()
+	defer cConnA.Close()
+	defer sConnA.Close()
+	alice.conn = sConnA
+
+	cConnB, sConnB := net.Pipe()
+	defer cConnB.Close()
+	defer sConnB.Close()
+	bob.conn = sConnB
+
+	opsA := make(chan uint16, 5)
+	go func() {
+		for {
+			_ = cConnA.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			op, _, err := readServerFrame(cConnA, nil)
+			if err != nil {
+				return
+			}
+			opsA <- op
+		}
+	}()
+
+	opsB := make(chan uint16, 5)
+	go func() {
+		for {
+			_ = cConnB.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			op, _, err := readServerFrame(cConnB, nil)
+			if err != nil {
+				return
+			}
+			opsB <- op
+		}
+	}()
+
+	// 1. Leader Alice initiates ready check (empty payload)
+	if !alice.handleReadyCheck(context.Background(), nil) {
+		t.Fatal("handleReadyCheck failed")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Bob should receive MSG_RAID_READY_CHECK
+	var bobGotReadyCheck bool
+	for len(opsB) > 0 {
+		op := <-opsB
+		if op == uint16(protocol.OpcodeMSG_RAID_READY_CHECK) {
+			bobGotReadyCheck = true
+		}
+	}
+	if !bobGotReadyCheck {
+		t.Fatal("expected Bob to receive MSG_RAID_READY_CHECK")
+	}
+
+	// Alice (leader) should receive offline check confirm for Dave (GUID 3) with state=0
+	var aliceGotOfflineConfirm bool
+	for len(opsA) > 0 {
+		op := <-opsA
+		if op == uint16(protocol.OpcodeMSG_RAID_READY_CHECK_CONFIRM) {
+			aliceGotOfflineConfirm = true
+		}
+	}
+	if !aliceGotOfflineConfirm {
+		t.Fatal("expected Alice to receive MSG_RAID_READY_CHECK_CONFIRM for offline member")
+	}
+
+	// 2. Bob answers ready check with state=1 (Ready)
+	pAns := protocol.NewBuffer(1)
+	pAns.WriteU8(1)
+	if !bob.handleReadyCheck(context.Background(), pAns.Bytes()) {
+		t.Fatal("bob answer ready check failed")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	var aliceGotBobConfirm bool
+	for len(opsA) > 0 {
+		op := <-opsA
+		if op == uint16(protocol.OpcodeMSG_RAID_READY_CHECK_CONFIRM) {
+			aliceGotBobConfirm = true
+		}
+	}
+	if !aliceGotBobConfirm {
+		t.Fatal("expected Alice to receive Bob's confirm")
+	}
+
+	// 3. Leader Alice finishes ready check
+	if !alice.handleRaidReadyCheckFinished(context.Background(), nil) {
+		t.Fatal("handleRaidReadyCheckFinished failed")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	var bobGotFinished bool
+	for len(opsB) > 0 {
+		op := <-opsB
+		if op == uint16(protocol.OpcodeMSG_RAID_READY_CHECK_FINISHED) {
+			bobGotFinished = true
+		}
+	}
+	if !bobGotFinished {
+		t.Fatal("expected Bob to receive MSG_RAID_READY_CHECK_FINISHED")
+	}
+}
+

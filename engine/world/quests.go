@@ -489,17 +489,6 @@ func (s *session) handleQueryInspectAchievements(ctx context.Context, payload []
 	return true
 }
 
-// handleRaidReadyCheckFinished processes MSG_RAID_READY_CHECK_FINISHED (0x3C6).
-// Reference: WorldSession::HandleRaidReadyCheckFinished (GroupHandler.cpp:450).
-func (s *session) handleRaidReadyCheckFinished(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || s.server == nil || s.groupID == 0 {
-		return true
-	}
-	buf := protocol.NewBuffer(1)
-	buf.WriteU8(0) // finished
-	s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_RAID_READY_CHECK_FINISHED), buf.Bytes())
-	return true
-}
 
 func (s *session) completeQuest(ctx context.Context, questID uint32) {
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
