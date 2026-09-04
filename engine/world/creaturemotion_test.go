@@ -9,6 +9,7 @@ import (
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
 func TestCreatureWaypointPatrol(t *testing.T) {
@@ -186,3 +187,110 @@ func TestCreatureHostileAggroAndCombat(t *testing.T) {
 		t.Fatalf("expected creature to move toward target, got pos %f,%f", motion.X, motion.Y)
 	}
 }
+
+func TestCreatureSpellCastingInCombat(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"CREATE TABLE creature_template_spell (CreatureID INTEGER NOT NULL, `Index` INTEGER NOT NULL DEFAULT 0, Spell INTEGER DEFAULT NULL, PRIMARY KEY (CreatureID, `Index`))",
+		"INSERT INTO creature_template_spell VALUES (68, 0, 133)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	sess := &session{conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Map: 0, X: 15.0, Y: 0.0, Z: 0.0, Race: 1, Health: 100, MaxHealth: 100}}
+	server := &Server{WorldStore: store, sessions: make(map[*session]struct{}), creatureMotion: make(map[uint64]*creatureMotion)}
+	server.sessions[sess] = struct{}{}
+	sess.server = server
+
+	motion := &creatureMotion{
+		GUID:       creatureWorldGUID(100, 68),
+		Entry:      68,
+		Map:        0,
+		X:          0.0,
+		Y:          0.0,
+		Z:          0.0,
+		Faction:    14,
+		Level:      10,
+		InCombat:   true,
+		TargetGUID: 1,
+	}
+
+	players := []playerPos{{
+		Map:    0,
+		X:      15.0,
+		Y:      0.0,
+		Z:      0.0,
+		GUID:   1,
+		Race:   1,
+		Level:  10,
+		IsGM:   false,
+		IsDead: false,
+		Sess:   sess,
+	}}
+
+	opcodes := make(chan uint16, 20)
+	stopReader := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopReader:
+				return
+			default:
+				_ = clientConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+				op, _, err := readServerFrame(clientConn, nil)
+				if err == nil {
+					opcodes <- op
+				}
+			}
+		}
+	}()
+
+	now := time.Now()
+	server.stepCreatureMotion(context.Background(), motion, players, now)
+	time.Sleep(50 * time.Millisecond)
+	close(stopReader)
+
+	// Verify creature loaded spell 133
+	if len(motion.Spells) != 1 || motion.Spells[0] != 133 {
+		t.Fatalf("expected creature spells to contain 133, got %v", motion.Spells)
+	}
+
+	// Verify player received SMSG_SPELL_GO (0x132) and SMSG_SPELLNONMELEEDAMAGELOG (0x250)
+	gotSpellGo := false
+	gotDamageLog := false
+	for len(opcodes) > 0 {
+		op := <-opcodes
+		if op == uint16(protocol.OpcodeSMSG_SPELL_GO) {
+			gotSpellGo = true
+		}
+		if op == uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG) {
+			gotDamageLog = true
+		}
+	}
+
+	if !gotSpellGo {
+		t.Fatal("expected SMSG_SPELL_GO to be sent to player")
+	}
+	if !gotDamageLog {
+		t.Fatal("expected SMSG_SPELLNONMELEEDAMAGELOG to be sent to player")
+	}
+	if sess.player.Health >= 100 {
+		t.Fatalf("expected player health reduced from 100, got %d", sess.player.Health)
+	}
+	if sess.player.UnitFlags&unitFlagInCombat == 0 {
+		t.Fatal("expected player unitFlagInCombat to be set")
+	}
+}
+

@@ -55,6 +55,8 @@ type creatureMotion struct {
 	TargetGUID uint64
 	InCombat   bool
 	LastAttack time.Time
+	LastSpell  time.Time
+	Spells     []uint32
 
 	PathID  uint32
 	Points  []waypointPoint
@@ -346,6 +348,65 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.Moving = false
 			return
 		}
+
+		if len(motion.Spells) == 0 && s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
+			motion.Spells = s.loadCreatureSpells(ctx, motion.Entry)
+		}
+		if len(motion.Spells) > 0 && dist <= 30.0 && (motion.LastSpell.IsZero() || now.Sub(motion.LastSpell) >= 6*time.Second) {
+			spellID := motion.Spells[0]
+			castID := uint8(1)
+			castTimeStamp := uint32(now.UnixMilli())
+			hitTargets := []uint64{target.GUID}
+			spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
+			goPkt := protocol.BuildSpellGo(motion.GUID, motion.GUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
+			if target.Sess != nil {
+				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+			}
+			if s != nil {
+				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, target.Sess)
+			}
+
+			lvl := float64(motion.Level)
+			if lvl < 1 {
+				lvl = 1
+			}
+			baseDmg := lvl * 1.5
+			schoolMask := uint8(1)
+			if s != nil && s.Data != nil {
+				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found && spellInfo.SchoolMask != 0 {
+					schoolMask = uint8(spellInfo.SchoolMask)
+				}
+			}
+			damage := uint32(baseDmg + rand.Float64()*(baseDmg*0.5))
+			if damage < 1 {
+				damage = 1
+			}
+			overkill := uint32(0)
+			if target.Sess != nil && target.Sess.player != nil {
+				if damage >= target.Sess.player.Health {
+					overkill = damage - target.Sess.player.Health
+					target.Sess.player.Health = 0
+					target.Sess.killPlayer(ctx)
+				} else {
+					target.Sess.player.Health -= damage
+				}
+				logPkt := buildSpellNonMeleeDamageLog(target.GUID, motion.GUID, spellID, damage, overkill, schoolMask)
+				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
+				if s != nil {
+					s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, target.Sess)
+				}
+				target.Sess.lastCombatTime = now
+				if target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
+					target.Sess.player.UnitFlags |= unitFlagInCombat
+				}
+				target.Sess.sendPlayerUpdate()
+			}
+			motion.LastSpell = now
+			if dist > 3.0 {
+				return
+			}
+		}
+
 		if dist > 3.0 {
 			// Pursue player: move towards target at run speed
 			if !motion.Moving || now.After(motion.MoveEnds) {
@@ -637,4 +698,26 @@ func (s *Server) broadcastAIReaction(mapID uint32, guid uint64, reactionType uin
 		_ = sess.write(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), true)
 	}
 }
+
+// loadCreatureSpells queries spells configured for this creature entry from creature_template_spell.
+// Reference: ObjectMgr::LoadCreatureTemplateSpells (ObjectMgr.cpp:660).
+func (s *Server) loadCreatureSpells(ctx context.Context, entry uint32) []uint32 {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil || entry == 0 {
+		return nil
+	}
+	rows, err := s.WorldStore.DB.QueryContext(ctx, "SELECT Spell FROM creature_template_spell WHERE CreatureID = ? ORDER BY `Index`", entry)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var spells []uint32
+	for rows.Next() {
+		var sp int64
+		if rows.Scan(&sp) == nil && sp > 0 {
+			spells = append(spells, uint32(sp))
+		}
+	}
+	return spells
+}
+
 
