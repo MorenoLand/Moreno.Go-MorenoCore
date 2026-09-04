@@ -101,6 +101,10 @@ type session struct {
 	rooted             bool
 	attackTarget       uint64
 	duelPartner        uint64
+	duelArbiterX       float32
+	duelArbiterY       float32
+	duelArbiterZ       float32
+	duelOutOfBounds    time.Time
 	lastSwing          time.Time
 	lastRegenTick      time.Time
 	lastCastTime       time.Time
@@ -2418,6 +2422,9 @@ func (s *session) logout() {
 	ctx := context.Background()
 	if s.trade != nil {
 		s.handleCancelTrade(ctx)
+	}
+	if s.duelPartner != 0 {
+		s.endDuel(false, 0, false)
 	}
 	if s.server != nil {
 		s.server.removeSessionChannels(s)
