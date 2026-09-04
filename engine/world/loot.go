@@ -239,6 +239,13 @@ func (s *session) clearCreatureLoot(loot *activeLootState) {
 	if loot == nil || s.server == nil {
 		return
 	}
+	high := uint16(loot.TargetGUID >> 48)
+	if high == 0xF110 {
+		s.server.lootMu.Lock()
+		delete(s.server.creatureLoot, loot.TargetGUID)
+		s.server.lootMu.Unlock()
+		return
+	}
 	guid := uint32(loot.TargetGUID & 0x00FFFFFF)
 	creatureEntry := uint32((loot.TargetGUID >> 24) & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, creatureEntry)
@@ -283,9 +290,16 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 	if !ok {
 		return true
 	}
-	target, validTarget := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
-	if !validTarget || target.Map != s.player.Map || target.Health != 0 || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
-		return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
+	high := uint16(s.activeLoot.TargetGUID >> 48)
+	if high == 0xF110 {
+		if s.activeLoot.MapID != s.player.Map {
+			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
+		}
+	} else {
+		target, validTarget := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
+		if !validTarget || target.Map != s.player.Map || target.Health != 0 || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
+			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
+		}
 	}
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
