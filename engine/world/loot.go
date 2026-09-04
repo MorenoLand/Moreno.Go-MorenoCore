@@ -2,7 +2,9 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -20,6 +22,27 @@ type activeLootState struct {
 	LootType   uint8
 	Money      uint32
 	Items      map[uint8]lootItem
+}
+
+type activeGroupRoll struct {
+	SourceGUID          uint64
+	Slot                uint32
+	ItemEntry           uint32
+	ItemCount           uint32
+	RandomSuffix        uint32
+	RandomPropID        uint32
+	RollVoteMask        uint8
+	GroupID             uint64
+	MapID               uint32
+	StartedAt           time.Time
+	Duration            time.Duration
+	TotalPlayersRolling int
+	TotalNeed           int
+	TotalGreed          int
+	TotalPass           int
+	Votes               map[uint64]uint8
+	Rolls               map[uint64]uint8
+	Timer               *time.Timer
 }
 
 func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
@@ -224,7 +247,41 @@ func (s *session) sendLootResponse(loot *activeLootState) error {
 		return err
 	}
 	s.debug("loot response sent", "account", s.accountName, "target", loot.TargetGUID, "money", loot.Money, "items", len(loot.Items))
+
+	if s.server != nil && s.groupID != 0 {
+		s.server.groupsMu.Lock()
+		grp := s.server.groups[s.groupID]
+		s.server.groupsMu.Unlock()
+		if grp != nil {
+			if grp.LootMethod == 2 { // Master Loot
+				s.sendLootMasterList(loot)
+			} else if grp.LootMethod == 3 || grp.LootMethod == 4 { // Group Loot / Need Before Greed
+				for _, it := range loot.Items {
+					s.server.startGroupLootRoll(loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, s.groupID)
+				}
+			}
+		}
+	}
 	return nil
+}
+
+func (s *session) sendLootMasterList(loot *activeLootState) {
+	if s.server == nil || s.groupID == 0 {
+		return
+	}
+	s.server.groupsMu.Lock()
+	grp := s.server.groups[s.groupID]
+	s.server.groupsMu.Unlock()
+	if grp == nil || grp.LootMethod != 2 { // 2 = MASTER_LOOT
+		return
+	}
+	members := s.server.getGroupSessions(s.groupID)
+	buf := protocol.NewBuffer(1 + len(members)*8)
+	buf.WriteU8(uint8(len(members)))
+	for _, m := range members {
+		buf.WriteU64(m.playerGUID)
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_MASTER_LIST), buf.Bytes(), true)
 }
 
 func (s *session) sendLootError(guid uint64, code uint8) error {
@@ -468,6 +525,7 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 				}
 				_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 0, 0, '')", nextGUID, it.ItemEntry, targetGUID, it.Count)
 				_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", targetGUID, freeSlot, nextGUID)
+				_ = targetSess.sendItemCreate(uint64(nextGUID), it.ItemEntry, it.Count, 0, freeSlot)
 				_ = targetSess.sendInventoryItems(ctx)
 			} else {
 				delete(s.activeLoot.Items, slotID)
@@ -481,8 +539,203 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 	return true
 }
 
+func buildLootRollPayload(itemGUID uint64, slot uint32, rollType uint8) []byte {
+	buf := protocol.NewBuffer(13)
+	buf.WriteU64(itemGUID)
+	buf.WriteU32(slot)
+	buf.WriteU8(rollType)
+	return buf.Bytes()
+}
+
+func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry uint32, itemCount uint32, mapID uint32, groupID uint64) {
+	if groupID == 0 {
+		return
+	}
+	members := s.getGroupSessions(groupID)
+	if len(members) == 0 {
+		return
+	}
+
+	rollKey := fmt.Sprintf("%d:%d", sourceGUID, slot)
+	s.lootMu.Lock()
+	if s.groupRolls == nil {
+		s.groupRolls = make(map[string]*activeGroupRoll)
+	}
+	if existing := s.groupRolls[rollKey]; existing != nil {
+		s.lootMu.Unlock()
+		return
+	}
+
+	roll := &activeGroupRoll{
+		SourceGUID:          sourceGUID,
+		Slot:                slot,
+		ItemEntry:           itemEntry,
+		ItemCount:           itemCount,
+		RollVoteMask:        0x0F, // ROLL_ALL_TYPE_MASK
+		GroupID:             groupID,
+		MapID:               mapID,
+		StartedAt:           time.Now(),
+		Duration:            60 * time.Second,
+		TotalPlayersRolling: len(members),
+		Votes:               make(map[uint64]uint8),
+		Rolls:               make(map[uint64]uint8),
+	}
+	s.groupRolls[rollKey] = roll
+	s.lootMu.Unlock()
+
+	// Build SMSG_LOOT_START_ROLL (0x2A1)
+	buf := protocol.NewBuffer(8 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 1)
+	buf.WriteU64(sourceGUID)
+	buf.WriteU32(mapID)
+	buf.WriteU32(slot)
+	buf.WriteU32(itemEntry)
+	buf.WriteU32(0) // randomSuffix
+	buf.WriteU32(0) // randomPropId
+	buf.WriteU32(itemCount)
+	buf.WriteU32(60000) // 60s countdown
+	buf.WriteU8(roll.RollVoteMask)
+
+	s.broadcastToGroup(groupID, uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf.Bytes())
+
+	// Auto-pass check for players with PassOnGroupLoot
+	for _, m := range members {
+		if m.player != nil && m.player.PassOnGroupLoot {
+			m.handleLootRoll(context.Background(), buildLootRollPayload(sourceGUID, slot, 0))
+		}
+	}
+
+	// Arm 60s countdown
+	roll.Timer = time.AfterFunc(60*time.Second, func() {
+		s.resolveGroupLootRoll(rollKey)
+	})
+}
+
+func (s *Server) resolveGroupLootRoll(rollKey string) {
+	s.lootMu.Lock()
+	roll := s.groupRolls[rollKey]
+	if roll == nil {
+		s.lootMu.Unlock()
+		return
+	}
+	delete(s.groupRolls, rollKey)
+	if roll.Timer != nil {
+		roll.Timer.Stop()
+	}
+	s.lootMu.Unlock()
+
+	var winnerGUID uint64
+	var maxRoll uint8
+	var winningType uint8
+
+	if roll.TotalNeed > 0 {
+		for guid, vote := range roll.Votes {
+			if vote == 1 { // NEED
+				rNum := roll.Rolls[guid]
+				if rNum > maxRoll || winnerGUID == 0 {
+					maxRoll = rNum
+					winnerGUID = guid
+					winningType = 1
+				}
+			}
+		}
+	} else if roll.TotalGreed > 0 {
+		for guid, vote := range roll.Votes {
+			if vote == 2 || vote == 3 { // GREED or DISENCHANT
+				rNum := roll.Rolls[guid]
+				if rNum > maxRoll || winnerGUID == 0 {
+					maxRoll = rNum
+					winnerGUID = guid
+					winningType = vote
+				}
+			}
+		}
+	}
+
+	if winnerGUID != 0 {
+		// Broadcast SMSG_LOOT_ROLL_WON (0x29F)
+		wonBuf := protocol.NewBuffer(35)
+		wonBuf.WriteU64(roll.SourceGUID)
+		wonBuf.WriteU32(roll.Slot)
+		wonBuf.WriteU32(roll.ItemEntry)
+		wonBuf.WriteU32(roll.RandomSuffix)
+		wonBuf.WriteU32(roll.RandomPropID)
+		wonBuf.WriteU64(winnerGUID)
+		wonBuf.WriteU8(maxRoll)
+		wonBuf.WriteU8(winningType)
+		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL_WON), wonBuf.Bytes())
+
+		s.deliverGroupLootItem(roll, winnerGUID)
+	} else {
+		// Broadcast SMSG_LOOT_ALL_PASSED (0x29E)
+		passBuf := protocol.NewBuffer(24)
+		passBuf.WriteU64(roll.SourceGUID)
+		passBuf.WriteU32(roll.Slot)
+		passBuf.WriteU32(roll.ItemEntry)
+		passBuf.WriteU32(roll.RandomPropID)
+		passBuf.WriteU32(roll.RandomSuffix)
+		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ALL_PASSED), passBuf.Bytes())
+	}
+}
+
+func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64) {
+	winnerSess := s.findSessionByGUID(winnerGUID)
+	if winnerSess == nil || winnerSess.player == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return
+	}
+	ctx := context.Background()
+	cdb := s.CharactersStore.DB
+
+	usedSlots := make(map[uint8]bool)
+	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", winnerGUID)
+	if err == nil {
+		for rows.Next() {
+			var sl int64
+			if rows.Scan(&sl) == nil {
+				usedSlots[uint8(sl)] = true
+			}
+		}
+		rows.Close()
+	}
+	freeSlot := uint8(0xFF)
+	for sl := uint8(23); sl <= 38; sl++ {
+		if !usedSlots[sl] {
+			freeSlot = sl
+			break
+		}
+	}
+	if freeSlot == uint8(0xFF) {
+		buf := protocol.NewBuffer(9)
+		buf.WriteU64(roll.SourceGUID)
+		buf.WriteU8(4) // LOOT_ERROR_INVENTORY_FULL
+		_ = winnerSess.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
+		return
+	}
+
+	var nextGUID int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
+	if nextGUID <= 0 {
+		nextGUID = 1
+	}
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 0, 0, '')", nextGUID, roll.ItemEntry, winnerGUID, roll.ItemCount)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", winnerGUID, freeSlot, nextGUID)
+
+	_ = winnerSess.sendItemCreate(uint64(nextGUID), roll.ItemEntry, roll.ItemCount, 0, freeSlot)
+	_ = winnerSess.sendInventoryItems(ctx)
+
+	s.lootMu.Lock()
+	if cLoot := s.creatureLoot[roll.SourceGUID]; cLoot != nil {
+		delete(cLoot.Items, uint8(roll.Slot))
+	}
+	s.lootMu.Unlock()
+
+	remBuf := protocol.NewBuffer(9)
+	remBuf.WriteU64(roll.SourceGUID)
+	remBuf.WriteU8(uint8(roll.Slot))
+	s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_REMOVED), remBuf.Bytes())
+}
+
 // handleLootRoll processes CMSG_LOOT_ROLL (0x2A0).
-// Reference: WorldSession::HandleLootRoll (GroupHandler.cpp:470), Group::SendLootRoll (Group.cpp:995).
+// Reference: WorldSession::HandleLootRoll (GroupHandler.cpp:470), Group::SendLootRoll (Group.cpp:995), Group::CountRollVote (Group.cpp:1452).
 func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 13 {
 		return true
@@ -492,9 +745,15 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	itemSlot, _ := r.ReadU32()
 	rollType, _ := r.ReadU8() // 0 = pass, 1 = need, 2 = greed, 3 = disenchant
 
-	if s.server != nil && s.groupID != 0 {
+	if s.server == nil || s.groupID == 0 {
+		return true
+	}
+
+	rollKey := fmt.Sprintf("%d:%d", itemGUID, itemSlot)
+	s.server.lootMu.Lock()
+	roll := s.server.groupRolls[rollKey]
+	if roll == nil {
 		var itemEntry uint32
-		s.server.lootMu.Lock()
 		if loot := s.server.creatureLoot[itemGUID]; loot != nil {
 			if li, ok := loot.Items[uint8(itemSlot)]; ok {
 				itemEntry = li.ItemEntry
@@ -518,7 +777,54 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		buf.WriteU8(rollType)      // rollType (0: pass, 1: need, 2: greed, 3: disenchant)
 		buf.WriteU8(0)             // autoPass
 		s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
+		return true
 	}
+
+	// If player already voted on this roll, ignore duplicate
+	if _, voted := roll.Votes[s.playerGUID]; voted {
+		s.server.lootMu.Unlock()
+		return true
+	}
+
+	rollNumber := uint8(128) // pass
+	if rollType > 0 {
+		rollNumber = uint8(rand.Intn(100) + 1) // 1..100
+	}
+
+	roll.Votes[s.playerGUID] = rollType
+	roll.Rolls[s.playerGUID] = rollNumber
+
+	switch rollType {
+	case 0:
+		roll.TotalPass++
+	case 1:
+		roll.TotalNeed++
+	default:
+		roll.TotalGreed++
+	}
+
+	itemEntry := roll.ItemEntry
+	randomSuffix := roll.RandomSuffix
+	randomPropID := roll.RandomPropID
+	totalDone := (roll.TotalPass + roll.TotalNeed + roll.TotalGreed) >= roll.TotalPlayersRolling
+	s.server.lootMu.Unlock()
+
+	buf := protocol.NewBuffer(35)
+	buf.WriteU64(itemGUID)
+	buf.WriteU32(itemSlot)
+	buf.WriteU64(s.playerGUID)
+	buf.WriteU32(itemEntry)
+	buf.WriteU32(randomSuffix)
+	buf.WriteU32(randomPropID)
+	buf.WriteU8(rollNumber)
+	buf.WriteU8(rollType)
+	buf.WriteU8(0) // autoPass
+	s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
+
+	if totalDone {
+		s.server.resolveGroupLootRoll(rollKey)
+	}
+
 	return true
 }
 

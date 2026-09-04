@@ -192,6 +192,21 @@ func (s *Server) broadcastToGroup(groupID uint64, opcode uint16, payload []byte)
 	}
 }
 
+func (s *Server) getGroupSessions(groupID uint64) []*session {
+	if groupID == 0 {
+		return nil
+	}
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	var list []*session
+	for sess := range s.sessions {
+		if sess.groupID == groupID {
+			list = append(list, sess)
+		}
+	}
+	return list
+}
+
 // -----------------------------------------------------------------
 // Handlers
 // -----------------------------------------------------------------
