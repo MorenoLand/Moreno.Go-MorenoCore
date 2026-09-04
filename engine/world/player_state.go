@@ -216,6 +216,8 @@ type playerState struct {
 	CombatRatings     [25]uint32
 	DungeonDifficulty uint8
 	RaidDifficulty    uint8
+	VehicleGUID       uint64
+	VehicleSeat       int8
 }
 
 type playerReputation struct {
