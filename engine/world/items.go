@@ -1341,30 +1341,165 @@ func (s *session) durabilityLossAll(ctx context.Context, percent float64, invent
 	}
 }
 
-// handleSocketGems processes CMSG_SOCKET_GEMS (0x464).
-// Reference: WorldSession::HandleSocketOpcode (ItemHandler.cpp:920).
+// handleSocketGems processes CMSG_SOCKET_GEMS (0x347).
+// Reference: WorldSession::HandleSocketOpcode (ItemHandler.cpp:947).
 func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 32 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	itemGUID, _ := r.ReadU64()
+	itemGUID, err := r.ReadU64()
+	if err != nil || itemGUID == 0 {
+		return true
+	}
 	var gemGUIDs [3]uint64
 	for i := 0; i < 3; i++ {
 		gemGUIDs[i], _ = r.ReadU64()
 	}
 
-	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || itemGUID == 0 {
+	// Cheat check: cannot socket the same gem multiple times
+	if (gemGUIDs[0] != 0 && (gemGUIDs[0] == gemGUIDs[1] || gemGUIDs[0] == gemGUIDs[2])) ||
+		(gemGUIDs[1] != 0 && gemGUIDs[1] == gemGUIDs[2]) {
+		return true
+	}
+
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return true
 	}
 	cdb := s.server.CharactersStore.DB
 
+	rawTargetGUID := itemGUID & 0x0000FFFFFFFFFFFF
+	var targetEntry uint32
+	var targetBag, targetSlot uint8
+	var currentEnchants string
+	err = cdb.QueryRowContext(ctx, `SELECT ii.itemEntry, ci.bag, ci.slot, COALESCE(ii.enchantments, '')
+		FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND (ci.item = ? OR ii.guid = ?) LIMIT 1`,
+		s.playerGUID, rawTargetGUID, rawTargetGUID).Scan(&targetEntry, &targetBag, &targetSlot, &currentEnchants)
+	if err != nil {
+		return true
+	}
+
+	var targetSockets [3]uint32
+	var targetSocketBonus uint32
+	if targetData, err := s.loadItemQueryData(ctx, targetEntry); err == nil {
+		for i := 0; i < 3; i++ {
+			targetSockets[i] = targetData.Sockets[i].Color
+		}
+		targetSocketBonus = targetData.SocketBonus
+	} else if cdb != nil {
+		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(socketColor_1, 0), COALESCE(socketColor_2, 0), COALESCE(socketColor_3, 0), COALESCE(socketBonus, 0) FROM item_template WHERE entry = ?", targetEntry).Scan(&targetSockets[0], &targetSockets[1], &targetSockets[2], &targetSocketBonus)
+	}
+
+	var gemEnchants [3]uint32
+	var gemColors [3]uint32
+	for i := 0; i < 3; i++ {
+		if gemGUIDs[i] == 0 {
+			continue
+		}
+		rawGemGUID := gemGUIDs[i] & 0x0000FFFFFFFFFFFF
+		var gemEntry uint32
+		err := cdb.QueryRowContext(ctx, `SELECT ii.itemEntry
+			FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND (ci.item = ? OR ii.guid = ?) LIMIT 1`,
+			s.playerGUID, rawGemGUID, rawGemGUID).Scan(&gemEntry)
+		if err != nil {
+			return true
+		}
+
+		var gemPropID uint32
+		if gemData, err := s.loadItemQueryData(ctx, gemEntry); err == nil {
+			gemPropID = gemData.GemProperties
+		} else if cdb != nil {
+			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(GemProperties, 0) FROM item_template WHERE entry = ?", gemEntry).Scan(&gemPropID)
+		}
+
+		if s.server.Data != nil {
+			if gp, ok, _ := s.server.Data.GemProperties(gemPropID); ok {
+				gemEnchants[i] = gp.EnchantID
+				gemColors[i] = gp.Type
+			}
+		}
+		if gemEnchants[i] == 0 && gemPropID != 0 {
+			gemEnchants[i] = gemPropID
+			gemColors[i] = 14 // match red/yellow/blue by default
+		}
+	}
+
+	// Parse existing 36 ints from enchantments column
+	fields := strings.Fields(currentEnchants)
+	var enchants [36]uint32
+	for i := 0; i < len(fields) && i < 36; i++ {
+		if val, err := strconv.ParseUint(fields[i], 10, 32); err == nil {
+			enchants[i] = uint32(val)
+		}
+	}
+
+	// Slot 2: Sock 1 (index 6)
+	// Slot 3: Sock 2 (index 9)
+	// Slot 4: Sock 3 (index 12)
+	if gemEnchants[0] != 0 {
+		enchants[6] = gemEnchants[0]
+	}
+	if gemEnchants[1] != 0 {
+		enchants[9] = gemEnchants[1]
+	}
+	if gemEnchants[2] != 0 {
+		enchants[12] = gemEnchants[2]
+	}
+
+	// Check socket bonus match
+	bonusMatches := true
+	hasAnySocket := false
+	for i := 0; i < 3; i++ {
+		sockColor := targetSockets[i]
+		if sockColor == 0 {
+			continue
+		}
+		hasAnySocket = true
+		gColor := gemColors[i]
+		if gColor == 0 || (gColor&sockColor) == 0 {
+			bonusMatches = false
+			break
+		}
+	}
+
+	var activeBonus uint32
+	if hasAnySocket && bonusMatches && targetSocketBonus != 0 {
+		activeBonus = targetSocketBonus
+	}
+	enchants[15] = activeBonus
+
+	// Serialize updated enchantments
+	encParts := make([]string, 36)
+	for i := 0; i < 36; i++ {
+		encParts[i] = strconv.FormatUint(uint64(enchants[i]), 10)
+	}
+	newEncStr := strings.Join(encParts, " ")
+	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET enchantments = ? WHERE guid = ?", newEncStr, rawTargetGUID)
+
+	// Consume the socketed gems
 	for _, gemGUID := range gemGUIDs {
 		if gemGUID != 0 {
 			rawGemGUID := gemGUID & 0x0000FFFFFFFFFFFF
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", rawGemGUID, s.playerGUID)
 			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", rawGemGUID)
 		}
+	}
+
+	// Send SMSG_SOCKET_GEMS_RESULT (0x50B)
+	resBuf := protocol.NewBuffer(24)
+	resBuf.WriteU64(itemGUID)
+	resBuf.WriteU32(enchants[6])
+	resBuf.WriteU32(enchants[9])
+	resBuf.WriteU32(enchants[12])
+	resBuf.WriteU32(enchants[15])
+	_ = s.write(uint16(protocol.OpcodeSMSG_SOCKET_GEMS_RESULT), resBuf.Bytes(), true)
+
+	if targetBag == 0 && targetSlot < equipSlotEnd {
+		s.syncEquipmentCache(ctx)
 	}
 	_ = s.sendInventoryItems(ctx)
 	return true

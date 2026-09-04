@@ -704,3 +704,122 @@ func TestInventoryTwoItemSwapAndEquipParity(t *testing.T) {
 		t.Fatalf("expected 1H sword (5001) equipped to slot 15 via high GUID, got slot %d", swordSlot)
 	}
 }
+
+func TestHandleSocketGemsParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY(guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, count INTEGER, enchantments TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, name TEXT, InventoryType INTEGER, ContainerSlots INTEGER, BuyPrice INTEGER, socketColor_1 INTEGER, socketColor_2 INTEGER, socketColor_3 INTEGER, socketBonus INTEGER, GemProperties INTEGER)",
+		"INSERT INTO characters VALUES (1, '')",
+		// Target helm with 3 sockets (Red=2, Yellow=4, Blue=8, Bonus=3333)
+		"INSERT INTO item_template VALUES (100, 'Socketed Helm', 1, 0, 100, 2, 4, 8, 3333, 0)",
+		// 3 gems
+		"INSERT INTO item_template VALUES (201, 'Red Gem', 0, 0, 50, 0, 0, 0, 0, 3001)",
+		"INSERT INTO item_template VALUES (202, 'Yellow Gem', 0, 0, 50, 0, 0, 0, 0, 3002)",
+		"INSERT INTO item_template VALUES (203, 'Blue Gem', 0, 0, 50, 0, 0, 0, 0, 3003)",
+		// Target item in slot 0 (head)
+		"INSERT INTO item_instance VALUES (500, 100, 1, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 0, 500)",
+		// Gems in backpack (slots 23, 24, 25)
+		"INSERT INTO item_instance VALUES (501, 201, 1, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 501)",
+		"INSERT INTO item_instance VALUES (502, 202, 1, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 24, 502)",
+		"INSERT INTO item_instance VALUES (503, 203, 1, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 25, 503)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	c, s := net.Pipe()
+	defer c.Close()
+	defer s.Close()
+
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: charStore, WorldStore: charStore}
+	sess := &session{server: srv, conn: s, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1}}
+
+	pChan := make(chan []byte, 4)
+	opChan := make(chan uint16, 4)
+	go func() {
+		for {
+			op, data, err := readServerFrame(c, nil)
+			if err != nil {
+				return
+			}
+			opChan <- op
+			pChan <- data
+		}
+	}()
+
+	// Build CMSG_SOCKET_GEMS: target item 500, gems [501, 502, 503]
+	sockBuf := protocol.NewBuffer(32)
+	sockBuf.WriteU64(500)
+	sockBuf.WriteU64(501)
+	sockBuf.WriteU64(502)
+	sockBuf.WriteU64(503)
+
+	if !sess.handleSocketGems(context.Background(), sockBuf.Bytes()) {
+		t.Fatal("handleSocketGems failed")
+	}
+
+	// 1. Verify SMSG_SOCKET_GEMS_RESULT
+	var op uint16
+	var data []byte
+	select {
+	case op = <-opChan:
+		data = <-pChan
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for SMSG_SOCKET_GEMS_RESULT")
+	}
+
+	if op != uint16(protocol.OpcodeSMSG_SOCKET_GEMS_RESULT) {
+		t.Fatalf("expected SMSG_SOCKET_GEMS_RESULT (0x50B), got 0x%04X", op)
+	}
+
+	r := protocol.NewReader(data)
+	resGUID, _ := r.ReadU64()
+	e1, _ := r.ReadU32()
+	e2, _ := r.ReadU32()
+	e3, _ := r.ReadU32()
+	bonus, _ := r.ReadU32()
+
+	if resGUID != 500 || e1 != 3001 || e2 != 3002 || e3 != 3003 || bonus != 3333 {
+		t.Fatalf("unexpected SMSG_SOCKET_GEMS_RESULT: guid=%d e1=%d e2=%d e3=%d bonus=%d",
+			resGUID, e1, e2, e3, bonus)
+	}
+
+	// 2. Verify DB item_instance enchantments string
+	var encStr string
+	if err := db.QueryRow("SELECT enchantments FROM item_instance WHERE guid = 500").Scan(&encStr); err != nil {
+		t.Fatal(err)
+	}
+	encFields := strings.Fields(encStr)
+	if len(encFields) != 36 {
+		t.Fatalf("expected 36 enchantment fields, got %d: %s", len(encFields), encStr)
+	}
+	if encFields[6] != "3001" || encFields[9] != "3002" || encFields[12] != "3003" || encFields[15] != "3333" {
+		t.Fatalf("unexpected enchantments in DB: %s", encStr)
+	}
+
+	// 3. Verify gems were deleted
+	var count int
+	_ = db.QueryRow("SELECT count(*) FROM item_instance WHERE guid IN (501, 502, 503)").Scan(&count)
+	if count != 0 {
+		t.Fatalf("expected socketed gems deleted from item_instance, found %d", count)
+	}
+	_ = db.QueryRow("SELECT count(*) FROM character_inventory WHERE item IN (501, 502, 503)").Scan(&count)
+	if count != 0 {
+		t.Fatalf("expected socketed gems deleted from character_inventory, found %d", count)
+	}
+}

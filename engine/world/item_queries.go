@@ -146,6 +146,9 @@ func itemQueryColumns() []string {
 
 func (s *session) loadItemQueryData(ctx context.Context, entry uint32) (itemQueryData, error) {
 	var data itemQueryData
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return data, errors.New("world store unavailable")
+	}
 	var class, subclass, sound, display, quality, flags, flags2, buyPrice, sellPrice, inventoryType, allowableClass, allowableRace, itemLevel, requiredLevel, requiredSkill, requiredSkillRank, requiredSpell, requiredHonorRank, requiredCityRank, requiredReputationFaction, requiredReputationRank, maxCount, stackable, containerSlots, statsCount int64
 	var name, description string
 	statTypes := make([]int64, itemStats)
