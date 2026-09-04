@@ -377,6 +377,9 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			reactionBuf.WriteU64(petGUID)
 			reactionBuf.WriteU32(aiReactionHostile)
 			_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), true)
+			if s.server != nil {
+				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), s)
+			}
 			s.debug("pet attack command", "account", s.accountName, "pet", petGUID, "target", targetGUID)
 		case commandFollow:
 			s.debug("pet follow command", "account", s.accountName, "pet", petGUID)
@@ -403,6 +406,18 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			reactionBuf.WriteU64(petGUID)
 			reactionBuf.WriteU32(aiReactionHostile)
 			_ = s.write(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), true)
+			if s.server != nil {
+				s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AI_REACTION), reactionBuf.Bytes(), s)
+			}
+			if spellOrAction != 0 {
+				castTimeStamp := uint32(time.Now().UnixMilli())
+				spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+				goPkt := protocol.BuildSpellGo(petGUID, petGUID, 1, spellOrAction, spellCastFlagGo, castTimeStamp, []uint64{targetGUID}, nil, spellTarget)
+				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+				if s.server != nil {
+					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+				}
+			}
 		}
 		s.debug("pet cast spell action", "account", s.accountName, "pet", petGUID, "spell", spellOrAction, "target", targetGUID)
 	}
@@ -429,9 +444,37 @@ func (s *session) handlePetCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	petGUID, _ := r.ReadU64()
-	castCount, _ := r.ReadU8()
-	spellID, _ := r.ReadU32()
+	petGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	castCount, err := r.ReadU8()
+	if err != nil {
+		return false
+	}
+	spellID, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	castFlags, _ := r.ReadU8()
+	target, _ := protocol.ReadSpellTargetData(r)
+	if castFlags&0x02 != 0 {
+		_, _ = r.ReadF32()
+		_, _ = r.ReadF32()
+	}
+
+	if spellID > 0 {
+		castTimeStamp := uint32(time.Now().UnixMilli())
+		var hitTargets []uint64
+		if target.UnitGUID != 0 {
+			hitTargets = []uint64{target.UnitGUID}
+		}
+		goPkt := protocol.BuildSpellGo(petGUID, petGUID, castCount, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, target)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+		}
+	}
 	s.debug("pet cast spell", "account", s.accountName, "pet", petGUID, "spell", spellID, "castCount", castCount)
 	return true
 }
@@ -553,6 +596,16 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 		aType := uint8((data >> 24) & 0xFF)
 		aAction := data & 0x00FFFFFF
 		slots[pos] = actionSlot{actType: aType, action: aAction}
+
+		// Synchronize pet_spell table when spell action buttons change active state
+		petNumber := uint32(petGUID & 0xFFFFFFFF)
+		if aAction > 0 && petNumber > 0 {
+			if aType == 0xC1 { // ACT_ENABLED (autocast enabled)
+				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 1 WHERE guid = ? AND spell = ?", petNumber, aAction)
+			} else if aType == 0x81 { // ACT_DISABLED (autocast disabled)
+				_, _ = cdb.ExecContext(ctx, "UPDATE pet_spell SET active = 0 WHERE guid = ? AND spell = ?", petNumber, aAction)
+			}
+		}
 	}
 
 	var sb strings.Builder
@@ -569,8 +622,49 @@ func (s *session) handlePetSetAction(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// handlePetSpellAutocast processes CMSG_PET_SPELL_AUTOCAST (0x1F3).
-// Reference: WorldSession::HandlePetSpellAutocastOpcode (PetHandler.cpp:365).
+// syncPetSpellAutocast updates pet_spell.active and synchronizes the action bar slot in character_pet.abdata.
+func (s *session) syncPetSpellAutocast(ctx context.Context, petID uint32, spellID uint32, active uint8) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || petID == 0 || spellID == 0 {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+
+	// Update pet_spell table
+	res, err := cdb.ExecContext(ctx, "UPDATE pet_spell SET active = ? WHERE guid = ? AND spell = ?", active, petID, spellID)
+	if err == nil {
+		if rows, _ := res.RowsAffected(); rows == 0 {
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petID, spellID, active)
+		}
+	}
+
+	// Update abdata if pet is currently active (slot = 0)
+	var abdata string
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(abdata, '') FROM character_pet WHERE owner = ? AND id = ? AND slot = 0", s.playerGUID, petID).Scan(&abdata)
+	if abdata != "" {
+		tokens := strings.Fields(abdata)
+		if len(tokens) == 20 {
+			changed := false
+			for i := 0; i < 10; i++ {
+				action, _ := strconv.ParseUint(tokens[i*2+1], 10, 32)
+				if uint32(action) == spellID {
+					newType := uint8(0x81) // ACT_DISABLED
+					if active != 0 {
+						newType = 0xC1 // ACT_ENABLED
+					}
+					tokens[i*2] = strconv.FormatUint(uint64(newType), 10)
+					changed = true
+				}
+			}
+			if changed {
+				newAbdata := strings.Join(tokens, " ")
+				_, _ = cdb.ExecContext(ctx, "UPDATE character_pet SET abdata = ? WHERE owner = ? AND id = ?", newAbdata, s.playerGUID, petID)
+			}
+		}
+	}
+}
+
+// handlePetSpellAutocast processes CMSG_PET_SPELL_AUTOCAST (0x2F3).
+// Reference: WorldSession::HandlePetSpellAutocastOpcode (PetHandler.cpp:694).
 func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bool {
 	if len(payload) < 13 {
 		return true
@@ -589,14 +683,7 @@ func (s *session) handlePetSpellAutocast(ctx context.Context, payload []byte) bo
 		return false
 	}
 	petNumber := uint32(petGUID & 0xFFFFFFFF)
-	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		res, execErr := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE pet_spell SET active = ? WHERE guid = ? AND spell = ?", state, petNumber, spellID)
-		if execErr == nil {
-			if rows, _ := res.RowsAffected(); rows == 0 {
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "INSERT INTO pet_spell (guid, spell, active) VALUES (?, ?, ?)", petNumber, spellID, state)
-			}
-		}
-	}
+	s.syncPetSpellAutocast(ctx, petNumber, spellID, state)
 	s.debug("pet spell autocast", "account", s.accountName, "pet", petNumber, "spell", spellID, "state", state)
 	return true
 }
