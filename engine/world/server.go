@@ -138,6 +138,8 @@ type session struct {
 	afkReporters       map[uint64]struct{}
 	targetGlyphSlot    uint8
 	activeCast         *activeCastState
+	summonExpire       time.Time
+	summonerGUID       uint64
 	activeChannel      *activeChannelState
 	castMu             sync.Mutex
 	pendingBindInstanceID uint64
