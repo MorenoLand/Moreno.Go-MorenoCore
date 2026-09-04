@@ -27,3 +27,22 @@ func BuildChatMessageWithOptions(chatType uint8, language uint32, senderGUID, re
 func BuildSystemChatMessage(message string) []byte {
 	return BuildChatMessage(0, 0, 0, 0, message, "")
 }
+
+// BuildMonsterChatMessage builds an SMSG_MESSAGECHAT payload for monster speech
+// (say, yell, whisper, emote, boss emote).
+// Reference: TrinityCore Chat.cpp:203-220.
+func BuildMonsterChatMessage(chatType uint8, language uint32, senderGUID uint64, senderName, message string) []byte {
+	packet := NewBuffer(48 + len(senderName) + len(message))
+	packet.WriteU8(chatType)
+	packet.WriteU32(language)
+	packet.WriteU64(senderGUID)
+	packet.WriteU32(0)
+	packet.WriteU32(uint32(len(senderName) + 1))
+	packet.WriteCString(senderName)
+	packet.WriteU64(0)
+	packet.WriteU32(uint32(len(message) + 1))
+	packet.WriteCString(message)
+	packet.WriteU8(0)
+	return packet.Bytes()
+}
+

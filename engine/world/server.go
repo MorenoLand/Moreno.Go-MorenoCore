@@ -72,6 +72,7 @@ type Server struct {
 	spiritWaveMu      sync.Mutex
 	lastSpiritWave    time.Time
 	spiritReviveQueue map[uint64]uint64 // playerGUID -> spiritGuideGUID
+	creatureTextMgr   *creatureTextMgr
 }
 
 type session struct {
