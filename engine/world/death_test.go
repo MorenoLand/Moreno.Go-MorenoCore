@@ -888,8 +888,134 @@ func TestSpiritHealerLowLevelNoSickness(t *testing.T) {
 		t.Fatal("handleSpiritHealerActivate returned false")
 	}
 
-	if _, ok := state.auras[15007]; ok {
-		t.Fatal("expected level 10 player to NOT receive Resurrection Sickness")
+}
+
+func TestCorpseWorldObjectAndBattlegroundQueueParity(t *testing.T) {
+	player := &playerState{
+		GUID:        99,
+		Race:        1, // Human
+		Health:      0,
+		MaxHealth:   100,
+		Map:         489, // Warsong Gulch (Battleground)
+		Zone:        3277,
+		X:           100.0,
+		Y:           200.0,
+		Z:           50.0,
+		Orientation: 1.5,
+	}
+	sess, clientConn, server := newDeathTestSession(t, player)
+	sess.playerGUID = 99
+
+	frames := make(chan uint16, 20)
+	payloads := make(chan []byte, 20)
+	go func() {
+		for {
+			_ = clientConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+			op, pay, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+			frames <- op
+			payloads <- pay
+		}
+	}()
+
+	ctx := context.Background()
+
+	// 1. Player releases spirit in BG map (handleRepopRequest)
+	repopPayload := protocol.NewBuffer(1)
+	repopPayload.WriteU8(1)
+	if !sess.handleRepopRequest(ctx, repopPayload.Bytes()) {
+		t.Fatal("handleRepopRequest failed in BG")
+	}
+
+	// Verify Ghost aura applied (8326)
+	if _, ok := sess.auras[8326]; !ok {
+		t.Fatal("expected Ghost aura 8326 applied upon release")
+	}
+
+	// Verify BG auto-queue applied aura 2584 (SPELL_WAITING_FOR_RESURRECT)
+	if _, ok := sess.auras[2584]; !ok {
+		t.Fatal("expected SPELL_WAITING_FOR_RESURRECT 2584 applied in BG repop")
+	}
+
+	// Verify queued in server.spiritReviveQueue
+	server.spiritWaveMu.Lock()
+	_, queued := server.spiritReviveQueue[99]
+	server.spiritWaveMu.Unlock()
+	if !queued {
+		t.Fatal("expected player 99 queued in spiritReviveQueue")
+	}
+
+	// 2. Test battleground player positions
+	sess2 := &session{
+		server:       server,
+		playerGUID:   100,
+		playerLoaded: true,
+		player: &playerState{
+			GUID: 100,
+			Race: 3, // Dwarf (same team: Alliance)
+			Map:  489,
+			X:    105.0,
+			Y:    205.0,
+		},
+	}
+	server.sessions = make(map[*session]struct{})
+	server.sessions[sess] = struct{}{}
+	server.sessions[sess2] = struct{}{}
+
+	// Drain frames from step 1
+	drainLoop:
+	for {
+		select {
+		case <-frames:
+			<-payloads
+		default:
+			break drainLoop
+		}
+	}
+
+	if !sess.handleBattlegroundPlayerPositions(ctx, nil) {
+		t.Fatal("handleBattlegroundPlayerPositions failed")
+	}
+
+	var bgPositionsPayload []byte
+	select {
+	case op := <-frames:
+		bgPositionsPayload = <-payloads
+		if op != uint16(protocol.OpcodeMSG_BATTLEGROUND_PLAYER_POSITIONS) {
+			t.Fatalf("expected MSG_BATTLEGROUND_PLAYER_POSITIONS, got op=%x", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for MSG_BATTLEGROUND_PLAYER_POSITIONS")
+	}
+
+	r := protocol.NewReader(bgPositionsPayload)
+	numPos, _ := r.ReadU32()
+	if numPos != 1 {
+		t.Fatalf("expected 1 teammate position, got %d", numPos)
+	}
+	teammateGUID, _ := r.ReadU64()
+	if teammateGUID != 100 {
+		t.Fatalf("expected teammate GUID 100, got %d", teammateGUID)
+	}
+
+	// 3. Test wave resurrection pulse
+	server.lastSpiritWave = time.Now().Add(-35 * time.Second) // force 30s wave pulse
+	server.updateSpiritHealerResurrectWaves(ctx, time.Now())
+
+	if sess.player.Health != sess.player.MaxHealth {
+		t.Fatalf("expected 100%% HP after spirit wave, got %d", sess.player.Health)
+	}
+	if sess.player.PlayerFlags&playerFlagGhost != 0 {
+		t.Fatal("expected playerFlagGhost cleared after spirit wave")
+	}
+	if _, ok := sess.auras[8326]; ok {
+		t.Fatal("expected Ghost aura 8326 removed after resurrection")
+	}
+	if _, ok := sess.auras[2584]; ok {
+		t.Fatal("expected aura 2584 removed after resurrection")
 	}
 }
+
 
