@@ -143,6 +143,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	s.player.Money -= deposit
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
+	s.despawnItem(itemGUID)
 	now := time.Now().Unix()
 	expire := now + int64(etime*60)
 	var nextID int64

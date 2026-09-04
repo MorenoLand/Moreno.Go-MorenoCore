@@ -176,13 +176,17 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	if motion != nil && motion.Health > 0 {
 		if !motion.InCombat {
 			s.broadcastAIReaction(motion.Map, creatureGUID, 2) // AI_REACTION_HOSTILE
+			startPkt := buildAttackStart(creatureGUID, playerGUID)
+			if playerSess := s.findSessionByGUID(playerGUID); playerSess != nil {
+				_ = playerSess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
+				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, playerSess)
+			} else {
+				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
+			}
 		}
 		motion.TargetGUID = playerGUID
 		motion.InCombat = true
 		motion.Moving = false
-		if motion.LastAttack.IsZero() {
-			motion.LastAttack = time.Now()
-		}
 	}
 }
 
@@ -335,17 +339,48 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		// If target left map, logged out, dead, or turned on GM mode: drop combat
 		if target == nil || target.IsDead || target.IsGM {
+			stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
+			if target != nil && target.Sess != nil {
+				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, target.Sess)
+			} else {
+				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+			}
 			motion.InCombat = false
 			motion.TargetGUID = 0
+			motion.Health = motion.MaxHealth
+			s.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{
+				unitFieldHealth: motion.MaxHealth,
+			})
 			motion.Moving = false
 			return
 		}
 		dist := float32(math.Hypot(float64(target.X-motion.X), float64(target.Y-motion.Y)))
 		if dist > 45.0 {
-			// Evade / drop combat if player ran too far
+			// Evade / drop combat if player ran too far: reset health, stop attack, and run back home
+			stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
+			if target.Sess != nil {
+				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
+				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, target.Sess)
+			} else {
+				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+			}
 			motion.InCombat = false
 			motion.TargetGUID = 0
-			motion.Moving = false
+			motion.Health = motion.MaxHealth
+			s.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{
+				unitFieldHealth: motion.MaxHealth,
+			})
+			homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
+			duration := uint32((homeDist / motion.RunSpeed) * 1000)
+			if duration < 500 {
+				duration = 500
+			}
+			s.broadcastMonsterMove(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration)
+			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+			motion.Moving = true
+			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+			motion.WaitUntil = motion.MoveEnds
 			return
 		}
 
@@ -421,7 +456,6 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
 				motion.Moving = true
 				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
-				motion.LastAttack = motion.MoveEnds
 			}
 			return
 		}
@@ -434,10 +468,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if attackTime <= 0 {
 			attackTime = 2 * time.Second
 		}
-		if motion.LastAttack.IsZero() {
-			motion.LastAttack = now
-		}
-		if now.Sub(motion.LastAttack) >= attackTime {
+		if motion.LastAttack.IsZero() || now.Sub(motion.LastAttack) >= attackTime {
 			lvl := float64(motion.Level)
 			if lvl < 1 {
 				lvl = 1
@@ -482,7 +513,11 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if target.Sess.player != nil && target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
 				target.Sess.player.UnitFlags |= unitFlagInCombat
 			}
-			_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), buildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill), true)
+			asuPkt := buildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill)
+			_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, true)
+			if s != nil {
+				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, target.Sess)
+			}
 			target.Sess.sendPlayerUpdate()
 			motion.LastAttack = now
 		}
@@ -506,7 +541,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				p.Sess.player.UnitFlags |= unitFlagInCombat
 				p.Sess.sendPlayerUpdate()
 			}
-			_ = p.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, p.GUID), true)
+			startPkt := buildAttackStart(motion.GUID, p.GUID)
+			_ = p.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
+			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, p.Sess)
 			return
 		}
 	}
