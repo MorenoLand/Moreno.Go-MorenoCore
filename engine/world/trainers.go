@@ -85,6 +85,10 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 				serviceState = 2 // Already Known
 			} else if s.player.Level < uint8(reqLevel) {
 				serviceState = 1 // Not Available
+			} else if reqSkill > 0 && s.getSkillValue(uint32(reqSkill)) < uint32(reqSkillValue) {
+				serviceState = 1 // Not Available
+			} else if reqAb1 > 0 && !s.hasLearnedSpell(uint32(reqAb1)) {
+				serviceState = 1 // Not Available
 			}
 			spells = append(spells, trainerSpellRecord{
 				SpellID:       uint32(spellID),
@@ -116,6 +120,8 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 				if s.hasLearnedSpell(uint32(spellID)) {
 					serviceState = 2
 				} else if s.player.Level < uint8(reqLevel) {
+					serviceState = 1
+				} else if reqSkill > 0 && s.getSkillValue(uint32(reqSkill)) < uint32(reqSkillValue) {
 					serviceState = 1
 				}
 				spells = append(spells, trainerSpellRecord{
@@ -155,6 +161,10 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 				if s.hasLearnedSpell(uint32(spellID)) {
 					serviceState = 2 // Already Known
 				} else if s.player.Level < uint8(reqLevel) {
+					serviceState = 1 // Not Available
+				} else if reqSkill > 0 && s.getSkillValue(uint32(reqSkill)) < uint32(reqSkillValue) {
+					serviceState = 1 // Not Available
+				} else if reqAb1 > 0 && !s.hasLearnedSpell(uint32(reqAb1)) {
 					serviceState = 1 // Not Available
 				}
 				spells = append(spells, trainerSpellRecord{
@@ -228,13 +238,14 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry)
 	}
 
-	var moneyCost, reqLevel, tType, tReq int64
-	err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0), COALESCE(t.Type, 0), COALESCE(t.Requirement, 0)
+	var moneyCost, reqLevel, tType, tReq, reqSkill, reqSkillValue, reqSpell1 int64
+	err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0), COALESCE(t.Type, 0), COALESCE(t.Requirement, 0),
+		COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqAbility1, 0)
 		FROM trainer_spell AS ts
 		LEFT JOIN trainer AS t ON t.Id = ts.TrainerId
 		WHERE (ts.TrainerId IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
 		   OR ts.TrainerId = ?) AND ts.SpellId = ? LIMIT 1`,
-		creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel, &tType, &tReq)
+		creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel, &tType, &tReq, &reqSkill, &reqSkillValue, &reqSpell1)
 	if err == nil {
 		if tType == 0 && tReq != 0 && tReq != int64(s.player.Class) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true)
@@ -246,11 +257,12 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		}
 	} else if s.player != nil && s.player.Class > 0 {
 		// Fallback to class trainer only for player's own class
-		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0)
+		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0),
+			COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqAbility1, 0)
 			FROM trainer_spell AS ts
 			JOIN trainer AS t ON t.Id = ts.TrainerId
 			WHERE t.Type = 0 AND t.Requirement = ? AND ts.SpellId = ? LIMIT 1`,
-			s.player.Class, spellID).Scan(&moneyCost, &reqLevel)
+			s.player.Class, spellID).Scan(&moneyCost, &reqLevel, &reqSkill, &reqSkillValue, &reqSpell1)
 	}
 	if err != nil {
 		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true)
@@ -265,20 +277,167 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true) // NotEnoughSkill = 2
 		return true
 	}
+	if reqSkill > 0 && s.getSkillValue(uint32(reqSkill)) < uint32(reqSkillValue) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
+		return true
+	}
+	if reqSpell1 > 0 && !s.hasLearnedSpell(uint32(reqSpell1)) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
+		return true
+	}
+
 	s.player.Money -= uint32(moneyCost)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-	_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
-	s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: true, Disabled: false})
+
+	// 1. Play visual on trainer NPC (TC: npc->SendPlaySpellVisual(179))
+	visualBuf := protocol.NewBuffer(12)
+	visualBuf.WriteU64(trainerGUID)
+	visualBuf.WriteU32(179) // SpellVisualKit 179: Trainer Teach
+	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), visualBuf.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), visualBuf.Bytes(), s)
+	}
+
+	// 2. Play impact on player with sound chime (TC: npc->SendPlaySpellImpact(player->GetGUID(), 362))
+	impactBuf := protocol.NewBuffer(12)
+	impactBuf.WriteU64(s.playerGUID)
+	impactBuf.WriteU32(362) // SpellVisualKit 362: Spell Learn Chime & Impact
+	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), s)
+	}
+
+	// 3. Learn the spell and handle skill upgrades
+	s.learnSpell(ctx, spellID)
+
+	// 4. Check spell_learn_spell for dependent spells (e.g. Find Herbs, Smelting, Campfire, etc.)
+	var depSpells []uint32
+	depRows, dErr := wdb.QueryContext(ctx, "SELECT SpellID FROM spell_learn_spell WHERE entry = ?", spellID)
+	if dErr == nil {
+		for depRows.Next() {
+			var depSpell uint32
+			if err := depRows.Scan(&depSpell); err == nil && depSpell > 0 {
+				depSpells = append(depSpells, depSpell)
+			}
+		}
+		_ = depRows.Close()
+	}
+	for _, depSpell := range depSpells {
+		if !s.hasLearnedSpell(depSpell) {
+			s.learnSpell(ctx, depSpell)
+		}
+	}
+
+	// 5. Send teach succeeded (TC: SendTeachSucceeded(npc, player, spellId))
 	_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_SUCCEEDED), buildTrainerBuySucceeded(trainerGUID, spellID), true)
-	// TrinityCore Player::LearnSpell sends SMSG_LEARNED_SPELL (0x12B)
-	learnedBuf := protocol.NewBuffer(6)
-	learnedBuf.WriteU32(spellID)
-	learnedBuf.WriteU16(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), learnedBuf.Bytes(), true)
 	s.sendPlayerUpdate()
 	_ = s.sendTrainerList(ctx, trainerGUID)
 	s.debug("trainer spell learned", "account", s.accountName, "spell", spellID, "cost", moneyCost)
 	return true
+}
+
+func (s *session) learnSpell(ctx context.Context, spellID uint32) {
+	if s.hasLearnedSpell(spellID) {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
+	}
+	s.player.Spells = append(s.player.Spells, learnedSpell{ID: spellID, Active: true, Disabled: false})
+
+	learnedBuf := protocol.NewBuffer(6)
+	learnedBuf.WriteU32(spellID)
+	learnedBuf.WriteU16(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), learnedBuf.Bytes(), true)
+
+	// Check if spell teaches or upgrades a skill (SPELL_EFFECT_LEARN_SKILL = 118)
+	if s.server != nil && s.server.Data != nil {
+		if sp, ok, err := s.server.Data.Spell(spellID); err == nil && ok {
+			for _, eff := range sp.Effects {
+				if eff.Effect == 118 && eff.MiscValue > 0 { // SPELL_EFFECT_LEARN_SKILL
+					skillID := uint16(eff.MiscValue)
+					tierIdx := eff.BasePoints + 1 // 1=Apprentice, 2=Journeyman, 3=Expert, 4=Artisan, 5=Master, 6=Grand Master
+					var maxVal uint16
+					switch tierIdx {
+					case 1:
+						maxVal = 75
+					case 2:
+						maxVal = 150
+					case 3:
+						maxVal = 225
+					case 4:
+						maxVal = 300
+					case 5:
+						maxVal = 375
+					case 6:
+						maxVal = 450
+					default:
+						if tierIdx > 0 {
+							maxVal = uint16(tierIdx * 75)
+						} else {
+							maxVal = 75
+						}
+					}
+					s.setOrUpdateSkill(ctx, skillID, maxVal)
+				}
+			}
+		}
+	}
+}
+
+func (s *session) setOrUpdateSkill(ctx context.Context, skillID, maxVal uint16) {
+	if s.player == nil {
+		return
+	}
+	found := false
+	for i := range s.player.Skills {
+		if s.player.Skills[i].Skill == skillID {
+			found = true
+			if s.player.Skills[i].Max < maxVal {
+				s.player.Skills[i].Max = maxVal
+			}
+			if s.player.Skills[i].Value < 1 {
+				s.player.Skills[i].Value = 1
+			}
+			if skillID == 762 { // Riding reaches max value immediately
+				s.player.Skills[i].Value = maxVal
+			}
+			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", s.player.Skills[i].Value, s.player.Skills[i].Max, s.playerGUID, skillID)
+			}
+			break
+		}
+	}
+	if !found {
+		val := uint16(1)
+		if skillID == 762 { // Riding starts at max
+			val = maxVal
+		}
+		newSk := playerSkill{
+			Skill: skillID,
+			Step:  1,
+			Value: val,
+			Max:   maxVal,
+			Bonus: 0,
+		}
+		s.player.Skills = append(s.player.Skills, newSk)
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_skills (guid, skill, value, max) VALUES (?, ?, ?, ?)", s.playerGUID, skillID, val, maxVal)
+		}
+	}
+}
+
+func (s *session) getSkillValue(skillID uint32) uint32 {
+	if s.player == nil {
+		return 0
+	}
+	for _, sk := range s.player.Skills {
+		if uint32(sk.Skill) == skillID {
+			return uint32(sk.Value)
+		}
+	}
+	return 0
 }
 
 func (s *session) hasLearnedSpell(spellID uint32) bool {
