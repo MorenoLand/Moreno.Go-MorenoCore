@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math/rand"
 	"sync/atomic"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -929,19 +930,70 @@ func (s *session) handleResetInstances(ctx context.Context, payload []byte) bool
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+
 	if s.groupID != 0 && s.server != nil {
 		grp := s.server.findGroupByID(s.groupID)
-		if grp != nil && grp.LeaderGUID != s.playerGUID {
-			buf := protocol.NewBuffer(8)
-			buf.WriteU32(2) // RESET_FAILED_NOT_LEADER
-			buf.WriteU32(0) // mapid
-			_ = s.write(uint16(protocol.OpcodeSMSG_RESET_FAILED_NOTIFY), buf.Bytes(), true)
+		if grp != nil {
+			if grp.LeaderGUID != s.playerGUID {
+				// Non-leader in group cannot reset instances (matches TC HandleResetInstancesOpcode)
+				return true
+			}
+			// Check if any group member is currently inside an instance/dungeon
+			groupSessions := s.server.getGroupSessions(s.groupID)
+			for _, memSess := range groupSessions {
+				if memSess != nil && memSess.playerLoaded && memSess.player != nil {
+					if s.isDungeonMap(memSess.player.Map) {
+						// Group member is inside the instance: fail reset
+						failBuf := protocol.NewBuffer(8)
+						failBuf.WriteU32(0) // reason 0: players inside instance
+						failBuf.WriteU32(memSess.player.Map)
+						_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET_FAILED), failBuf.Bytes(), true)
+
+						notifyBuf := protocol.NewBuffer(4)
+						notifyBuf.WriteU32(memSess.player.Map)
+						_ = memSess.write(uint16(protocol.OpcodeSMSG_RESET_FAILED_NOTIFY), notifyBuf.Bytes(), true)
+						return true
+					}
+				}
+			}
+
+			// Clean up non-permanent instance bindings for group members in DB
+			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				cdb := s.server.CharactersStore.DB
+				for _, mem := range grp.Members {
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND permanent = 0", mem.GUID)
+				}
+			}
+
+			// Broadcast SMSG_INSTANCE_RESET to all group members
+			resetBuf := protocol.NewBuffer(4)
+			resetBuf.WriteU32(0)
+			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes())
 			return true
 		}
 	}
-	buf := protocol.NewBuffer(4)
-	buf.WriteU32(0) // success for map 0 / all
-	_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), buf.Bytes(), true)
+
+	// Solo player path
+	if s.isDungeonMap(s.player.Map) {
+		failBuf := protocol.NewBuffer(8)
+		failBuf.WriteU32(0) // reason 0: players inside instance
+		failBuf.WriteU32(s.player.Map)
+		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET_FAILED), failBuf.Bytes(), true)
+
+		notifyBuf := protocol.NewBuffer(4)
+		notifyBuf.WriteU32(s.player.Map)
+		_ = s.write(uint16(protocol.OpcodeSMSG_RESET_FAILED_NOTIFY), notifyBuf.Bytes(), true)
+		return true
+	}
+
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		cdb := s.server.CharactersStore.DB
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND permanent = 0", s.playerGUID)
+	}
+
+	resetBuf := protocol.NewBuffer(4)
+	resetBuf.WriteU32(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_RESET), resetBuf.Bytes(), true)
 	return true
 }
 
@@ -1019,47 +1071,149 @@ func (s *session) handleSetRaidDifficulty(ctx context.Context, payload []byte) b
 	return true
 }
 
+func (s *session) isDungeonMap(mapID uint32) bool {
+	if s.server != nil && s.server.Data != nil {
+		if m, ok, err := s.server.Data.Map(mapID); ok && err == nil {
+			return m.IsDungeon()
+		}
+	}
+	// Fallback when DBC is not loaded (continents: 0 Eastern Kingdoms, 1 Kalimdor, 530 Outland, 571 Northrend)
+	return mapID != 0 && mapID != 1 && mapID != 530 && mapID != 571
+}
+
+func (s *session) hasPendingBind() bool {
+	return s.pendingBindInstanceID != 0 || s.pendingBindMapID != 0
+}
+
+func (s *session) setPendingBind(instanceID uint64, mapID, diff, timer uint32) {
+	s.pendingBindInstanceID = instanceID
+	s.pendingBindMapID = mapID
+	s.pendingBindDiff = diff
+	s.pendingBindTimer = timer
+}
+
+func (s *session) sendInstanceLockWarningQuery(timeRemainingMs, completedEncounterMask uint32, extend uint8) {
+	buf := protocol.NewBuffer(9)
+	buf.WriteU32(timeRemainingMs)
+	buf.WriteU32(completedEncounterMask)
+	buf.WriteU8(extend)
+	_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_LOCK_WARNING_QUERY), buf.Bytes(), true)
+}
+
+func (s *session) sendCalendarRaidLockout(mapID, difficulty uint32, resetTimeSec uint32, instanceID uint64, add bool) {
+	currTime := time.Now()
+	op := uint16(protocol.OpcodeSMSG_CALENDAR_RAID_LOCKOUT_REMOVED)
+	cap := 20
+	if add {
+		op = uint16(protocol.OpcodeSMSG_CALENDAR_RAID_LOCKOUT_ADDED)
+		cap = 24
+	}
+	buf := protocol.NewBuffer(cap)
+	if add {
+		buf.WritePackedTime(currTime)
+	}
+	buf.WriteU32(mapID)
+	buf.WriteU32(difficulty)
+	buf.WriteU32(resetTimeSec)
+	buf.WriteU64(instanceID)
+	_ = s.write(op, buf.Bytes(), true)
+}
+
+func (s *session) sendCalendarRaidLockoutUpdated(mapID, difficulty uint32, resetTimeSec uint32) {
+	currTime := time.Now()
+	buf := protocol.NewBuffer(20)
+	buf.WritePackedTime(currTime)
+	buf.WriteU32(mapID)
+	buf.WriteU32(difficulty)
+	buf.WriteU32(0) // time delta
+	buf.WriteU32(resetTimeSec)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CALENDAR_RAID_LOCKOUT_UPDATED), buf.Bytes(), true)
+}
+
 // handleInstanceLockResponse processes CMSG_INSTANCE_LOCK_RESPONSE (0x13F).
-// Reference: WorldSession::HandleInstanceLockResponse (MiscHandler.cpp:1449).
+// Reference: WorldSession::HandleInstanceLockResponse (MiscHandler.cpp:1525).
 func (s *session) handleInstanceLockResponse(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
-	accept := payload[0]
-	if accept == 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		cdb := s.server.CharactersStore.DB
-		var homeMap, homeZone uint32
-		var homeX, homeY, homeZ float32
-		if err := cdb.QueryRowContext(ctx, "SELECT mapId, zoneId, posX, posY, posZ FROM character_homebind WHERE guid = ?", s.playerGUID).Scan(&homeMap, &homeZone, &homeX, &homeY, &homeZ); err == nil {
-			s.player.Map = homeMap
-			s.player.Zone = homeZone
-			s.player.X = homeX
-			s.player.Y = homeY
-			s.player.Z = homeZ
-			s.sendPlayerUpdate()
-		}
+
+	if !s.hasPendingBind() {
+		return true
 	}
+
+	accept := payload[0]
+	if accept != 0 {
+		buf := protocol.NewBuffer(4)
+		buf.WriteU32(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_INSTANCE_SAVE_CREATED), buf.Bytes(), true)
+
+		var resetTime uint32 = 7 * 86400
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			cdb := s.server.CharactersStore.DB
+			var rt int64
+			if err := cdb.QueryRowContext(ctx, "SELECT resettime FROM instance WHERE id = ?", s.pendingBindInstanceID).Scan(&rt); err == nil {
+				now := time.Now().Unix()
+				if rt > now {
+					resetTime = uint32(rt - now)
+				}
+			}
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM character_instance WHERE guid = ? AND instance = ?", s.playerGUID, s.pendingBindInstanceID)
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_instance (guid, instance, permanent, extendState) VALUES (?, ?, 1, 0)", s.playerGUID, s.pendingBindInstanceID)
+		}
+
+		s.sendCalendarRaidLockout(s.pendingBindMapID, s.pendingBindDiff, resetTime, s.pendingBindInstanceID, true)
+		_ = s.handleRequestRaidInfo(ctx)
+	} else {
+		s.repopAtGraveyard(ctx)
+	}
+
+	s.setPendingBind(0, 0, 0, 0)
 	return true
 }
 
 // handleSetSavedInstanceExtend processes CMSG_SET_SAVED_INSTANCE_EXTEND (0x292).
-// Reference: WorldSession::HandleSetSavedInstanceExtend (MiscHandler.cpp:1455).
+// Reference: WorldSession::HandleSetSavedInstanceExtend (CalendarHandler.cpp:786).
 func (s *session) handleSetSavedInstanceExtend(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 6 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 9 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	mapID, _ := r.ReadU32()
-	difficulty, _ := r.ReadU8()
-	extend, _ := r.ReadU8()
+	mapID, err := r.ReadU32()
+	if err != nil {
+		return true
+	}
+	difficulty, err := r.ReadU32()
+	if err != nil {
+		return true
+	}
+	toggleExtend, err := r.ReadU8()
+	if err != nil {
+		return true
+	}
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
 		var extendState int = 0
-		if extend != 0 {
+		if toggleExtend != 0 {
 			extendState = 2 // EXTEND_STATE_EXTENDED
 		}
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_instance SET extendState = ? WHERE guid = ? AND instance IN (SELECT id FROM instance WHERE map = ? AND difficulty = ?)", extendState, s.playerGUID, mapID, difficulty)
+		_, _ = cdb.ExecContext(ctx, `UPDATE character_instance SET extendState = ? 
+			WHERE guid = ? AND instance IN (SELECT id FROM instance WHERE map = ? AND difficulty = ?)`,
+			extendState, s.playerGUID, mapID, difficulty)
+
+		var resetTime int64
+		_ = cdb.QueryRowContext(ctx, `SELECT i.resettime 
+			FROM instance i JOIN character_instance ci ON ci.instance = i.id 
+			WHERE ci.guid = ? AND i.map = ? AND i.difficulty = ?`,
+			s.playerGUID, mapID, difficulty).Scan(&resetTime)
+
+		rem := uint32(0)
+		now := time.Now().Unix()
+		if resetTime > now {
+			rem = uint32(resetTime - now)
+		}
+
+		s.sendCalendarRaidLockoutUpdated(mapID, difficulty, rem)
 		_ = s.handleRequestRaidInfo(ctx)
 	}
 	return true

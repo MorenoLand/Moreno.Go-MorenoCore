@@ -140,6 +140,10 @@ type session struct {
 	activeCast         *activeCastState
 	activeChannel      *activeChannelState
 	castMu             sync.Mutex
+	pendingBindInstanceID uint64
+	pendingBindMapID      uint32
+	pendingBindDiff       uint32
+	pendingBindTimer      uint32
 }
 
 type activeCastState struct {
