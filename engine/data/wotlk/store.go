@@ -100,6 +100,10 @@ type LFGDungeon struct {
 	GroupID        uint32
 }
 
+func (d LFGDungeon) Entry() uint32 {
+	return d.ID + (d.TypeID << 24)
+}
+
 // WorldSafeLoc mirrors WorldSafeLocsEntry (DBCStructure.h): fields ID (u32),
 // continent/map (u32), and x/y/z (f32); locale name fields follow and are not
 // used by the server.
@@ -481,15 +485,7 @@ func (s *Store) SpellCastTime(id uint32) (int32, bool, error) {
 	return base, true, nil
 }
 
-func (s *Store) LFGDungeon(id uint32) (LFGDungeon, bool, error) {
-	file, err := s.File("LFGDungeons")
-	if err != nil {
-		return LFGDungeon{}, false, err
-	}
-	record, ok := file.Find(id)
-	if !ok {
-		return LFGDungeon{}, false, nil
-	}
+func (s *Store) parseLFGDungeon(id uint32, record dbc.Record) (LFGDungeon, bool, error) {
 	result := LFGDungeon{ID: id}
 	values := []struct {
 		field int
@@ -503,6 +499,7 @@ func (s *Store) LFGDungeon(id uint32) (LFGDungeon, bool, error) {
 		{29, &result.ExpansionLevel},
 		{31, &result.GroupID},
 	}
+	var err error
 	for _, value := range values {
 		if *value.dest, err = record.Uint32(value.field); err != nil {
 			return LFGDungeon{}, false, err
@@ -514,6 +511,38 @@ func (s *Store) LFGDungeon(id uint32) (LFGDungeon, bool, error) {
 	}
 	result.MapID = mapID
 	return result, true, nil
+}
+
+func (s *Store) LFGDungeon(id uint32) (LFGDungeon, bool, error) {
+	file, err := s.File("LFGDungeons")
+	if err != nil {
+		return LFGDungeon{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return LFGDungeon{}, false, nil
+	}
+	return s.parseLFGDungeon(id, record)
+}
+
+func (s *Store) LFGDungeons() ([]LFGDungeon, error) {
+	file, err := s.File("LFGDungeons")
+	if err != nil {
+		return nil, err
+	}
+	dungeons := make([]LFGDungeon, 0, file.Records())
+	for i := 0; i < file.Records(); i++ {
+		record, err := file.Record(i)
+		if err != nil {
+			continue
+		}
+		id := record.Uint32Unchecked(0)
+		dungeon, ok, err := s.parseLFGDungeon(id, record)
+		if err == nil && ok {
+			dungeons = append(dungeons, dungeon)
+		}
+	}
+	return dungeons, nil
 }
 
 func IsSupportedLFGType(typeID uint32) bool {
