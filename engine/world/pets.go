@@ -469,13 +469,77 @@ func (s *session) handlePetStopAttack(ctx context.Context, payload []byte) bool 
 }
 
 // handleRequestPetInfo processes CMSG_REQUEST_PET_INFO (0x279).
-// Reference: WorldSession::HandleRequestPetInfoOpcode (PetHandler.cpp:412).
+// Reference: WorldSession::HandleRequestPetInfoOpcode (PetHandler.cpp:412) and Player::SendPetSpells (Player.cpp:21107-21145).
 func (s *session) handleRequestPetInfo(ctx context.Context, payload []byte) bool {
 	if s.player == nil {
 		return true
 	}
-	buf := protocol.NewBuffer(8)
-	buf.WriteU64(0)
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		buf := protocol.NewBuffer(8)
+		buf.WriteU64(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
+		return true
+	}
+
+	var petID, entry, modelID, level int64
+	var petName string
+	err := cdb.QueryRowContext(ctx, "SELECT id, entry, modelid, level, name FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName)
+	if err != nil {
+		// No active pet
+		buf := protocol.NewBuffer(8)
+		buf.WriteU64(0)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
+		return true
+	}
+
+	// Active pet found: build SMSG_PET_SPELLS packet (Player.cpp:21107-21145)
+	petGUID := uint64(petID) | (uint64(0xF140) << 48) // HighGuid::Pet = 0xF140
+	buf := protocol.NewBuffer(8 + 2 + 4 + 1 + 1 + 2 + 4*10 + 1 + 1)
+	buf.WriteU64(petGUID)
+	buf.WriteU16(0) // family
+	buf.WriteU32(0) // duration (0 = permanent)
+	buf.WriteU8(1)  // react state (1 = DEFENSIVE)
+	buf.WriteU8(1)  // command state (1 = FOLLOW)
+	buf.WriteU16(0) // flags
+
+	// Query pet spells for slots 3..6
+	var petSpells []uint32
+	rows, sErr := cdb.QueryContext(ctx, "SELECT spell, active FROM pet_spell WHERE guid = ?", petID)
+	if sErr == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var spID, active int64
+			if rows.Scan(&spID, &active) == nil {
+				actType := uint32(0x81) // ACT_DISABLED (castable)
+				if active != 0 {
+					actType = 0xC1 // ACT_ENABLED (autocast)
+				}
+				petSpells = append(petSpells, uint32(spID)|(actType<<24))
+			}
+		}
+	}
+
+	// 10 action bar slots (CharmInfo::InitPetActionBar, Unit.cpp:9942)
+	buf.WriteU32(0x07000002) // Slot 0: Attack (COMMAND_ATTACK = 2 | ACT_COMMAND = 0x07)
+	buf.WriteU32(0x07000001) // Slot 1: Follow (COMMAND_FOLLOW = 1 | ACT_COMMAND = 0x07)
+	buf.WriteU32(0x07000000) // Slot 2: Stay   (COMMAND_STAY = 0 | ACT_COMMAND = 0x07)
+
+	for i := 0; i < 4; i++ {
+		if i < len(petSpells) {
+			buf.WriteU32(petSpells[i])
+		} else {
+			buf.WriteU32(0)
+		}
+	}
+
+	buf.WriteU32(0x06000002) // Slot 7: Aggressive (REACT_AGGRESSIVE = 2 | ACT_REACTION = 0x06)
+	buf.WriteU32(0x06000001) // Slot 8: Defensive  (REACT_DEFENSIVE = 1 | ACT_REACTION = 0x06)
+	buf.WriteU32(0x06000000) // Slot 9: Passive    (REACT_PASSIVE = 0 | ACT_REACTION = 0x06)
+
+	buf.WriteU8(0) // additional spells count
+	buf.WriteU8(0) // cooldown count
+
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
 	return true
 }
