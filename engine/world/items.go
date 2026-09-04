@@ -396,13 +396,20 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 	if srcItemGUID == 0 && dstItemGUID == 0 {
 		return true
 	}
+
+	// If moving to an empty slot, but caller passed swapped slots (src empty, dst occupied)
+	if srcItemGUID == 0 && dstItemGUID != 0 {
+		srcSlot, dstSlot = dstSlot, srcSlot
+		srcItemGUID, dstItemGUID = dstItemGUID, srcItemGUID
+	}
+
 	if srcItemGUID != 0 && dstItemGUID != 0 {
 		if merged, _ := s.tryMergeStacks(ctx, srcItemGUID, 0, srcSlot, dstItemGUID, 0, dstSlot); merged {
 			s.debug("inventory items merged", "account", s.accountName, "src", srcSlot, "dst", dstSlot)
 			return true
 		}
 	}
-	// If un-equipping or moving an equipped bag, ensure it's empty
+	// Check equipped bag moves: un-equipping or moving an equipped bag requires it to be empty
 	if srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd && srcItemGUID != 0 {
 		if !s.isBagEmpty(ctx, srcItemGUID) {
 			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(srcItemGUID))
@@ -415,7 +422,33 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
-	// If dstSlot is equipment slot (< 19), validate item can go there
+	// If putting item into an equipped bag slot (19..22), ensure it is a bag container
+	if dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd && srcItemGUID != 0 {
+		var itemEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", srcItemGUID).Scan(&itemEntry)
+		var invType int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT InventoryType FROM item_template WHERE entry = ?", itemEntry).Scan(&invType)
+		}
+		if invType != 18 {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(srcItemGUID))
+			return true
+		}
+	}
+	if srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd && dstItemGUID != 0 {
+		var itemEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", dstItemGUID).Scan(&itemEntry)
+		var invType int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT InventoryType FROM item_template WHERE entry = ?", itemEntry).Scan(&invType)
+		}
+		if invType != 18 {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(dstItemGUID))
+			return true
+		}
+	}
+
+	// Validate equipping: if dstSlot is equipment slot (< 19), validate srcItemGUID can go there
 	if dstSlot < equipSlotEnd && srcItemGUID != 0 {
 		var itemEntry int64
 		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", srcItemGUID).Scan(&itemEntry)
@@ -440,6 +473,32 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
+	// Validate equipping: if srcSlot is equipment slot (< 19) and dstItemGUID != 0, validate dstItemGUID can go there
+	if srcSlot < equipSlotEnd && dstItemGUID != 0 {
+		var itemEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", dstItemGUID).Scan(&itemEntry)
+		var invType int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT InventoryType FROM item_template WHERE entry = ?", itemEntry).Scan(&invType)
+		}
+		if !s.isSlotValidForItem(uint8(invType), srcSlot) {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(dstItemGUID))
+			return true
+		}
+		if srcSlot == equipSlotMainhand && invType == 17 {
+			var offhandItem int64
+			_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, equipSlotOffhand).Scan(&offhandItem)
+			if offhandItem != 0 && offhandItem != dstItemGUID {
+				freeSlot, ok := s.findFreeBackpackSlot(ctx)
+				if !ok {
+					s.sendEquipError(equipErrInvFull, uint64(dstItemGUID))
+					return true
+				}
+				_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND item = ?", freeSlot, s.playerGUID, offhandItem)
+			}
+		}
+	}
+
 	s.swapInventoryCoordinates(ctx, srcItemGUID, 0, int64(srcSlot), dstItemGUID, 0, int64(dstSlot))
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
@@ -452,33 +511,42 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
 	}
-	dstBag := payload[0]
-	dstSlot := payload[1]
-	srcBag := payload[2]
-	srcSlot := payload[3]
+	slotBagA := payload[0]
+	slotSlotA := payload[1]
+	slotBagB := payload[2]
+	slotSlotB := payload[3]
 
 	db := s.server.CharactersStore.DB
 	if db == nil {
 		return true
 	}
 
-	srcBagKey, ok1 := s.inventoryBagKey(ctx, srcBag)
-	dstBagKey, ok2 := s.inventoryBagKey(ctx, dstBag)
+	bagKeyA, ok1 := s.inventoryBagKey(ctx, slotBagA)
+	bagKeyB, ok2 := s.inventoryBagKey(ctx, slotBagB)
 	if !ok1 || !ok2 {
 		s.sendEquipError(equipErrItemNotFound, 0)
 		return true
 	}
 
-	if srcBagKey == dstBagKey && srcSlot == dstSlot {
+	if bagKeyA == bagKeyB && slotSlotA == slotSlotB {
 		return true
 	}
 
-	var srcItemGUID, dstItemGUID int64
-	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? LIMIT 1", s.playerGUID, srcBagKey, srcSlot).Scan(&srcItemGUID)
-	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? LIMIT 1", s.playerGUID, dstBagKey, dstSlot).Scan(&dstItemGUID)
-	if srcItemGUID == 0 && dstItemGUID == 0 {
+	var itemGUIDA, itemGUIDB int64
+	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? LIMIT 1", s.playerGUID, bagKeyA, slotSlotA).Scan(&itemGUIDA)
+	_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = ? AND slot = ? LIMIT 1", s.playerGUID, bagKeyB, slotSlotB).Scan(&itemGUIDB)
+	if itemGUIDA == 0 && itemGUIDB == 0 {
 		return true
 	}
+
+	srcBag, srcSlot, srcBagKey, srcItemGUID := slotBagA, slotSlotA, bagKeyA, itemGUIDA
+	dstBag, dstSlot, dstBagKey, dstItemGUID := slotBagB, slotSlotB, bagKeyB, itemGUIDB
+	// If slotA was empty but slotB has an item, normalize so src is the slot with the item
+	if srcItemGUID == 0 && dstItemGUID != 0 {
+		srcBag, srcSlot, srcBagKey, srcItemGUID = slotBagB, slotSlotB, bagKeyB, itemGUIDB
+		dstBag, dstSlot, dstBagKey, dstItemGUID = slotBagA, slotSlotA, bagKeyA, itemGUIDA
+	}
+
 	if srcItemGUID != 0 && dstItemGUID != 0 {
 		if merged, _ := s.tryMergeStacks(ctx, srcItemGUID, srcBagKey, srcSlot, dstItemGUID, dstBagKey, dstSlot); merged {
 			s.debug("items merged across bags", "account", s.accountName, "srcBag", srcBag, "srcSlot", srcSlot, "dstBag", dstBag, "dstSlot", dstSlot)
@@ -486,21 +554,55 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 		}
 	}
 
-	// If moving an equipped bag slot (bag 0, slot 19..22), check if empty
-	if srcBagKey == 0 && srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd && srcItemGUID != 0 {
+	// Bag move checks: moving or un-equipping a bag requires it to be empty
+	if srcBagKey == 0 && ((srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd) || (srcSlot >= 67 && srcSlot <= 73)) && srcItemGUID != 0 {
 		if !s.isBagEmpty(ctx, srcItemGUID) {
 			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(srcItemGUID))
 			return true
 		}
 	}
-	if dstBagKey == 0 && dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd && dstItemGUID != 0 {
+	if dstBagKey == 0 && ((dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd) || (dstSlot >= 67 && dstSlot <= 73)) && dstItemGUID != 0 {
 		if !s.isBagEmpty(ctx, dstItemGUID) {
 			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
 			return true
 		}
 	}
 
-	// If dstBagKey == 0 and dstSlot < equipSlotEnd (equipping), validate
+	// Equipping a bag into bag slot (19..22 or 67..73)
+	if dstBagKey == 0 && ((dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd) || (dstSlot >= 67 && dstSlot <= 73)) && srcItemGUID != 0 {
+		var itemEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", srcItemGUID).Scan(&itemEntry)
+		var invType int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT InventoryType FROM item_template WHERE entry = ?", itemEntry).Scan(&invType)
+		}
+		if invType != 18 {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(srcItemGUID))
+			return true
+		}
+		if dstSlot >= 67 && dstSlot <= 73 && int(dstSlot-67) >= int(s.player.BankBagSlots) {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(srcItemGUID))
+			return true
+		}
+	}
+	if srcBagKey == 0 && ((srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd) || (srcSlot >= 67 && srcSlot <= 73)) && dstItemGUID != 0 {
+		var itemEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", dstItemGUID).Scan(&itemEntry)
+		var invType int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT InventoryType FROM item_template WHERE entry = ?", itemEntry).Scan(&invType)
+		}
+		if invType != 18 {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(dstItemGUID))
+			return true
+		}
+		if srcSlot >= 67 && srcSlot <= 73 && int(srcSlot-67) >= int(s.player.BankBagSlots) {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(dstItemGUID))
+			return true
+		}
+	}
+
+	// If dstBagKey == 0 and dstSlot < equipSlotEnd (equipping), validate srcItemGUID
 	if dstBagKey == 0 && dstSlot < equipSlotEnd && srcItemGUID != 0 {
 		var itemEntry int64
 		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", srcItemGUID).Scan(&itemEntry)
@@ -525,6 +627,31 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
+	// If srcBagKey == 0 and srcSlot < equipSlotEnd (equipping from dst to src), validate dstItemGUID
+	if srcBagKey == 0 && srcSlot < equipSlotEnd && dstItemGUID != 0 {
+		var itemEntry int64
+		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", dstItemGUID).Scan(&itemEntry)
+		var invType int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT InventoryType FROM item_template WHERE entry = ?", itemEntry).Scan(&invType)
+		}
+		if !s.isSlotValidForItem(uint8(invType), srcSlot) {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(dstItemGUID))
+			return true
+		}
+		if srcSlot == equipSlotMainhand && invType == 17 {
+			var offhandItem int64
+			_ = db.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, equipSlotOffhand).Scan(&offhandItem)
+			if offhandItem != 0 && offhandItem != dstItemGUID {
+				freeSlot, ok := s.findFreeBackpackSlot(ctx)
+				if !ok {
+					s.sendEquipError(equipErrInvFull, uint64(dstItemGUID))
+					return true
+				}
+				_, _ = db.ExecContext(ctx, "UPDATE character_inventory SET bag = 0, slot = ? WHERE guid = ? AND item = ?", freeSlot, s.playerGUID, offhandItem)
+			}
+		}
+	}
 
 	s.swapInventoryCoordinates(ctx, srcItemGUID, srcBagKey, int64(srcSlot), dstItemGUID, dstBagKey, int64(dstSlot))
 	s.syncEquipmentCache(ctx)
@@ -539,21 +666,28 @@ func (s *session) handleDestroyItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	bag := payload[0]
-	if bag == 255 {
-		bag = 0
-	}
 	slot := payload[1]
 	count := payload[2]
 	db := s.server.CharactersStore.DB
 	if db == nil {
 		return true
 	}
+	bagKey, ok := s.inventoryBagKey(ctx, bag)
+	if !ok {
+		return true
+	}
 	var itemGUID, currentCount int64
 	err := db.QueryRowContext(ctx, `SELECT ci.item, ii.count FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, bag, slot).Scan(&itemGUID, &currentCount)
+		WHERE ci.guid = ? AND ci.bag = ? AND ci.slot = ? LIMIT 1`, s.playerGUID, bagKey, slot).Scan(&itemGUID, &currentCount)
 	if err != nil || itemGUID == 0 {
 		return true
+	}
+	if bagKey == 0 && ((slot >= invSlotBagStart && slot < invSlotBagEnd) || (slot >= 67 && slot <= 73)) {
+		if !s.isBagEmpty(ctx, itemGUID) {
+			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(itemGUID))
+			return true
+		}
 	}
 	if currentCount <= int64(count) || count == 0 {
 		_, _ = db.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
@@ -967,11 +1101,19 @@ func (s *session) inventoryBagKey(ctx context.Context, bag uint8) (int64, bool) 
 	if bag == 0 || bag == invSlotBag0 {
 		return 0, true
 	}
-	if (bag < invSlotBagStart || bag >= invSlotBagEnd) && (bag < 67 || bag > 73) || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+	actualSlot := bag
+	if bag >= 1 && bag <= 4 {
+		actualSlot = 18 + bag // 19..22
+	} else if bag >= 5 && bag <= 11 {
+		actualSlot = 62 + bag // 67..73
+	} else if (bag < invSlotBagStart || bag >= invSlotBagEnd) && (bag < 67 || bag > 73) {
+		return 0, false
+	}
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return 0, false
 	}
 	var itemGUID int64
-	err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, bag).Scan(&itemGUID)
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ? LIMIT 1", s.playerGUID, actualSlot).Scan(&itemGUID)
 	return itemGUID, err == nil && itemGUID != 0
 }
 
@@ -1009,7 +1151,7 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	count, err := reader.ReadU32()
-	if err != nil || count == 0 || srcBag == dstBag && srcSlot == dstSlot {
+	if err != nil || count == 0 || (srcBag == dstBag && srcSlot == dstSlot) {
 		return true
 	}
 	srcGUID, srcEntry, srcCount, err := s.inventoryItemAt(ctx, srcBag, srcSlot)
@@ -1062,7 +1204,9 @@ func (s *session) handleSplitItem(ctx context.Context, payload []byte) bool {
 	if err = tx.Commit(); err != nil {
 		return true
 	}
+	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
 	s.debug("item stack split", "account", s.accountName, "source_bag", srcBag, "source_slot", srcSlot, "destination_bag", dstBag, "destination_slot", dstSlot, "count", count)
 	return true
 }
@@ -1076,18 +1220,30 @@ func (s *session) handleAutoStoreBagItem(ctx context.Context, payload []byte) bo
 	if err != nil || itemGUID == 0 {
 		return true
 	}
+	srcBagKey, _ := s.inventoryBagKey(ctx, srcBag)
+	if srcBagKey == 0 && srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd {
+		if !s.isBagEmpty(ctx, itemGUID) {
+			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(itemGUID))
+			return true
+		}
+	}
 	dstKey, ok := s.inventoryBagKey(ctx, dstBag)
 	if !ok {
 		return true
 	}
 	slot, ok := s.freeInventorySlot(ctx, dstKey)
 	if !ok {
+		s.sendEquipError(equipErrInvFull, uint64(itemGUID))
 		return true
 	}
 	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_inventory SET bag = ?, slot = ? WHERE guid = ? AND item = ?", dstKey, slot, s.playerGUID, itemGUID); err != nil {
 		return true
 	}
+	if srcBagKey == 0 && srcSlot < equipSlotEnd {
+		s.syncEquipmentCache(ctx)
+	}
 	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
 	s.debug("item moved into bag", "account", s.accountName, "item", itemGUID, "bag", dstBag, "slot", slot)
 	return true
 }
