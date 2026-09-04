@@ -1280,27 +1280,225 @@ func (s *session) handleCharFactionChange(ctx context.Context, payload []byte) b
 	if cdb != nil {
 		var oldRace uint8
 		_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", guid).Scan(&oldRace)
+		newTeam := teamForRace(race)
 		// Faction change must swap to the opposite faction team (CharacterHandler.cpp:1687)
-		if oldRace != 0 && teamForRace(oldRace) == teamForRace(race) {
+		if oldRace != 0 && teamForRace(oldRace) == newTeam {
 			buf := protocol.NewBuffer(1)
 			buf.WriteU8(0x37) // CHAR_CREATE_CHARACTER_SWAP_FACTION
 			_ = s.write(uint16(protocol.OpcodeSMSG_CHAR_FACTION_CHANGE), buf.Bytes(), true)
 			return true
 		}
-		// Reset homebind to new race's starting location and update appearance/race
+
+		// Resurrect character if dead
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET health = 1 WHERE guid = ? AND health = 0", guid)
+
+		// Set capital city homebind and world coordinates (CharacterHandler.cpp:1907-1925)
 		var spawnMap, spawnZone int64
 		var spawnX, spawnY, spawnZ, spawnO float64
-		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT map, zone, position_x, position_y, position_z, orientation FROM playercreateinfo WHERE race = ? LIMIT 1", race).Scan(&spawnMap, &spawnZone, &spawnX, &spawnY, &spawnZ, &spawnO)
+		if newTeam == 0 { // Alliance -> Stormwind City
+			spawnMap, spawnZone = 0, 1519
+			spawnX, spawnY, spawnZ, spawnO = -8867.68, 673.373, 97.9034, 0.0
+		} else { // Horde -> Orgrimmar
+			spawnMap, spawnZone = 1, 1637
+			spawnX, spawnY, spawnZ, spawnO = 1633.33, -4439.11, 15.7588, 0.0
 		}
-		if spawnMap != 0 || spawnX != 0 {
-			_, _ = cdb.ExecContext(ctx, "UPDATE character_homebind SET mapId = ?, zoneId = ?, posX = ?, posY = ?, posZ = ? WHERE guid = ?",
-				spawnMap, spawnZone, spawnX, spawnY, spawnZ, guid)
-			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ?, map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
-				newName, gender, skin, face, hairStyle, hairColor, facialHair, race, spawnMap, spawnZone, spawnX, spawnY, spawnZ, spawnO, guid)
-		} else {
+
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_homebind SET mapId = ?, zoneId = ?, posX = ?, posY = ?, posZ = ? WHERE guid = ?",
+			spawnMap, spawnZone, spawnX, spawnY, spawnZ, guid)
+		_, err := cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ?, map = ?, zone = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ?, at_login = at_login & ~64 WHERE guid = ?",
+			newName, gender, skin, face, hairStyle, hairColor, facialHair, race, spawnMap, spawnZone, spawnX, spawnY, spawnZ, spawnO, guid)
+		if err != nil {
 			_, _ = cdb.ExecContext(ctx, "UPDATE characters SET name = ?, gender = ?, skin = ?, face = ?, hairStyle = ?, hairColor = ?, facialStyle = ?, race = ? WHERE guid = ?",
 				newName, gender, skin, face, hairStyle, hairColor, facialHair, race, guid)
+		}
+
+		// Delete friends list and social interactions
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_social WHERE guid = ? OR friend = ?", guid, guid)
+
+		// Delete all active quests in progress (CharacterHandler.cpp:1959)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus WHERE guid = ?", guid)
+
+		// Dual-DB conversion tables in WorldStore.DB
+		if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			wdb := s.server.WorldStore.DB
+
+			type idPair struct {
+				oldID, newID uint32
+			}
+
+			// 1. Spell conversion (player_factionchange_spells)
+			var spellPairs []idPair
+			sRows, err := wdb.QueryContext(ctx, "SELECT alliance_id, horde_id FROM player_factionchange_spells")
+			if err == nil {
+				for sRows.Next() {
+					var aID, hID uint32
+					if err := sRows.Scan(&aID, &hID); err == nil {
+						if newTeam == 0 {
+							spellPairs = append(spellPairs, idPair{oldID: hID, newID: aID})
+						} else {
+							spellPairs = append(spellPairs, idPair{oldID: aID, newID: hID})
+						}
+					}
+				}
+				sRows.Close()
+				for _, pair := range spellPairs {
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_spell WHERE spell = ? AND guid = ?", pair.newID, guid)
+					_, _ = cdb.ExecContext(ctx, "UPDATE character_spell SET spell = ? WHERE spell = ? AND guid = ?", pair.newID, pair.oldID, guid)
+				}
+			}
+
+			// 2. Item conversion (player_factionchange_items)
+			var itemPairs []idPair
+			iRows, err := wdb.QueryContext(ctx, "SELECT alliance_id, horde_id FROM player_factionchange_items")
+			if err == nil {
+				for iRows.Next() {
+					var aID, hID uint32
+					if err := iRows.Scan(&aID, &hID); err == nil {
+						if newTeam == 0 {
+							itemPairs = append(itemPairs, idPair{oldID: hID, newID: aID})
+						} else {
+							itemPairs = append(itemPairs, idPair{oldID: aID, newID: hID})
+						}
+					}
+				}
+				iRows.Close()
+				for _, pair := range itemPairs {
+					_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET itemEntry = ? WHERE itemEntry = ? AND guid IN (SELECT item FROM character_inventory WHERE guid = ?)", pair.newID, pair.oldID, guid)
+				}
+			}
+
+			// 3. Quest conversion (rewarded quests, player_factionchange_quests)
+			var questPairs []idPair
+			qRows, err := wdb.QueryContext(ctx, "SELECT alliance_id, horde_id FROM player_factionchange_quests")
+			if err == nil {
+				for qRows.Next() {
+					var aID, hID uint32
+					if err := qRows.Scan(&aID, &hID); err == nil {
+						if newTeam == 0 {
+							questPairs = append(questPairs, idPair{oldID: hID, newID: aID})
+						} else {
+							questPairs = append(questPairs, idPair{oldID: aID, newID: hID})
+						}
+					}
+				}
+				qRows.Close()
+				for _, pair := range questPairs {
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_queststatus_rewarded WHERE quest = ? AND guid = ?", pair.newID, guid)
+					_, _ = cdb.ExecContext(ctx, "UPDATE character_queststatus_rewarded SET quest = ? WHERE quest = ? AND guid = ?", pair.newID, pair.oldID, guid)
+				}
+			}
+
+			// 4. Achievement conversion (player_factionchange_achievement)
+			var achPairs []idPair
+			aRows, err := wdb.QueryContext(ctx, "SELECT alliance_id, horde_id FROM player_factionchange_achievement")
+			if err == nil {
+				for aRows.Next() {
+					var aID, hID uint32
+					if err := aRows.Scan(&aID, &hID); err == nil {
+						if newTeam == 0 {
+							achPairs = append(achPairs, idPair{oldID: hID, newID: aID})
+						} else {
+							achPairs = append(achPairs, idPair{oldID: aID, newID: hID})
+						}
+					}
+				}
+				aRows.Close()
+				for _, pair := range achPairs {
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_achievement WHERE achievement = ? AND guid = ?", pair.newID, guid)
+					_, _ = cdb.ExecContext(ctx, "UPDATE character_achievement SET achievement = ? WHERE achievement = ? AND guid = ?", pair.newID, pair.oldID, guid)
+				}
+			}
+
+			// 5. Reputation conversion (player_factionchange_reputations)
+			var repPairs []idPair
+			rRows, err := wdb.QueryContext(ctx, "SELECT alliance_id, horde_id FROM player_factionchange_reputations")
+			if err == nil {
+				for rRows.Next() {
+					var aID, hID uint32
+					if err := rRows.Scan(&aID, &hID); err == nil {
+						if newTeam == 0 {
+							repPairs = append(repPairs, idPair{oldID: hID, newID: aID})
+						} else {
+							repPairs = append(repPairs, idPair{oldID: aID, newID: hID})
+						}
+					}
+				}
+				rRows.Close()
+			}
+			// If table is empty, use standard racial defaults
+			if len(repPairs) == 0 {
+				defaults := [][2]uint32{
+					{72, 76},   // Stormwind <-> Orgrimmar
+					{47, 81},   // Ironforge <-> Thunder Bluff
+					{69, 530},  // Darnassus <-> Darkspear Trolls
+					{54, 68},   // Gnomeregan <-> Undercity
+					{930, 911}, // Exodar <-> Silvermoon City
+				}
+				for _, d := range defaults {
+					if newTeam == 0 {
+						repPairs = append(repPairs, idPair{oldID: d[1], newID: d[0]})
+					} else {
+						repPairs = append(repPairs, idPair{oldID: d[0], newID: d[1]})
+					}
+				}
+			}
+			for _, pair := range repPairs {
+				var standing int32
+				err := cdb.QueryRowContext(ctx, "SELECT standing FROM character_reputation WHERE faction = ? AND guid = ?", pair.oldID, guid).Scan(&standing)
+				if err == nil {
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM character_reputation WHERE faction = ? AND guid = ?", pair.newID, guid)
+					_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET faction = ? WHERE faction = ? AND guid = ?", pair.newID, pair.oldID, guid)
+				}
+			}
+		}
+
+		// 6. Language skills switch (CharacterHandler.cpp:1787-1840)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill IN (98, 109, 111, 759, 313, 113, 673, 115, 315, 137)", guid)
+		if newTeam == 0 {
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_skills (guid, skill, value, max) VALUES (?, 98, 300, 300)", guid) // Common
+		} else {
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_skills (guid, skill, value, max) VALUES (?, 109, 300, 300)", guid) // Orcish
+		}
+		var racialSkill uint32
+		switch race {
+		case 3: // Dwarf
+			racialSkill = 111
+		case 11: // Draenei
+			racialSkill = 759
+		case 7: // Gnome
+			racialSkill = 313
+		case 4: // Night Elf
+			racialSkill = 113
+		case 5: // Undead
+			racialSkill = 673
+		case 6: // Tauren
+			racialSkill = 115
+		case 8: // Troll
+			racialSkill = 315
+		case 10: // Blood Elf
+			racialSkill = 137
+		}
+		if racialSkill != 0 {
+			_, _ = cdb.ExecContext(ctx, "INSERT INTO character_skills (guid, skill, value, max) VALUES (?, ?, 300, 300)", guid, racialSkill)
+		}
+
+		// 7. Update in-memory player state if active
+		if s.player != nil && s.playerGUID == guid {
+			s.player.Race = race
+			s.player.Gender = gender
+			s.player.Name = newName
+			s.player.Skin = skin
+			s.player.Face = face
+			s.player.HairStyle = hairStyle
+			s.player.HairColor = hairColor
+			s.player.FacialStyle = facialHair
+			s.player.Map = uint32(spawnMap)
+			s.player.Zone = uint32(spawnZone)
+			s.player.X = float32(spawnX)
+			s.player.Y = float32(spawnY)
+			s.player.Z = float32(spawnZ)
+			s.player.Orientation = float32(spawnO)
+			s.sendPlayerUpdate()
 		}
 	}
 
