@@ -19,3 +19,4 @@ coverage.out
 *.prof
 *.test
 *.tmp
+.gocache/
