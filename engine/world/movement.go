@@ -554,53 +554,108 @@ func (s *session) handleMountSpecialAnim(ctx context.Context, payload []byte) bo
 	return true
 }
 
+func (s *session) enterVehicle(vehicleGUID uint64, seatID int8) {
+	if s == nil || s.player == nil {
+		return
+	}
+	s.player.MountDisplayID = 0
+	s.player.VehicleGUID = vehicleGUID
+	s.player.VehicleSeat = seatID
+	s.sendPlayerMountUpdate()
+	s.sendPlayerUpdate()
+}
+
+func (s *session) exitVehicle() {
+	if s == nil || s.player == nil || s.player.VehicleGUID == 0 {
+		return
+	}
+	s.player.VehicleGUID = 0
+	s.player.VehicleSeat = 0
+	s.sendPlayerUpdate()
+}
+
 // handleChangeSeatsOnControlledVehicle processes CMSG_CHANGE_SEATS_ON_CONTROLLED_VEHICLE (0x49B).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:52).
 func (s *session) handleChangeSeatsOnControlledVehicle(ctx context.Context, payload []byte) bool {
-	if len(payload) < 9 {
+	if !s.playerLoaded || s.player == nil || len(payload) == 0 {
 		return true
 	}
-	r := protocol.NewReader(payload)
-	vehGUID, _ := r.ReadU64()
-	seat, _ := r.ReadU8()
-	s.debug("change seats on vehicle", "account", s.accountName, "vehicle", vehGUID, "seat", seat)
+	if len(payload) >= 9 {
+		r := protocol.NewReader(payload)
+		_, _ = r.ReadU64()
+		seat, err := r.ReadU8()
+		if err == nil {
+			s.player.VehicleSeat = int8(seat)
+			s.sendPlayerUpdate()
+			return true
+		}
+	} else if len(payload) >= 1 {
+		s.player.VehicleSeat = int8(payload[0])
+		s.sendPlayerUpdate()
+		return true
+	}
 	return true
 }
 
 // handleControllerEjectPassenger processes CMSG_CONTROLLER_EJECT_PASSENGER (0x4A9).
 // Reference: WorldSession::HandleEjectPassenger (VehicleHandler.cpp:151).
 func (s *session) handleControllerEjectPassenger(ctx context.Context, payload []byte) bool {
-	if len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	passGUID, _ := r.ReadU64()
-	s.debug("controller eject passenger", "account", s.accountName, "passenger", passGUID)
+	passGUID, err := r.ReadU64()
+	if err != nil || passGUID == 0 {
+		return true
+	}
+	if s.server != nil {
+		if passSess := s.server.findSessionByGUID(passGUID); passSess != nil && passSess.playerLoaded && passSess.player != nil {
+			if passSess.player.VehicleGUID == s.playerGUID || (s.player.VehicleGUID != 0 && passSess.player.VehicleGUID == s.player.VehicleGUID) {
+				passSess.exitVehicle()
+			}
+		}
+	}
 	return true
 }
 
 // handleDismissControlledVehicle processes CMSG_DISMISS_CONTROLLED_VEHICLE (0x46D).
 // Reference: WorldSession::HandleDismissControlledVehicle (VehicleHandler.cpp:27).
 func (s *session) handleDismissControlledVehicle(ctx context.Context, payload []byte) bool {
-	if len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	r := protocol.NewReader(payload)
-	vehGUID, _ := r.ReadU64()
-	s.debug("dismiss controlled vehicle", "account", s.accountName, "vehicle", vehGUID)
+	s.exitVehicle()
+	if s.server != nil {
+		s.server.sessionsMu.RLock()
+		defer s.server.sessionsMu.RUnlock()
+		for sess := range s.server.sessions {
+			if sess != s && sess.playerLoaded && sess.player != nil && sess.player.VehicleGUID == s.playerGUID {
+				sess.exitVehicle()
+			}
+		}
+	}
 	return true
 }
 
 // handlePlayerVehicleEnter processes CMSG_PLAYER_VEHICLE_ENTER (0x46E).
 // Reference: WorldSession::HandleEnterPlayerVehicle (VehicleHandler.cpp:129).
 func (s *session) handlePlayerVehicleEnter(ctx context.Context, payload []byte) bool {
-	if len(payload) < 9 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	vehGUID, _ := r.ReadU64()
-	seat, _ := r.ReadU8()
-	s.debug("player vehicle enter", "account", s.accountName, "vehicle", vehGUID, "seat", seat)
+	vehGUID, err := r.ReadU64()
+	if err != nil || vehGUID == 0 {
+		return true
+	}
+	seat := int8(1)
+	if len(payload) >= 9 {
+		sByte, err := r.ReadU8()
+		if err == nil {
+			seat = int8(sByte)
+		}
+	}
+	s.enterVehicle(vehGUID, seat)
 	return true
 }
 
@@ -610,31 +665,50 @@ func (s *session) handleRequestVehicleExit(ctx context.Context, payload []byte) 
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
-	s.sendPlayerUpdate()
+	s.exitVehicle()
 	return true
 }
 
 // handleRequestVehicleNextSeat processes CMSG_REQUEST_VEHICLE_NEXT_SEAT (0x470).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:77).
 func (s *session) handleRequestVehicleNextSeat(ctx context.Context, payload []byte) bool {
-	s.debug("request vehicle next seat", "account", s.accountName)
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	s.player.VehicleSeat++
+	s.sendPlayerUpdate()
 	return true
 }
 
 // handleRequestVehiclePrevSeat processes CMSG_REQUEST_VEHICLE_PREV_SEAT (0x471).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:74).
 func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []byte) bool {
-	s.debug("request vehicle prev seat", "account", s.accountName)
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if s.player.VehicleSeat > 0 {
+		s.player.VehicleSeat--
+		s.sendPlayerUpdate()
+	}
 	return true
 }
 
 // handleRequestVehicleSwitchSeat processes CMSG_REQUEST_VEHICLE_SWITCH_SEAT (0x472).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:108).
 func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []byte) bool {
-	if len(payload) < 1 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
-	seat := payload[0]
-	s.debug("request vehicle switch seat", "account", s.accountName, "seat", seat)
+	seat := int8(payload[0])
+	if len(payload) >= 9 {
+		r := protocol.NewReader(payload)
+		_, _ = r.ReadU64()
+		sByte, err := r.ReadU8()
+		if err == nil {
+			seat = int8(sByte)
+		}
+	}
+	s.player.VehicleSeat = seat
+	s.sendPlayerUpdate()
 	return true
 }
