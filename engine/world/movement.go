@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"math"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -209,6 +210,10 @@ func readMovementInfo(b *protocol.Buffer) (movementInfo, error) {
 
 func writeMovementInfo(b *protocol.Buffer, info movementInfo) {
 	b.WritePackedGUID(info.GUID)
+	writeRawMovementInfo(b, info)
+}
+
+func writeRawMovementInfo(b *protocol.Buffer, info movementInfo) {
 	b.WriteU32(info.Flags)
 	b.WriteU16(info.Flags2)
 	b.WriteU32(info.Time)
@@ -311,6 +316,10 @@ func (s *session) handleForceMoveRootAck(ctx context.Context, payload []byte) bo
 	info, err := readMovementInfo(b)
 	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
 		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+		s.rooted = true
+		if s.server != nil {
+			s.server.broadcastMovement(uint16(protocol.OpcodeMSG_MOVE_ROOT), payload, info, s)
+		}
 	}
 	return true
 }
@@ -327,6 +336,10 @@ func (s *session) handleForceMoveUnrootAck(ctx context.Context, payload []byte) 
 	info, err := readMovementInfo(b)
 	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
 		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+		s.rooted = false
+		if s.server != nil {
+			s.server.broadcastMovement(uint16(protocol.OpcodeMSG_MOVE_UNROOT), payload, info, s)
+		}
 	}
 	return true
 }
@@ -380,8 +393,36 @@ func (s *session) handleMoveWaterWalkAck(ctx context.Context, payload []byte) bo
 }
 
 // handleMoveKnockBackAck processes CMSG_MOVE_KNOCK_BACK_ACK (0x0F0).
+// Reference: WorldSession::HandleMoveKnockBackAck (MovementHandler.cpp:553).
 func (s *session) handleMoveKnockBackAck(ctx context.Context, payload []byte) bool {
-	return s.handleMovementAck(ctx, payload)
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	b := protocol.NewReader(payload)
+	guid, _ := b.ReadPackedGUID()
+	_, _ = b.ReadU32() // ack index
+	info, err := readMovementInfo(b)
+	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
+		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+	}
+
+	packet := protocol.NewBuffer(66)
+	packet.WritePackedGUID(guid)
+	writeRawMovementInfo(packet, info)
+	if info.HasJump {
+		for _, v := range info.Jump {
+			packet.WriteF32(v)
+		}
+	} else {
+		packet.WriteF32(0)
+		packet.WriteF32(0)
+		packet.WriteF32(0)
+		packet.WriteF32(0)
+	}
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_KNOCK_BACK), packet.Bytes(), s)
+	}
+	return true
 }
 
 // handleMoveNotActiveMover processes CMSG_MOVE_NOT_ACTIVE_MOVER (0x2D1).
@@ -405,7 +446,14 @@ func (s *session) handleMoveSplineDone(ctx context.Context, payload []byte) bool
 	info, err := readMovementInfo(b)
 	if err == nil && validMovementPosition(info.X, info.Y, info.Z, info.Orientation) {
 		s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
-		s.sendPlayerUpdate()
+	}
+	if s.inFlight {
+		s.inFlight = false
+		if s.player != nil {
+			s.player.MountDisplayID = 0
+			s.sendPlayerMountUpdate()
+			s.sendPlayerUpdate()
+		}
 	}
 	return true
 }
@@ -421,41 +469,77 @@ func (s *session) handleMoveSetFly(ctx context.Context, payload []byte) bool {
 }
 
 // handleMoveTimeSkipped processes CMSG_MOVE_TIME_SKIPPED (0x2CE).
+// Reference: WorldSession::HandleMoveTimeSkippedOpcode (MovementHandler.cpp:626).
 func (s *session) handleMoveTimeSkipped(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 4 {
 		return true
 	}
-	buf := protocol.NewBuffer(len(payload) + 8)
+	r := protocol.NewReader(payload)
+	moverGUID, err := r.ReadPackedGUID()
+	if err != nil || moverGUID != s.playerGUID {
+		return true
+	}
+	timeSkipped, err := r.ReadU32()
+	if err != nil {
+		return true
+	}
+	buf := protocol.NewBuffer(16)
 	buf.WritePackedGUID(s.playerGUID)
-	buf.Write(payload)
-	s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s)
+	buf.WriteU32(timeSkipped)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeMSG_MOVE_TIME_SKIPPED), buf.Bytes(), s)
+	}
 	return true
 }
 
-// handleSummonResponse processes CMSG_SUMMON_RESPONSE (0x1AC).
-// Reference: WorldSession::HandleSummonResponseOpcode (MovementHandler.cpp:613).
+func (s *session) sendSummonRequest(summonerGUID uint64, zoneID uint32) {
+	s.summonExpire = time.Now().Add(2 * time.Minute)
+	s.summonerGUID = summonerGUID
+	buf := protocol.NewBuffer(16)
+	buf.WriteU64(summonerGUID)
+	buf.WriteU32(zoneID)
+	buf.WriteU32(120000) // 2 minutes in ms
+	_ = s.write(uint16(protocol.OpcodeSMSG_SUMMON_REQUEST), buf.Bytes(), true)
+}
+
+// handleSummonResponse processes CMSG_SUMMON_RESPONSE (0x2AC).
+// Reference: WorldSession::HandleSummonResponseOpcode (MovementHandler.cpp:613) and Player::SummonIfPossible (Player.cpp:23829).
 func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 9 {
+	if !s.playerLoaded || s.player == nil {
+		return true
+	}
+	if len(payload) < 9 {
+		s.summonExpire = time.Time{}
+		s.summonerGUID = 0
 		return true
 	}
 	r := protocol.NewReader(payload)
 	summonerGUID, _ := r.ReadU64()
 	agree, _ := r.ReadU8()
-	if agree == 0 || s.player.Health == 0 {
+	if agree == 0 {
+		s.summonExpire = time.Time{}
+		s.summonerGUID = 0
+		return true
+	}
+	if s.player.Health == 0 || (s.player.UnitFlags&unitFlagInCombat != 0) {
+		s.summonExpire = time.Time{}
+		s.summonerGUID = 0
+		return true
+	}
+	if !s.summonExpire.IsZero() && time.Now().After(s.summonExpire) {
+		s.summonExpire = time.Time{}
+		s.summonerGUID = 0
 		return true
 	}
 
 	if s.server != nil {
 		summonerSess := s.server.findSessionByGUID(summonerGUID)
 		if summonerSess != nil && summonerSess.playerLoaded && summonerSess.player != nil {
-			s.player.Map = summonerSess.player.Map
-			s.player.X = summonerSess.player.X
-			s.player.Y = summonerSess.player.Y
-			s.player.Z = summonerSess.player.Z
-			s.player.Orientation = summonerSess.player.Orientation
-			s.sendPlayerUpdate()
+			s.teleportTo(summonerSess.player.Map, summonerSess.player.X, summonerSess.player.Y, summonerSess.player.Z, summonerSess.player.Orientation)
 		}
 	}
+	s.summonExpire = time.Time{}
+	s.summonerGUID = 0
 	return true
 }
 
