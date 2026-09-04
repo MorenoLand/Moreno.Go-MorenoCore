@@ -76,6 +76,24 @@ func (s *session) sendPlayerUpdate() {
 		fields[idx+1] = uint32(sk.Value) | uint32(sk.Max)<<16
 		fields[idx+2] = uint32(sk.Bonus)
 	}
+	equipment := strings.Fields(s.player.Equipment)
+	for slot := 0; slot < playerVisibleItemCount; slot++ {
+		base := slot * 2
+		itemID := uint32(0)
+		enchant := uint32(0)
+		if base < len(equipment) {
+			if id, err := strconv.ParseUint(equipment[base], 10, 32); err == nil {
+				itemID = uint32(id)
+			}
+		}
+		if base+1 < len(equipment) {
+			if enc, err := strconv.ParseUint(equipment[base+1], 10, 32); err == nil {
+				enchant = uint32(enc)
+			}
+		}
+		fields[playerVisibleItemStart+slot*2] = itemID
+		fields[playerVisibleItemStart+slot*2+1] = enchant
+	}
 	packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
 	if err == nil && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)

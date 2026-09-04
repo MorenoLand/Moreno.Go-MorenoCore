@@ -108,7 +108,6 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		}
 	}
 	s.attackTarget = victim
-	s.lastSwing = time.Now()
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
 		s.player.UnitFlags |= unitFlagInCombat
@@ -130,6 +129,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 	if s.player == nil || target.Health == 0 {
 		return
 	}
+	s.lastSwing = time.Now()
 	damage := uint32(20 + int(s.player.Level)*5)
 	if s.player.MaxDamage > s.player.MinDamage && s.player.MinDamage > 0 {
 		attSpeed := float64(s.player.AttackTime) / 1000.0

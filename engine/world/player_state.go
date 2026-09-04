@@ -1303,6 +1303,38 @@ func buildItemCreateBlockForLocationWithDurability(fullGUID uint64, itemEntry, c
 	return block.Bytes()
 }
 
+func buildContainerValuesUpdate(bagGUID uint64, containerSlots uint32, contents map[uint32]uint64) []byte {
+	if containerSlots > 36 {
+		containerSlots = 36
+	}
+	totalFields := int(66 + containerSlots*2)
+	values := make([]uint32, totalFields)
+	mask := protocol.NewUpdateMask(totalFields)
+	for slot := uint32(0); slot < containerSlots; slot++ {
+		lowIdx := int(66 + slot*2)
+		highIdx := int(67 + slot*2)
+		var itemGUID uint64
+		if contents != nil {
+			itemGUID = contents[slot]
+		}
+		values[lowIdx] = uint32(itemGUID)
+		values[highIdx] = uint32(itemGUID >> 32)
+		_ = mask.Set(lowIdx)
+		_ = mask.Set(highIdx)
+	}
+	block := protocol.NewBuffer(64 + int(containerSlots)*8)
+	block.WriteU8(protocol.UpdateValues)
+	block.WritePackedGUID(bagGUID)
+	block.WriteU8(uint8(mask.BlockCount()))
+	mask.AppendTo(block)
+	for index := 0; index < totalFields; index++ {
+		if mask.Has(index) {
+			block.WriteU32(values[index])
+		}
+	}
+	return block.Bytes()
+}
+
 func (s *session) sendItemCreate(itemGUID uint64, itemEntry, count uint32, bag, slot uint8) error {
 	fullGUID := uint64(itemGUID) | (uint64(0x4000) << 48)
 	block := buildItemCreateBlock(fullGUID, itemEntry, count, s.playerGUID)
@@ -1315,19 +1347,15 @@ func (s *session) sendItemCreate(itemGUID uint64, itemEntry, count uint32, bag, 
 	if err := s.write(packet.Opcode, packet.Payload.Bytes(), true); err != nil {
 		return err
 	}
-	if bag == 0 || bag == 255 {
-		invField := 324 + int(slot)*2
-		fields := map[int]uint32{
-			invField:         uint32(fullGUID),
-			invField + 1:     uint32(fullGUID >> 32),
-			unitFieldCoinage: s.player.Money,
-		}
-		playerPacket, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
-		if err == nil && playerPacket != nil {
-			_ = s.write(playerPacket.Opcode, playerPacket.Payload.Bytes(), true)
-		}
+	fields := map[int]uint32{
+		324 + int(slot)*2:     uint32(fullGUID),
+		324 + int(slot)*2 + 1: uint32(fullGUID >> 32),
 	}
-	return nil
+	playerPacket, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
+	if err != nil {
+		return err
+	}
+	return s.write(playerPacket.Opcode, playerPacket.Payload.Bytes(), true)
 }
 
 func (s *session) sendInventoryItems(ctx context.Context) error {
@@ -1414,6 +1442,11 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		block := buildItemCreateBlockForLocationWithDurability(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID, containedGUID, cSlots, contents[int64(fullGUID)], curD, maxD)
 		updates.AddUpdateBlock(block)
 
+		if cSlots > 0 {
+			valBlock := buildContainerValuesUpdate(fullGUID, cSlots, contents[int64(fullGUID)])
+			updates.AddUpdateBlock(valBlock)
+		}
+
 		if bag == 0 && slot >= 0 && slot <= 118 {
 			slotItems[int(slot)] = fullGUID
 		}
@@ -1424,6 +1457,26 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		guid := slotItems[sl]
 		fields[invField] = uint32(guid)
 		fields[invField+1] = uint32(guid >> 32)
+	}
+	if s.player != nil {
+		equipment := strings.Fields(s.player.Equipment)
+		for slot := 0; slot < playerVisibleItemCount; slot++ {
+			base := slot * 2
+			itemID := uint32(0)
+			enchant := uint32(0)
+			if base < len(equipment) {
+				if id, err := strconv.ParseUint(equipment[base], 10, 32); err == nil {
+					itemID = uint32(id)
+				}
+			}
+			if base+1 < len(equipment) {
+				if enc, err := strconv.ParseUint(equipment[base+1], 10, 32); err == nil {
+					enchant = uint32(enc)
+				}
+			}
+			fields[playerVisibleItemStart+slot*2] = itemID
+			fields[playerVisibleItemStart+slot*2+1] = enchant
+		}
 	}
 	if updates.HasData() {
 		packet, err := updates.BuildPacket(0)

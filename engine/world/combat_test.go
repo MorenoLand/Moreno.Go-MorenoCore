@@ -793,4 +793,231 @@ func TestPvPMeleeSwingContinuationAndNearbyBroadcast(t *testing.T) {
 	}
 }
 
+func TestCreatureAggroAttackStartAndEvadeParity(t *testing.T) {
+	c1, s1 := net.Pipe()
+	defer c1.Close()
+	defer s1.Close()
+
+	c2, s2 := net.Pipe()
+	defer c2.Close()
+	defer s2.Close()
+
+	srv := &Server{
+		creatureMotion: make(map[uint64]*creatureMotion),
+		sessions:       make(map[*session]struct{}),
+	}
+
+	p1 := &session{
+		server:       srv,
+		conn:         s1,
+		playerGUID:   10,
+		authed:       true,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:   10,
+			Map:    0,
+			X:      100.0,
+			Y:      100.0,
+			Z:      10.0,
+			Health: 500,
+		},
+	}
+	p2 := &session{
+		server:       srv,
+		conn:         s2,
+		playerGUID:   20,
+		authed:       true,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:   20,
+			Map:    0,
+			X:      102.0,
+			Y:      100.0,
+			Z:      10.0,
+			Health: 500,
+		},
+	}
+	srv.sessions[p1] = struct{}{}
+	srv.sessions[p2] = struct{}{}
+
+	p1Ops := make(chan uint16, 20)
+	p2Ops := make(chan uint16, 20)
+	go func() {
+		for {
+			op, _, err := readServerFrame(c1, nil)
+			if err != nil {
+				return
+			}
+			p1Ops <- op
+		}
+	}()
+	go func() {
+		for {
+			op, _, err := readServerFrame(c2, nil)
+			if err != nil {
+				return
+			}
+			p2Ops <- op
+		}
+	}()
+
+	creatureGUID := uint64(5000)
+	motion := &creatureMotion{
+		GUID:       creatureGUID,
+		Entry:      100,
+		Map:        0,
+		HomeX:      100.0,
+		HomeY:      100.0,
+		HomeZ:      10.0,
+		X:          100.0,
+		Y:          100.0,
+		Z:          10.0,
+		Speed:      2.5,
+		RunSpeed:   7.0,
+		Health:     100,
+		MaxHealth:  100,
+		AttackTime: 2000,
+	}
+	srv.creatureMotion[creatureGUID] = motion
+
+	ctx := context.Background()
+
+	// 1. Trigger creature aggro targeting p1
+	srv.triggerCreatureAggro(ctx, creatureGUID, 10)
+
+	// Verify p1 receives SMSG_AI_REACTION and SMSG_ATTACK_START
+	select {
+	case op := <-p1Ops:
+		if op != uint16(protocol.OpcodeSMSG_AI_REACTION) {
+			t.Fatalf("expected p1 to receive SMSG_AI_REACTION (0x13C), got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for p1 SMSG_AI_REACTION")
+	}
+
+	select {
+	case op := <-p1Ops:
+		if op != uint16(protocol.OpcodeSMSG_ATTACK_START) {
+			t.Fatalf("expected p1 to receive SMSG_ATTACK_START (0x143), got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for p1 SMSG_ATTACK_START")
+	}
+
+	// Verify nearby observer p2 ALSO receives SMSG_AI_REACTION and SMSG_ATTACK_START broadcast
+	select {
+	case op := <-p2Ops:
+		if op != uint16(protocol.OpcodeSMSG_AI_REACTION) {
+			t.Fatalf("expected p2 to receive SMSG_AI_REACTION broadcast (0x13C), got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for p2 SMSG_AI_REACTION broadcast")
+	}
+
+	select {
+	case op := <-p2Ops:
+		if op != uint16(protocol.OpcodeSMSG_ATTACK_START) {
+			t.Fatalf("expected p2 to receive SMSG_ATTACK_START broadcast (0x143), got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for p2 SMSG_ATTACK_START broadcast")
+	}
+
+	// 2. Creature melee attack in range (dist <= 3.0 yards) executes immediately
+	players := []playerPos{
+		{
+			GUID: 10,
+			Map:  0,
+			X:    101.0,
+			Y:    100.0,
+			Z:    10.0,
+			Sess: p1,
+		},
+	}
+	now := time.Now()
+	srv.stepCreatureMotion(ctx, motion, players, now)
+
+	// Verify p1 received SMSG_ATTACKERSTATEUPDATE
+	select {
+	case op := <-p1Ops:
+		if op != uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE) {
+			t.Fatalf("expected p1 SMSG_ATTACKERSTATEUPDATE, got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for p1 SMSG_ATTACKERSTATEUPDATE")
+	}
+
+	// Verify observer p2 ALSO received SMSG_ATTACKERSTATEUPDATE broadcast
+	select {
+	case op := <-p2Ops:
+		if op != uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE) {
+			t.Fatalf("expected p2 SMSG_ATTACKERSTATEUPDATE broadcast, got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for p2 SMSG_ATTACKERSTATEUPDATE broadcast")
+	}
+
+	// Verify p1 and p2 received player update values after attack
+	select {
+	case op := <-p1Ops:
+		if op != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) && op != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) {
+			t.Fatalf("expected p1 update values packet, got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for p1 update values packet")
+	}
+
+	select {
+	case op := <-p2Ops:
+		if op != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) && op != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) {
+			t.Fatalf("expected p2 update values broadcast, got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for p2 update values broadcast")
+	}
+
+	// 3. Test evade: Player runs > 45 yards away
+	playersFar := []playerPos{
+		{
+			GUID: 10,
+			Map:  0,
+			X:    200.0, // 100 yards away
+			Y:    100.0,
+			Z:    10.0,
+			Sess: p1,
+		},
+	}
+	// Damage creature to 50 HP to verify health reset on evade
+	motion.Health = 50
+
+	srv.stepCreatureMotion(ctx, motion, playersFar, time.Now())
+
+	// Verify creature dropped combat and reset health to max (100)
+	if motion.InCombat || motion.TargetGUID != 0 {
+		t.Fatalf("expected creature dropped combat on evade, inCombat=%v target=%d", motion.InCombat, motion.TargetGUID)
+	}
+	if motion.Health != motion.MaxHealth {
+		t.Fatalf("expected creature health restored to %d on evade, got %d", motion.MaxHealth, motion.Health)
+	}
+
+	// Verify p1 and p2 received SMSG_ATTACK_STOP broadcast
+	select {
+	case op := <-p1Ops:
+		if op != uint16(protocol.OpcodeSMSG_ATTACK_STOP) {
+			t.Fatalf("expected p1 SMSG_ATTACK_STOP on evade, got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for p1 SMSG_ATTACK_STOP on evade")
+	}
+
+	select {
+	case op := <-p2Ops:
+		if op != uint16(protocol.OpcodeSMSG_ATTACK_STOP) {
+			t.Fatalf("expected p2 SMSG_ATTACK_STOP on evade, got 0x%04X", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for p2 SMSG_ATTACK_STOP on evade")
+	}
+}
+
 

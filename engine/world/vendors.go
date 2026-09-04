@@ -228,6 +228,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	if currentCount <= int64(count) {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+		s.despawnItem(itemGUID)
 	} else {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
 	}
