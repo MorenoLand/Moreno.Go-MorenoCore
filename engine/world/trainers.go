@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -307,10 +308,44 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), s)
 	}
 
-	// 3. Learn the spell and handle skill upgrades
-	s.learnSpell(ctx, spellID)
+	// 3. Play learning chime and spellbook open sounds on client (TC: PlaySound(1455))
+	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(1455), true) // SOUNDKIT 1455: Spell Learn Chime
+	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(618), true)  // SOUNDKIT 618: Spellbook Open
 
-	// 4. Check spell_learn_spell for dependent spells (e.g. Find Herbs, Smelting, Campfire, etc.)
+	// 4. Check if trainerSpell is castable (HasEffect SPELL_EFFECT_LEARN_SPELL = 36)
+	isCastable := false
+	var triggerSpell uint32
+	if s.server != nil && s.server.Data != nil {
+		if sp, ok, err := s.server.Data.Spell(spellID); err == nil && ok {
+			for _, eff := range sp.Effects {
+				if eff.Effect == 36 { // SPELL_EFFECT_LEARN_SPELL
+					isCastable = true
+					triggerSpell = eff.TriggerSpell
+					break
+				}
+			}
+		}
+	}
+
+	if isCastable {
+		// Player casts the teach spell (TC: player->CastSpell(player, trainerSpell->SpellId, true))
+		castTimeStamp := uint32(time.Now().UnixMilli())
+		target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+		goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, spellID, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+		}
+		if triggerSpell > 0 {
+			s.learnSpell(ctx, triggerSpell)
+		} else {
+			s.learnSpell(ctx, spellID)
+		}
+	} else {
+		s.learnSpell(ctx, spellID)
+	}
+
+	// 5. Check spell_learn_spell for dependent spells (e.g. Find Herbs, Smelting, Campfire, etc.)
 	var depSpells []uint32
 	depRows, dErr := wdb.QueryContext(ctx, "SELECT SpellID FROM spell_learn_spell WHERE entry = ?", spellID)
 	if dErr == nil {
@@ -328,7 +363,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		}
 	}
 
-	// 5. Send teach succeeded (TC: SendTeachSucceeded(npc, player, spellId))
+	// 6. Send teach succeeded (TC: SendTeachSucceeded(npc, player, spellId))
 	_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_SUCCEEDED), buildTrainerBuySucceeded(trainerGUID, spellID), true)
 	s.sendPlayerUpdate()
 	_ = s.sendTrainerList(ctx, trainerGUID)
@@ -341,6 +376,26 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 		return
 	}
 	cdb := s.server.CharactersStore.DB
+
+	// Check if this spell supercedes an earlier rank (TrinityCore: Player::SendSupercededSpell)
+	var prevSpellID uint32
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT r1.spell_id FROM spell_ranks AS r1
+			JOIN spell_ranks AS r2 ON r1.first_spell_id = r2.first_spell_id
+			WHERE r2.spell_id = ? AND r1.rank = r2.rank - 1 LIMIT 1`, spellID).Scan(&prevSpellID)
+	}
+	if prevSpellID > 0 && s.hasLearnedSpell(prevSpellID) {
+		if cdb != nil {
+			_, _ = cdb.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ?", s.playerGUID, prevSpellID)
+		}
+		for i := range s.player.Spells {
+			if s.player.Spells[i].ID == prevSpellID {
+				s.player.Spells[i].Active = false
+			}
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_SUPERCEDED_SPELL), buildSupercededSpell(prevSpellID, spellID), true)
+	}
+
 	if cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
 	}
@@ -350,6 +405,25 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 	learnedBuf.WriteU32(spellID)
 	learnedBuf.WriteU16(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), learnedBuf.Bytes(), true)
+
+	// Check if passive spell (TC: if (spellInfo->IsPassive()) CastSpell(this, spellId, true))
+	if s.server != nil && s.server.Data != nil {
+		if sp, ok, err := s.server.Data.Spell(spellID); err == nil && ok {
+			if sp.Attributes&0x40 != 0 { // SPELL_ATTR0_PASSIVE
+				castTimeStamp := uint32(time.Now().UnixMilli())
+				target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+				goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, spellID, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
+				_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+				if s.server != nil {
+					s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+				}
+				if s.auras == nil {
+					s.auras = make(map[uint32]struct{})
+				}
+				s.auras[spellID] = struct{}{}
+			}
+		}
+	}
 
 	// Check if spell teaches or upgrades a skill (SPELL_EFFECT_LEARN_SKILL = 118)
 	if s.server != nil && s.server.Data != nil {
@@ -461,5 +535,18 @@ func buildTrainerBuyFailed(trainerGUID uint64, spellID, reason uint32) []byte {
 	buf.WriteU64(trainerGUID)
 	buf.WriteU32(spellID)
 	buf.WriteU32(reason)
+	return buf.Bytes()
+}
+
+func buildPlaySound(soundID uint32) []byte {
+	buf := protocol.NewBuffer(4)
+	buf.WriteU32(soundID)
+	return buf.Bytes()
+}
+
+func buildSupercededSpell(oldSpell, newSpell uint32) []byte {
+	buf := protocol.NewBuffer(8)
+	buf.WriteU32(oldSpell)
+	buf.WriteU32(newSpell)
 	return buf.Bytes()
 }

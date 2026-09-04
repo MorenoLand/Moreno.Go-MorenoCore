@@ -240,6 +240,32 @@ func TestTrainerVisualSoundAndSkillLearning(t *testing.T) {
 		t.Fatalf("expected impact on player 1 with kit 362, got target=%d kit=%d", iTarget, iKit)
 	}
 
+	// Read SMSG_PLAY_SOUND (1455: Spell Learn Chime)
+	opSound1, dataSound1, err := readServerFrame(cConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opSound1 != uint16(protocol.OpcodeSMSG_PLAY_SOUND) {
+		t.Fatalf("expected SMSG_PLAY_SOUND (0x2D2), got 0x%04X", opSound1)
+	}
+	snd1, _ := protocol.NewReader(dataSound1).ReadU32()
+	if snd1 != 1455 {
+		t.Fatalf("expected SoundKit 1455, got %d", snd1)
+	}
+
+	// Read SMSG_PLAY_SOUND (618: Spellbook Open)
+	opSound2, dataSound2, err := readServerFrame(cConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opSound2 != uint16(protocol.OpcodeSMSG_PLAY_SOUND) {
+		t.Fatalf("expected SMSG_PLAY_SOUND (0x2D2), got 0x%04X", opSound2)
+	}
+	snd2, _ := protocol.NewReader(dataSound2).ReadU32()
+	if snd2 != 618 {
+		t.Fatalf("expected SoundKit 618, got %d", snd2)
+	}
+
 	// Read SMSG_LEARNED_SPELL (2575)
 	opLearn1, dataLearn1, err := readServerFrame(cConn, nil)
 	if err != nil {
@@ -303,5 +329,147 @@ func TestTrainerVisualSoundAndSkillLearning(t *testing.T) {
 	sess.setOrUpdateSkill(context.Background(), 186, 75)
 	if val := sess.getSkillValue(186); val != 1 {
 		t.Fatalf("expected Mining skill value 1, got %d", val)
+	}
+}
+
+func TestTrainerBuySpellSupercededAndCastableParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_spell (guid INTEGER, spell INTEGER, active INTEGER, disabled INTEGER, PRIMARY KEY (guid, spell))",
+		"CREATE TABLE creature_default_trainer (CreatureId INTEGER PRIMARY KEY, TrainerId INTEGER)",
+		"CREATE TABLE trainer (Id INTEGER PRIMARY KEY, Type INTEGER, Requirement INTEGER, Greeting TEXT)",
+		"CREATE TABLE trainer_spell (TrainerId INTEGER, SpellId INTEGER, MoneyCost INTEGER, ReqSkillLine INTEGER, ReqSkillRank INTEGER, ReqAbility1 INTEGER, ReqAbility2 INTEGER, ReqAbility3 INTEGER, ReqLevel INTEGER, PRIMARY KEY (TrainerId, SpellId))",
+		"CREATE TABLE spell_ranks (first_spell_id INTEGER, spell_id INTEGER, rank INTEGER, PRIMARY KEY (first_spell_id, spell_id))",
+		"CREATE TABLE spell_learn_spell (entry INTEGER, SpellID INTEGER, PRIMARY KEY (entry, SpellID))",
+		"INSERT INTO characters VALUES (1, 1000, '')",
+		"INSERT INTO creature_default_trainer VALUES (303, 75)",
+		"INSERT INTO trainer VALUES (75, 0, 0, 'Welcome')",
+		// Fireball rank 1 = 133, rank 2 = 143 (ReqAbility1 = 133)
+		"INSERT INTO trainer_spell VALUES (75, 143, 100, 0, 0, 133, 0, 0, 6)",
+		"INSERT INTO spell_ranks VALUES (133, 133, 1)",
+		"INSERT INTO spell_ranks VALUES (133, 143, 2)",
+		// Character initially knows rank 1 (133)
+		"INSERT INTO character_spell VALUES (1, 133, 1, 0)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cConn, sConn := net.Pipe()
+	defer cConn.Close()
+	defer sConn.Close()
+
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{AuthStore: store, CharactersStore: store, WorldStore: store}
+	sess := &session{
+		server:       srv,
+		conn:         sConn,
+		playerGUID:   1,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:  1,
+			Level: 10,
+			Money: 1000,
+			Spells: []learnedSpell{
+				{ID: 133, Active: true, Disabled: false},
+			},
+		},
+	}
+
+	trainerGUID := creatureWorldGUID(1, 303)
+	buyBuf := protocol.NewBuffer(12)
+	buyBuf.WriteU64(trainerGUID)
+	buyBuf.WriteU32(143) // Buy Fireball Rank 2
+
+	doneBuy := make(chan struct{})
+	go func() {
+		sess.handleTrainerBuySpell(context.Background(), buyBuf.Bytes())
+		close(doneBuy)
+	}()
+
+	// 1. SMSG_PLAY_SPELL_VISUAL
+	op, _, _ := readServerFrame(cConn, nil)
+	if op != uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL) {
+		t.Fatalf("expected SMSG_PLAY_SPELL_VISUAL, got 0x%04X", op)
+	}
+
+	// 2. SMSG_PLAY_SPELL_IMPACT
+	op, _, _ = readServerFrame(cConn, nil)
+	if op != uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT) {
+		t.Fatalf("expected SMSG_PLAY_SPELL_IMPACT, got 0x%04X", op)
+	}
+
+	// 3. SMSG_PLAY_SOUND (1455)
+	op, data, _ := readServerFrame(cConn, nil)
+	if op != uint16(protocol.OpcodeSMSG_PLAY_SOUND) {
+		t.Fatalf("expected SMSG_PLAY_SOUND, got 0x%04X", op)
+	}
+	snd, _ := protocol.NewReader(data).ReadU32()
+	if snd != 1455 {
+		t.Fatalf("expected sound 1455, got %d", snd)
+	}
+
+	// 4. SMSG_PLAY_SOUND (618)
+	op, _, _ = readServerFrame(cConn, nil)
+	if op != uint16(protocol.OpcodeSMSG_PLAY_SOUND) {
+		t.Fatalf("expected SMSG_PLAY_SOUND, got 0x%04X", op)
+	}
+
+	// 5. SMSG_SUPERCEDED_SPELL (old: 133, new: 143)
+	op, superData, _ := readServerFrame(cConn, nil)
+	if op != uint16(protocol.OpcodeSMSG_SUPERCEDED_SPELL) {
+		t.Fatalf("expected SMSG_SUPERCEDED_SPELL (0x12C), got 0x%04X", op)
+	}
+	rSup := protocol.NewReader(superData)
+	oldSp, _ := rSup.ReadU32()
+	newSp, _ := rSup.ReadU32()
+	if oldSp != 133 || newSp != 143 {
+		t.Fatalf("expected superceded 133 -> 143, got %d -> %d", oldSp, newSp)
+	}
+
+	// 6. SMSG_LEARNED_SPELL (143)
+	op, learnData, _ := readServerFrame(cConn, nil)
+	if op != uint16(protocol.OpcodeSMSG_LEARNED_SPELL) {
+		t.Fatalf("expected SMSG_LEARNED_SPELL, got 0x%04X", op)
+	}
+	spLearned, _ := protocol.NewReader(learnData).ReadU32()
+	if spLearned != 143 {
+		t.Fatalf("expected learned 143, got %d", spLearned)
+	}
+
+	// 7. SMSG_TRAINER_BUY_SUCCEEDED
+	op, _, _ = readServerFrame(cConn, nil)
+	if op != uint16(protocol.OpcodeSMSG_TRAINER_BUY_SUCCEEDED) {
+		t.Fatalf("expected SMSG_TRAINER_BUY_SUCCEEDED, got 0x%04X", op)
+	}
+
+	// 8. SMSG_UPDATE_OBJECT (from sendPlayerUpdate)
+	_, _, _ = readServerFrame(cConn, nil)
+
+	// 9. SMSG_TRAINER_LIST (from sendTrainerList refresh)
+	_, _, _ = readServerFrame(cConn, nil)
+
+	<-doneBuy
+
+	// Verify old rank was deactivated
+	var oldActive int
+	_ = db.QueryRow("SELECT active FROM character_spell WHERE guid = 1 AND spell = 133").Scan(&oldActive)
+	if oldActive != 0 {
+		t.Fatalf("expected old rank 133 to be deactivated, got active=%d", oldActive)
+	}
+
+	// Verify new rank is active
+	var newActive int
+	_ = db.QueryRow("SELECT active FROM character_spell WHERE guid = 1 AND spell = 143").Scan(&newActive)
+	if newActive != 1 {
+		t.Fatalf("expected new rank 143 to be active, got active=%d", newActive)
 	}
 }

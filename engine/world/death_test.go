@@ -947,6 +947,20 @@ func TestCorpseWorldObjectAndBattlegroundQueueParity(t *testing.T) {
 		t.Fatal("expected player 99 queued in spiritReviveQueue")
 	}
 
+	// Drain frames from step 1 up to SMSG_AREA_SPIRIT_HEALER_TIME (last packet sent during repop)
+	gotSpiritHealerTime := false
+	for !gotSpiritHealerTime {
+		select {
+		case op := <-frames:
+			<-payloads
+			if op == uint16(protocol.OpcodeSMSG_AREA_SPIRIT_HEALER_TIME) {
+				gotSpiritHealerTime = true
+			}
+		case <-time.After(1 * time.Second):
+			t.Fatal("timeout waiting for SMSG_AREA_SPIRIT_HEALER_TIME during repop drain")
+		}
+	}
+
 	// 2. Test battleground player positions
 	sess2 := &session{
 		server:       server,
@@ -963,17 +977,6 @@ func TestCorpseWorldObjectAndBattlegroundQueueParity(t *testing.T) {
 	server.sessions = make(map[*session]struct{})
 	server.sessions[sess] = struct{}{}
 	server.sessions[sess2] = struct{}{}
-
-	// Drain frames from step 1
-	drainLoop:
-	for {
-		select {
-		case <-frames:
-			<-payloads
-		default:
-			break drainLoop
-		}
-	}
 
 	if !sess.handleBattlegroundPlayerPositions(ctx, nil) {
 		t.Fatal("handleBattlegroundPlayerPositions failed")
