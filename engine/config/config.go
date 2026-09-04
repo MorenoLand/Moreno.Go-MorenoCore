@@ -50,6 +50,7 @@ type Config struct {
 	GMLoginState                            int
 	GMVisibleState                          int
 	MaxOverSpeedPings                       uint32
+	MinPetitionSigns                        uint32
 	DeathCorpseReclaimDelayPvE              bool
 	DeathCorpseReclaimDelayPvP              bool
 	NPCBots                                 NPCBotConfig
@@ -97,7 +98,7 @@ type NPCBotConfig struct {
 }
 
 func Default() Config {
-	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", AuthDatabaseFile: "auth.db", CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, RealmID: 1, LogsDir: "logs", Motd: "Welcome to a Trinity Core server.", LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, Expansion: 2, StartPlayerLevel: 1, StartPlayerMoney: 10000, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, VisibilityDistanceContinents: 100, SoloLFGEnable: true, SoloLFGAnnounce: true, GMLoginState: 2, GMVisibleState: 2, MaxOverSpeedPings: 2, DeathCorpseReclaimDelayPvE: true, DeathCorpseReclaimDelayPvP: true, NPCBots: NPCBotConfig{Enable: true, MaxBots: 9, MaxBotsPerClass: 0, BaseFollowDistance: 25, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, DamagePhysicalMultiplier: 1, DamageSpellMultiplier: 1, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: true, EnableBG: true, EnableArena: true, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, MovementInterruptFood: false, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: true, BlademasterEnable: false, ObsidianDestroyerEnable: false, ArchmageEnable: false, DreadlordEnable: false, SpellBreakerEnable: false, DarkRangerEnable: false, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
+	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", AuthDatabaseFile: "auth.db", CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, RealmID: 1, LogsDir: "logs", Motd: "Welcome to a Trinity Core server.", LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, Expansion: 2, StartPlayerLevel: 1, StartPlayerMoney: 10000, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, VisibilityDistanceContinents: 100, SoloLFGEnable: true, SoloLFGAnnounce: true, GMLoginState: 2, GMVisibleState: 2, MaxOverSpeedPings: 2, MinPetitionSigns: 9, DeathCorpseReclaimDelayPvE: true, DeathCorpseReclaimDelayPvP: true, NPCBots: NPCBotConfig{Enable: true, MaxBots: 9, MaxBotsPerClass: 0, BaseFollowDistance: 25, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, DamagePhysicalMultiplier: 1, DamageSpellMultiplier: 1, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: true, EnableBG: true, EnableArena: true, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, MovementInterruptFood: false, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: true, BlademasterEnable: false, ObsidianDestroyerEnable: false, ArchmageEnable: false, DreadlordEnable: false, SpellBreakerEnable: false, DarkRangerEnable: false, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
 }
 
 func Load(path string) (Config, error) {
@@ -344,6 +345,8 @@ func (c *Config) set(key, value string) error {
 		}
 		c.MaxOverSpeedPings = pingLimit
 		return nil
+	case "MinPetitionSigns":
+		return setUint32(&c.MinPetitionSigns, key, value)
 	case "Death.CorpseReclaimDelay.PvE":
 		return setBool(&c.DeathCorpseReclaimDelayPvE, key, value)
 	case "Death.CorpseReclaimDelay.PvP":

@@ -20,6 +20,74 @@ type guildMemberInfo struct {
 	Online      bool
 }
 
+// Petition result codes mirroring TrinityCore PetitionMgr.h:30-42.
+const (
+	petitionTurnOk                 uint32 = 0
+	petitionTurnAlreadyInGuild     uint32 = 2
+	petitionTurnNeedMoreSignatures uint32 = 4
+
+	petitionSignOk             uint32 = 0
+	petitionSignAlreadySigned  uint32 = 1
+	petitionSignAlreadyInGuild uint32 = 2
+	petitionSignCantSignOwn    uint32 = 3
+	petitionSignNotServer      uint32 = 4
+)
+
+// Guild command types mirroring TrinityCore Guild.h:103-121.
+const (
+	guildCmdCreate       uint32 = 0
+	guildCmdInvite       uint32 = 1
+	guildCmdQuit         uint32 = 3
+	guildCmdRoster       uint32 = 5
+	guildCmdPromote      uint32 = 6
+	guildCmdDemote       uint32 = 7
+	guildCmdRemove       uint32 = 8
+	guildCmdChangeLeader uint32 = 10
+	guildCmdEditMotd     uint32 = 11
+	guildCmdGuildChat    uint32 = 13
+	guildCmdFounder      uint32 = 14
+	guildCmdChangeRank   uint32 = 16
+	guildCmdPublicNote   uint32 = 19
+	guildCmdViewTab      uint32 = 21
+	guildCmdMoveItem     uint32 = 22
+	guildCmdRepair       uint32 = 25
+)
+
+// Guild command errors mirroring TrinityCore Guild.h:123-149.
+const (
+	errGuildCommandSuccess    uint32 = 0
+	errGuildInternal          uint32 = 1
+	errAlreadyInGuild         uint32 = 2
+	errAlreadyInGuildS        uint32 = 3
+	errInvitedToGuild         uint32 = 4
+	errAlreadyInvitedToGuildS uint32 = 5
+	errGuildNameInvalid       uint32 = 6
+	errGuildNameExists        uint32 = 7
+	errGuildLeaderLeave       uint32 = 8
+	errGuildPermissions       uint32 = 8
+	errGuildPlayerNotInGuild  uint32 = 9
+	errGuildPlayerNotInGuildS uint32 = 10
+	errGuildPlayerNotFoundS   uint32 = 11
+	errGuildNotAllied         uint32 = 12
+	errGuildRankTooHighS      uint32 = 13
+	errGuildRankTooLowS       uint32 = 14
+	errGuildRanksLocked       uint32 = 17
+	errGuildRankInUse         uint32 = 18
+	errGuildIgnoringYouS      uint32 = 19
+	errGuildWithdrawLimit     uint32 = 25
+	errGuildNotEnoughMoney    uint32 = 26
+	errGuildBankFull          uint32 = 28
+	errGuildItemNotFound      uint32 = 29
+)
+
+func (s *session) sendGuildCommandResult(cmdType uint32, param string, errCode uint32) {
+	buf := protocol.NewBuffer(12 + len(param))
+	buf.WriteI32(int32(cmdType))
+	buf.WriteCString(param)
+	buf.WriteI32(int32(errCode))
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_COMMAND_RESULT), buf.Bytes(), true)
+}
+
 type guildRankInfo struct {
 	RankID    uint32
 	Name      string
@@ -90,11 +158,7 @@ func (s *session) handleGuildRoster(ctx context.Context) bool {
 	err := cdb.QueryRowContext(ctx, "SELECT guildid FROM guild_member WHERE guid = ? LIMIT 1", s.playerGUID).Scan(&guildID)
 	if err != nil || guildID == 0 {
 		// Not in guild
-		resBuf := protocol.NewBuffer(12)
-		resBuf.WriteI32(5) // GUILD_COMMAND_ROSTER
-		resBuf.WriteCString("")
-		resBuf.WriteI32(1) // ERR_GUILD_PLAYER_NOT_IN_GUILD
-		_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_COMMAND_RESULT), resBuf.Bytes(), true)
+		s.sendGuildCommandResult(guildCmdRoster, "", errGuildPlayerNotInGuild)
 		return true
 	}
 	var motd, info string
@@ -972,11 +1036,7 @@ func (s *session) sendGuildBankList(ctx context.Context, bankerGUID uint64, tabI
 		JOIN guild AS g ON g.guildid = gm.guildid
 		WHERE gm.guid = ? LIMIT 1`, s.playerGUID).Scan(&guildID, &bankMoney)
 	if err != nil || guildID == 0 {
-		resBuf := protocol.NewBuffer(12)
-		resBuf.WriteI32(11) // GUILD_COMMAND_VIEW_TAB
-		resBuf.WriteCString("")
-		resBuf.WriteI32(1) // ERR_GUILD_PLAYER_NOT_IN_GUILD
-		_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_COMMAND_RESULT), resBuf.Bytes(), true)
+		s.sendGuildCommandResult(guildCmdViewTab, "", errGuildPlayerNotInGuild)
 		return true
 	}
 
@@ -1460,27 +1520,18 @@ func (s *session) handlePetitionBuy(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// handlePetitionShowSignatures processes CMSG_PETITION_SHOW_SIGNATURES (0x1BE).
-// Reference: WorldSession::HandlePetitionShowSignatures (PetitionsHandler.cpp:220).
-func (s *session) handlePetitionShowSignatures(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
-		return true
+// sendPetitionShowSignatures sends SMSG_PETITION_SHOW_SIGNATURES (0x1BF).
+// Reference: WorldSession::SendPetitionSigns (PetitionsHandler.cpp:243).
+func (s *session) sendPetitionShowSignatures(target *session, petitionGUID uint64) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || target == nil || !target.playerLoaded {
+		return
 	}
-	r := protocol.NewReader(payload)
-	petitionGUID, err := r.ReadU64()
-	if err != nil {
-		return false
-	}
-
 	cdb := s.server.CharactersStore.DB
-	if cdb == nil {
-		return true
-	}
 
 	var ownerGUID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT ownerguid FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID)
+	_ = cdb.QueryRow("SELECT ownerguid FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID)
 
-	rows, err := cdb.QueryContext(ctx, "SELECT playerguid FROM petition_sign WHERE petitionguid = ?", petitionGUID)
+	rows, err := cdb.Query("SELECT playerguid FROM petition_sign WHERE petitionguid = ?", petitionGUID)
 	var signs []uint64
 	if err == nil {
 		defer rows.Close()
@@ -1501,7 +1552,21 @@ func (s *session) handlePetitionShowSignatures(ctx context.Context, payload []by
 		buf.WriteU64(sg)
 		buf.WriteU32(0)
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SHOW_SIGNATURES), buf.Bytes(), true)
+	_ = target.write(uint16(protocol.OpcodeSMSG_PETITION_SHOW_SIGNATURES), buf.Bytes(), true)
+}
+
+// handlePetitionShowSignatures processes CMSG_PETITION_SHOW_SIGNATURES (0x1BE).
+// Reference: WorldSession::HandlePetitionShowSignatures (PetitionsHandler.cpp:220).
+func (s *session) handlePetitionShowSignatures(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petitionGUID, err := r.ReadU64()
+	if err != nil {
+		return false
+	}
+	s.sendPetitionShowSignatures(s, petitionGUID)
 	return true
 }
 
@@ -1549,7 +1614,7 @@ func (s *session) handlePetitionQuery(ctx context.Context, payload []byte) bool 
 }
 
 // handlePetitionSign processes CMSG_PETITION_SIGN (0x1C0).
-// Reference: WorldSession::HandlePetitionSignOpcode (PetitionsHandler.cpp:328).
+// Reference: WorldSession::HandleSignPetition (PetitionsHandler.cpp:383).
 func (s *session) handlePetitionSign(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -1572,19 +1637,69 @@ func (s *session) handlePetitionSign(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	// Cannot sign own petition
+	if uint64(ownerGUID) == s.playerGUID {
+		buf := protocol.NewBuffer(20)
+		buf.WriteU64(petitionGUID)
+		buf.WriteU64(s.playerGUID)
+		buf.WriteU32(petitionSignCantSignOwn)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SIGN_RESULTS), buf.Bytes(), true)
+		return true
+	}
+
+	// Cross-faction check
+	var ownerRace int64
+	_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", ownerGUID).Scan(&ownerRace)
+	if s.player.Race != 0 && ownerRace != 0 && teamForRace(s.player.Race) != teamForRace(uint8(ownerRace)) {
+		s.sendGuildCommandResult(guildCmdCreate, "", errGuildNotAllied)
+		return true
+	}
+
+	// Already in guild check
+	if s.player.GuildID != 0 {
+		buf := protocol.NewBuffer(20)
+		buf.WriteU64(petitionGUID)
+		buf.WriteU64(s.playerGUID)
+		buf.WriteU32(petitionSignAlreadyInGuild)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SIGN_RESULTS), buf.Bytes(), true)
+		return true
+	}
+
+	// Already signed check (by character or account)
+	var alreadySigned int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM petition_sign WHERE petitionguid = ? AND (playerguid = ? OR player_account = ?)", petitionGUID, s.playerGUID, s.accountID).Scan(&alreadySigned)
+	if alreadySigned > 0 {
+		buf := protocol.NewBuffer(20)
+		buf.WriteU64(petitionGUID)
+		buf.WriteU64(s.playerGUID)
+		buf.WriteU32(petitionSignAlreadySigned)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SIGN_RESULTS), buf.Bytes(), true)
+		if s.server != nil {
+			if ownerSess := s.server.findSessionByGUID(uint64(ownerGUID)); ownerSess != nil {
+				_ = ownerSess.write(uint16(protocol.OpcodeSMSG_PETITION_SIGN_RESULTS), buf.Bytes(), true)
+			}
+		}
+		return true
+	}
+
 	_, _ = cdb.ExecContext(ctx, "INSERT OR IGNORE INTO petition_sign (ownerguid, petitionguid, playerguid, player_account, type) VALUES (?, ?, ?, ?, ?)",
 		ownerGUID, petitionGUID, s.playerGUID, s.accountID, pType)
 
 	buf := protocol.NewBuffer(20)
 	buf.WriteU64(petitionGUID)
 	buf.WriteU64(s.playerGUID)
-	buf.WriteU32(0) // success
+	buf.WriteU32(petitionSignOk)
 	_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SIGN_RESULTS), buf.Bytes(), true)
+	if s.server != nil {
+		if ownerSess := s.server.findSessionByGUID(uint64(ownerGUID)); ownerSess != nil {
+			_ = ownerSess.write(uint16(protocol.OpcodeSMSG_PETITION_SIGN_RESULTS), buf.Bytes(), true)
+		}
+	}
 	return true
 }
 
 // handleTurnInPetition processes CMSG_TURN_IN_PETITION (0x1C4).
-// Reference: WorldSession::HandleTurnInPetitionOpcode (PetitionsHandler.cpp:557).
+// Reference: WorldSession::HandleTurnInPetitionOpcode (PetitionsHandler.cpp:589).
 func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -1604,6 +1719,43 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	var guildName string
 	err = cdb.QueryRowContext(ctx, "SELECT ownerguid, name FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID, &guildName)
 	if err != nil || ownerGUID == 0 || guildName == "" {
+		return true
+	}
+
+	// Only owner can turn in petition
+	if uint64(ownerGUID) != s.playerGUID {
+		return true
+	}
+
+	// Owner already in guild
+	if s.player.GuildID != 0 {
+		buf := protocol.NewBuffer(4)
+		buf.WriteU32(petitionTurnAlreadyInGuild)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TURN_IN_PETITION_RESULTS), buf.Bytes(), true)
+		return true
+	}
+
+	// Guild name already exists
+	var existingGuildID int64
+	_ = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE UPPER(name) = UPPER(?) LIMIT 1", guildName).Scan(&existingGuildID)
+	if existingGuildID > 0 {
+		s.sendGuildCommandResult(guildCmdCreate, guildName, errGuildNameExists)
+		return true
+	}
+
+	// Minimum required signatures
+	minSigns := int64(9)
+	if s.server != nil && s.server.Config.MinPetitionSigns > 0 {
+		minSigns = int64(s.server.Config.MinPetitionSigns)
+	} else if s.server != nil && s.server.Config.MinPetitionSigns == 0 {
+		minSigns = 0
+	}
+	var signCount int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM petition_sign WHERE petitionguid = ?", petitionGUID).Scan(&signCount)
+	if signCount < minSigns {
+		buf := protocol.NewBuffer(4)
+		buf.WriteU32(petitionTurnNeedMoreSignatures)
+		_ = s.write(uint16(protocol.OpcodeSMSG_TURN_IN_PETITION_RESULTS), buf.Bytes(), true)
 		return true
 	}
 
@@ -1627,6 +1779,8 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 
 	// Add leader
 	_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 0, '', '')", newGuildID, ownerGUID)
+	s.player.GuildID = uint32(newGuildID)
+	s.player.GuildRank = 0
 
 	// Add signers
 	var signers []int64
@@ -1642,6 +1796,13 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 	}
 	for _, signerGUID := range signers {
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 4, '', '')", newGuildID, signerGUID)
+		if s.server != nil {
+			if signerSess := s.server.findSessionByGUID(uint64(signerGUID)); signerSess != nil && signerSess.playerLoaded {
+				signerSess.player.GuildID = uint32(newGuildID)
+				signerSess.player.GuildRank = 4
+				signerSess.sendPlayerUpdate()
+			}
+		}
 	}
 
 	// Clean up petition and charter item
@@ -1652,14 +1813,15 @@ func (s *session) handleTurnInPetition(ctx context.Context, payload []byte) bool
 
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
+	s.sendGuildCommandResult(guildCmdCreate, guildName, errGuildCommandSuccess)
 
 	buf := protocol.NewBuffer(4)
-	buf.WriteU32(0) // success
+	buf.WriteU32(petitionTurnOk)
 	_ = s.write(uint16(protocol.OpcodeSMSG_TURN_IN_PETITION_RESULTS), buf.Bytes(), true)
 	return true
 }
 
-// handleOfferPetition processes CMSG_OFFER_PETITION (0x1B3).
+// handleOfferPetition processes CMSG_OFFER_PETITION (0x1C3).
 // Reference: WorldSession::HandleOfferPetitionOpcode (PetitionsHandler.cpp:514).
 func (s *session) handleOfferPetition(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 20 {
@@ -1672,12 +1834,23 @@ func (s *session) handleOfferPetition(ctx context.Context, payload []byte) bool 
 
 	if s.server != nil {
 		targetSess := s.server.findSessionByGUID(targetGUID)
-		if targetSess != nil && targetSess.playerLoaded {
-			buf := protocol.NewBuffer(24)
-			buf.WriteU64(petitionGUID)
-			buf.WriteU64(s.playerGUID)
-			_ = targetSess.write(uint16(protocol.OpcodeSMSG_PETITION_SHOW_SIGNATURES), buf.Bytes(), true)
+		if targetSess == nil || !targetSess.playerLoaded {
+			return true
 		}
+
+		// Cross-faction check
+		if s.player.Race != 0 && targetSess.player.Race != 0 && teamForRace(s.player.Race) != teamForRace(targetSess.player.Race) {
+			s.sendGuildCommandResult(guildCmdCreate, "", errGuildNotAllied)
+			return true
+		}
+
+		// Target already in guild
+		if targetSess.player.GuildID != 0 {
+			s.sendGuildCommandResult(guildCmdInvite, targetSess.player.Name, errAlreadyInGuildS)
+			return true
+		}
+
+		s.sendPetitionShowSignatures(targetSess, petitionGUID)
 	}
 	return true
 }
@@ -1691,6 +1864,13 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 	r := protocol.NewReader(payload)
 	npcGUID, _ := r.ReadU64()
 
+	reqSigns := uint32(9)
+	if s.server != nil && s.server.Config.MinPetitionSigns > 0 {
+		reqSigns = s.server.Config.MinPetitionSigns
+	} else if s.server != nil && s.server.Config.MinPetitionSigns == 0 {
+		reqSigns = 0
+	}
+
 	buf := protocol.NewBuffer(24)
 	buf.WriteU64(npcGUID)
 	buf.WriteU8(1)                   // count = 1 petition item
@@ -1699,14 +1879,33 @@ func (s *session) handlePetitionShowList(ctx context.Context, payload []byte) bo
 	buf.WriteU32(CHARTER_DISPLAY_ID) // 16161
 	buf.WriteU32(guildCharterCost)   // 1000 copper
 	buf.WriteU32(0)                  // 0
-	buf.WriteU32(9)                  // 9 required signs
+	buf.WriteU32(reqSigns)           // required signs
 	_ = s.write(uint16(protocol.OpcodeSMSG_PETITION_SHOWLIST), buf.Bytes(), true)
 	return true
 }
 
 // handlePetitionDecline processes MSG_PETITION_DECLINE (0x1C2).
-// Reference: WorldSession::HandlePetitionDeclineOpcode (PetitionsHandler.cpp:520).
+// Reference: WorldSession::HandleDeclinePetition (PetitionsHandler.cpp:493).
 func (s *session) handlePetitionDecline(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+		return true
+	}
+	r := protocol.NewReader(payload)
+	petitionGUID, _ := r.ReadU64()
+
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil && petitionGUID > 0 {
+		var ownerGUID int64
+		_ = cdb.QueryRowContext(ctx, "SELECT ownerguid FROM petition WHERE petitionguid = ? LIMIT 1", petitionGUID).Scan(&ownerGUID)
+		if ownerGUID > 0 && s.server != nil {
+			if ownerSess := s.server.findSessionByGUID(uint64(ownerGUID)); ownerSess != nil {
+				buf := protocol.NewBuffer(8)
+				buf.WriteU64(s.playerGUID)
+				_ = ownerSess.write(uint16(protocol.OpcodeMSG_PETITION_DECLINE), buf.Bytes(), true)
+			}
+		}
+	}
+
 	buf := protocol.NewBuffer(8)
 	buf.WriteU64(s.playerGUID)
 	_ = s.write(uint16(protocol.OpcodeMSG_PETITION_DECLINE), buf.Bytes(), true)
@@ -1714,7 +1913,7 @@ func (s *session) handlePetitionDecline(ctx context.Context, payload []byte) boo
 }
 
 // handlePetitionRename processes MSG_PETITION_RENAME (0x1C1).
-// Reference: WorldSession::HandlePetitionRenameOpcode (PetitionsHandler.cpp:738).
+// Reference: WorldSession::HandlePetitionRenameGuild (PetitionsHandler.cpp:322).
 func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 9 {
 		return true
@@ -1730,9 +1929,23 @@ func (s *session) handlePetitionRename(ctx context.Context, payload []byte) bool
 	}
 
 	cdb := s.server.CharactersStore.DB
-	if cdb != nil {
-		_, _ = cdb.ExecContext(ctx, "UPDATE petition SET name = ? WHERE petitionguid = ? AND ownerguid = ?", newName, petitionGUID, s.playerGUID)
+	if cdb == nil {
+		return true
 	}
+
+	if len(newName) < 2 || len(newName) > 24 {
+		s.sendGuildCommandResult(guildCmdCreate, newName, errGuildNameInvalid)
+		return true
+	}
+
+	var existingGuildID int64
+	_ = cdb.QueryRowContext(ctx, "SELECT guildid FROM guild WHERE UPPER(name) = UPPER(?) LIMIT 1", newName).Scan(&existingGuildID)
+	if existingGuildID > 0 {
+		s.sendGuildCommandResult(guildCmdCreate, newName, errGuildNameExists)
+		return true
+	}
+
+	_, _ = cdb.ExecContext(ctx, "UPDATE petition SET name = ? WHERE petitionguid = ? AND ownerguid = ?", newName, petitionGUID, s.playerGUID)
 
 	buf := protocol.NewBuffer(16 + len(newName))
 	buf.WriteU64(petitionGUID)
