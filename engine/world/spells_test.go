@@ -2,12 +2,15 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+	_ "modernc.org/sqlite"
 )
 
 func TestHandleCancelMountAura(t *testing.T) {
@@ -484,3 +487,161 @@ func TestCancelCastInterruptsSpellTimerAndSendsFailed(t *testing.T) {
 		t.Fatalf("expected mana 500, got %d", sess.player.Powers[0])
 	}
 }
+
+func TestHandleTotemDestroyed(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	player := &playerState{
+		GUID:       101,
+		TotemSlots: [4]uint64{0, 9999, 0, 0},
+	}
+	sess := &session{
+		server:       &Server{},
+		conn:         serverConn,
+		authed:       true,
+		playerLoaded: true,
+		playerGUID:   101,
+		player:       player,
+	}
+
+	payload := []byte{1} // Slot 1 (Earth)
+	done := make(chan struct{})
+	go func() {
+		if !sess.handleTotemDestroyed(context.Background(), payload) {
+			t.Error("handleTotemDestroyed returned false")
+		}
+		close(done)
+	}()
+
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	op, data, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	if op != uint16(protocol.OpcodeSMSG_TOTEM_CREATED) {
+		t.Fatalf("expected SMSG_TOTEM_CREATED (0x413), got 0x%x", op)
+	}
+	if len(data) != 17 {
+		t.Fatalf("expected 17 bytes, got %d", len(data))
+	}
+	r := protocol.NewReader(data)
+	slot, _ := r.ReadU8()
+	totem, _ := r.ReadU64()
+	duration, _ := r.ReadU32()
+	spellID, _ := r.ReadU32()
+
+	if slot != 1 || totem != 0 || duration != 0 || spellID != 0 {
+		t.Fatalf("unexpected totem payload: slot=%d, totem=%d, dur=%d, spell=%d", slot, totem, duration, spellID)
+	}
+	if player.TotemSlots[1] != 0 {
+		t.Fatalf("expected TotemSlots[1] to be cleared, got %d", player.TotemSlots[1])
+	}
+}
+
+func TestHandleSpellClick(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE npc_spellclick_spells (
+			npc_entry INTEGER NOT NULL,
+			spell_id INTEGER NOT NULL,
+			cast_flags INTEGER NOT NULL,
+			user_type INTEGER NOT NULL
+		);
+		INSERT INTO npc_spellclick_spells VALUES (28389, 51592, 1, 0);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	player := &playerState{
+		GUID:   101,
+		Level:  80,
+		Powers: [7]uint32{1000},
+	}
+	srv := &Server{
+		WorldStore: &database.Store{DB: db},
+	}
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		authed:       true,
+		playerLoaded: true,
+		playerGUID:   101,
+		player:       player,
+	}
+
+	// NPC with entry 28389
+	npcGUID := uint64(12) | (uint64(28389) << 24) | (uint64(0xF130) << 48)
+	buf := protocol.NewBuffer(8)
+	buf.WriteU64(npcGUID)
+
+	go func() {
+		_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var b [1024]byte
+		for {
+			_, err := clientConn.Read(b[:])
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	if !sess.handleSpellClick(context.Background(), buf.Bytes()) {
+		t.Fatal("handleSpellClick returned false")
+	}
+}
+
+func TestHandleUpdateMissileTrajectory(t *testing.T) {
+	sess := &session{
+		playerLoaded: true,
+		player:       &playerState{GUID: 101},
+	}
+	buf := protocol.NewBuffer(45)
+	buf.WriteU64(101)
+	buf.WriteU32(133)
+	buf.WriteF32(1.5)
+	buf.WriteF32(20.0)
+	buf.WriteF32(100.0)
+	buf.WriteF32(200.0)
+	buf.WriteF32(300.0)
+	buf.WriteF32(150.0)
+	buf.WriteF32(250.0)
+	buf.WriteF32(350.0)
+	buf.WriteU8(0) // moveStop = 0
+
+	if !sess.handleUpdateMissileTrajectory(context.Background(), buf.Bytes()) {
+		t.Fatal("handleUpdateMissileTrajectory failed")
+	}
+}
+
+func TestHandleUpdateProjectilePosition(t *testing.T) {
+	sess := &session{
+		playerLoaded: true,
+		player:       &playerState{GUID: 101},
+	}
+	buf := protocol.NewBuffer(25)
+	buf.WriteU64(101)
+	buf.WriteU32(133)
+	buf.WriteU8(1)
+	buf.WriteF32(150.0)
+	buf.WriteF32(250.0)
+	buf.WriteF32(350.0)
+
+	if !sess.handleUpdateProjectilePosition(context.Background(), buf.Bytes()) {
+		t.Fatal("handleUpdateProjectilePosition failed")
+	}
+}
+
