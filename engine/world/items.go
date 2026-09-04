@@ -983,6 +983,84 @@ func (s *session) handleRepairItem(ctx context.Context, payload []byte) bool {
 	return true
 }
 
+// durabilityLossAll reduces durability on items by a percentage (e.g. 0.10 on death, 0.25 on spirit resurrect).
+// If inventory is false, only equipped items (bag == 0 and slot < 19) lose durability.
+// If inventory is true, both equipped and inventory/bag items lose durability.
+// Reference: Player::DurabilityLossAll (Player.cpp:4890-4932).
+func (s *session) durabilityLossAll(ctx context.Context, percent float64, inventory bool) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+
+	query := `SELECT ci.item, ii.itemEntry, ii.durability
+		FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ii.durability > 0`
+	if !inventory {
+		query += ` AND ci.bag = 0 AND ci.slot < 19`
+	}
+
+	rows, err := cdb.QueryContext(ctx, query, s.playerGUID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	type itemLoss struct {
+		guid      uint64
+		itemEntry uint32
+		curDur    uint32
+	}
+	var items []itemLoss
+	for rows.Next() {
+		var guid uint64
+		var itemEntry, curDur uint32
+		if err := rows.Scan(&guid, &itemEntry, &curDur); err == nil {
+			items = append(items, itemLoss{guid: guid, itemEntry: itemEntry, curDur: curDur})
+		}
+	}
+
+	maxDurCache := make(map[uint32]uint32)
+	type itemDurUpdate struct {
+		guid   uint64
+		newDur uint32
+	}
+	var updates []itemDurUpdate
+
+	for _, itm := range items {
+		maxDur, ok := maxDurCache[itm.itemEntry]
+		if !ok {
+			_ = wdb.QueryRowContext(ctx, "SELECT MaxDurability FROM item_template WHERE entry = ?", itm.itemEntry).Scan(&maxDur)
+			maxDurCache[itm.itemEntry] = maxDur
+		}
+		if maxDur == 0 {
+			continue
+		}
+		loss := uint32(float64(maxDur) * percent)
+		if loss < 1 {
+			loss = 1
+		}
+		var newDur uint32
+		if itm.curDur > loss {
+			newDur = itm.curDur - loss
+		} else {
+			newDur = 0
+		}
+		updates = append(updates, itemDurUpdate{guid: itm.guid, newDur: newDur})
+	}
+
+	for _, up := range updates {
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET durability = ? WHERE guid = ?", up.newDur, up.guid)
+	}
+
+	if len(updates) > 0 {
+		_ = s.sendInventoryItems(ctx)
+		s.sendPlayerUpdate()
+	}
+}
+
 // handleSocketGems processes CMSG_SOCKET_GEMS (0x464).
 // Reference: WorldSession::HandleSocketOpcode (ItemHandler.cpp:920).
 func (s *session) handleSocketGems(ctx context.Context, payload []byte) bool {

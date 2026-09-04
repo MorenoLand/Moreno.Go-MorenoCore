@@ -34,6 +34,9 @@ func newDeathTestSession(t *testing.T, player *playerState) (*session, net.Conn,
 		"CREATE TABLE IF NOT EXISTS creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL DEFAULT 0, map INTEGER NOT NULL DEFAULT 0, zoneId INTEGER NOT NULL DEFAULT 0, areaId INTEGER NOT NULL DEFAULT 0, position_x REAL NOT NULL DEFAULT 0, position_y REAL NOT NULL DEFAULT 0, position_z REAL NOT NULL DEFAULT 0, orientation REAL NOT NULL DEFAULT 0, curhealth INTEGER NOT NULL DEFAULT 1, curmana INTEGER NOT NULL DEFAULT 0, npcflag INTEGER NOT NULL DEFAULT 0, unit_flags INTEGER NOT NULL DEFAULT 0)",
 		"CREATE TABLE IF NOT EXISTS creature_template (entry INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '', npcflag INTEGER NOT NULL DEFAULT 0, unit_flags INTEGER NOT NULL DEFAULT 0)",
 		"CREATE TABLE IF NOT EXISTS character_homebind (guid INTEGER PRIMARY KEY, mapId INTEGER NOT NULL DEFAULT 0, zoneId INTEGER NOT NULL DEFAULT 0, posX REAL NOT NULL DEFAULT 0, posY REAL NOT NULL DEFAULT 0, posZ REAL NOT NULL DEFAULT 0)",
+		"CREATE TABLE IF NOT EXISTS character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER)",
+		"CREATE TABLE IF NOT EXISTS item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, durability INTEGER)",
+		"CREATE TABLE IF NOT EXISTS item_template (entry INTEGER PRIMARY KEY, MaxDurability INTEGER)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -721,3 +724,139 @@ func TestHandleHearthAndResurrect(t *testing.T) {
 		t.Fatal("non-wintergrasp player was resurrected")
 	}
 }
+
+func TestDurabilityLossOnDeath(t *testing.T) {
+	player := &playerState{GUID: 9, Health: 0, MaxHealth: 100}
+	state, clientConn, server := newDeathTestSession(t, player)
+	drainServerFrames(t, clientConn)
+
+	cdb := server.CharactersStore.DB
+
+	// Insert item templates:
+	// Entry 100: MaxDurability = 50
+	// Entry 101: MaxDurability = 100
+	_, _ = cdb.Exec("INSERT INTO item_template (entry, MaxDurability) VALUES (100, 50), (101, 100)")
+
+	// Insert item instances:
+	// Item 1001: entry 100, curDur = 50
+	// Item 1002: entry 101, curDur = 100
+	_, _ = cdb.Exec("INSERT INTO item_instance (guid, itemEntry, durability) VALUES (1001, 100, 50), (1002, 101, 100)")
+
+	// Item 1001 is equipped (bag 0, slot 0)
+	// Item 1002 is in backpack (bag 0, slot 23)
+	_, _ = cdb.Exec("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (9, 0, 0, 1001), (9, 0, 23, 1002)")
+
+	ctx := context.Background()
+	state.killPlayer(ctx)
+
+	// Equipped item should lose 10% of 50 = 5 durability (50 -> 45)
+	var durEquip, durBag uint32
+	_ = cdb.QueryRow("SELECT durability FROM item_instance WHERE guid = 1001").Scan(&durEquip)
+	_ = cdb.QueryRow("SELECT durability FROM item_instance WHERE guid = 1002").Scan(&durBag)
+
+	if durEquip != 45 {
+		t.Fatalf("expected equipped item durability 45, got %d", durEquip)
+	}
+	if durBag != 100 {
+		t.Fatalf("expected inventory item durability 100 (unaffected by death), got %d", durBag)
+	}
+}
+
+func TestSpiritHealerActivateDurabilityAndResSickness(t *testing.T) {
+	// Level 15 player
+	player := &playerState{GUID: 9, Level: 15, Health: 1, MaxHealth: 100, PlayerFlags: playerFlagGhost}
+	state, clientConn, server := newDeathTestSession(t, player)
+	drainServerFrames(t, clientConn)
+
+	cdb := server.CharactersStore.DB
+
+	// Create corpse for player
+	_, _ = cdb.Exec("INSERT INTO corpse (guid, posX, posY, posZ, orientation, mapId, corpseType) VALUES (9, 0, 0, 0, 0, 0, 1)")
+
+	// Spawn spirit healer creature
+	spiritGUID := uint64(55555)
+	_, _ = cdb.Exec("INSERT INTO creature (guid, id, map, npcflag) VALUES (?, 6491, 0, ?)", spiritGUID, npcFlagSpiritHealer)
+	_, _ = cdb.Exec("INSERT INTO creature_template (entry, npcflag) VALUES (6491, ?)", npcFlagSpiritHealer)
+
+	// Insert item templates:
+	// Entry 200: MaxDurability = 40
+	// Entry 201: MaxDurability = 80
+	_, _ = cdb.Exec("INSERT INTO item_template (entry, MaxDurability) VALUES (200, 40), (201, 80)")
+
+	// Insert item instances:
+	// Item 2001: entry 200, curDur = 40
+	// Item 2002: entry 201, curDur = 80
+	_, _ = cdb.Exec("INSERT INTO item_instance (guid, itemEntry, durability) VALUES (2001, 200, 40), (2002, 201, 80)")
+
+	// Item 2001 is equipped (bag 0, slot 1)
+	// Item 2002 is in backpack (bag 0, slot 24)
+	_, _ = cdb.Exec("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (9, 0, 1, 2001), (9, 0, 24, 2002)")
+
+	// Payload with spirit healer GUID
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(spiritGUID)
+
+	ctx := context.Background()
+	if !state.handleSpiritHealerActivate(ctx, payload.Bytes()) {
+		t.Fatal("handleSpiritHealerActivate returned false")
+	}
+
+	// 1. Check player resurrected at 50% health
+	if player.Health != 50 {
+		t.Fatalf("expected resurrected health 50, got %d", player.Health)
+	}
+	if player.PlayerFlags&playerFlagGhost != 0 {
+		t.Fatal("expected ghost flag removed")
+	}
+
+	// 2. Both equipped and inventory items lose 25% durability:
+	// Item 2001: 40 - 25% (10) = 30
+	// Item 2002: 80 - 25% (20) = 60
+	var durEquip, durBag uint32
+	_ = cdb.QueryRow("SELECT durability FROM item_instance WHERE guid = 2001").Scan(&durEquip)
+	_ = cdb.QueryRow("SELECT durability FROM item_instance WHERE guid = 2002").Scan(&durBag)
+
+	if durEquip != 30 {
+		t.Fatalf("expected equipped item durability 30, got %d", durEquip)
+	}
+	if durBag != 60 {
+		t.Fatalf("expected inventory item durability 60, got %d", durBag)
+	}
+
+	// 3. Level 15 player should have Resurrection Sickness (spell 15007)
+	if _, ok := state.auras[15007]; !ok {
+		t.Fatal("expected Resurrection Sickness aura 15007 applied to level 15 player")
+	}
+
+	// 4. Corpse should now be bones (corpseTypeBones = 0)
+	var cType int
+	_ = cdb.QueryRow("SELECT corpseType FROM corpse WHERE guid = 9").Scan(&cType)
+	if cType != int(corpseTypeBones) {
+		t.Fatalf("expected corpseType %d (bones), got %d", corpseTypeBones, cType)
+	}
+}
+
+func TestSpiritHealerLowLevelNoSickness(t *testing.T) {
+	// Level 10 player (should NOT get sickness)
+	player := &playerState{GUID: 9, Level: 10, Health: 1, MaxHealth: 100, PlayerFlags: playerFlagGhost}
+	state, clientConn, server := newDeathTestSession(t, player)
+	drainServerFrames(t, clientConn)
+
+	cdb := server.CharactersStore.DB
+	spiritGUID := uint64(55556)
+	_, _ = cdb.Exec("INSERT INTO creature (guid, id, map, npcflag) VALUES (?, 6491, 0, ?)", spiritGUID, npcFlagSpiritHealer)
+	_, _ = cdb.Exec("INSERT INTO creature_template (entry, npcflag) VALUES (6491, ?)", npcFlagSpiritHealer)
+
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(spiritGUID)
+
+	ctx := context.Background()
+	if !state.handleSpiritHealerActivate(ctx, payload.Bytes()) {
+		t.Fatal("handleSpiritHealerActivate returned false")
+	}
+
+	if _, ok := state.auras[15007]; ok {
+		t.Fatal("expected level 10 player to NOT receive Resurrection Sickness")
+	}
+}
+
