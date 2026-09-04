@@ -431,6 +431,9 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			motion.Moving = false
+			if motion.ThreatMgr != nil {
+				motion.ThreatMgr.ClearThreat()
+			}
 		}
 		s.server.motionMu.Unlock()
 
@@ -439,6 +442,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
 		})
+		s.server.broadcastThreatClear(target.Map, target.GUID)
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target)
@@ -453,7 +457,25 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		if motion != nil {
 			motion.Health = newHealth
 			motion.InCombat = true
-			motion.TargetGUID = s.playerGUID
+			if motion.ThreatMgr == nil {
+				motion.ThreatMgr = NewThreatManager(target.GUID)
+			}
+			if motion.BossAI == nil {
+				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
+			}
+			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
+			inMelee := dist <= meleeAttackRange
+			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, float32(damage), inMelee)
+			if switched && newVictim != motion.TargetGUID {
+				motion.TargetGUID = newVictim
+				entries := motion.ThreatMgr.SortedEntries()
+				s.server.broadcastHighestThreatUpdate(motion.Map, motion.GUID, newVictim, entries)
+			} else {
+				motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
+			}
+			if motion.BossAI != nil {
+				motion.BossAI.OnDamageTaken(ctx, s.server, motion, s.playerGUID, damage)
+			}
 			motion.Moving = true
 		}
 		s.server.motionMu.Unlock()
