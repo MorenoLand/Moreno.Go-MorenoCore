@@ -138,3 +138,77 @@ func TestPrepareCreatureGossipLoadsDatabaseOptions(t *testing.T) {
 		t.Fatalf("item=%+v", item)
 	}
 }
+
+func TestGossipSpecialOptionsAndServices(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL, modelid INTEGER NOT NULL, curhealth INTEGER NOT NULL)",
+		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, name TEXT NOT NULL, modelid1 INTEGER NOT NULL, maxlevel INTEGER NOT NULL, gossip_menu_id INTEGER NOT NULL, npcflag INTEGER NOT NULL)",
+		"INSERT INTO creature VALUES (501, 101, 0, 100)",
+		"INSERT INTO creature_template VALUES (101, 'Banker Bob', 1, 80, 0, 131072)", // 131072 = 0x20000 = UNIT_NPC_FLAG_BANKER
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{WorldStore: store, Config: config.Default()}
+	guid := uint64(501) | uint64(101)<<24 | uint64(0xF130)<<48
+	sess := &session{server: srv, conn: serverConn, accountName: "TEST", playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Name: "Hero"}}
+	ctx := context.Background()
+
+	// 1. Banker single-service auto opens bank
+	hBuf := protocol.NewBuffer(8)
+	hBuf.WriteU64(guid)
+	go func() {
+		sess.handleGossipHello(ctx, hBuf.Bytes())
+	}()
+
+	op, data, err := readServerFrame(clientConn, nil)
+	if err != nil || op != uint16(protocol.OpcodeSMSG_SHOW_BANK) {
+		t.Fatalf("expected SMSG_SHOW_BANK (0x%x), got op=0x%x err=%v", protocol.OpcodeSMSG_SHOW_BANK, op, err)
+	}
+	r := protocol.NewReader(data)
+	if bGuid, _ := r.ReadU64(); bGuid != guid {
+		t.Fatalf("expected banker guid %x, got %x", guid, bGuid)
+	}
+
+	// 2. Select Option 16 (unlearn talents) sends MSG_TALENT_WIPE_CONFIRM
+	sess.gossip = &gossipMenuState{
+		SenderGUID: guid,
+		MenuID:     1,
+		Items: map[uint32]gossipMenuItem{
+			0: {Action: 16}, // GOSSIP_OPTION_UNLEARNTALENTS
+		},
+	}
+	selBuf := protocol.NewBuffer(16)
+	selBuf.WriteU64(guid)
+	selBuf.WriteU32(1) // menu 1
+	selBuf.WriteU32(0) // list 0
+
+	go func() {
+		sess.handleGossipSelectOption(ctx, selBuf.Bytes())
+	}()
+
+	op, data, err = readServerFrame(clientConn, nil)
+	if err != nil || op != uint16(protocol.OpcodeMSG_TALENT_WIPE_CONFIRM) {
+		t.Fatalf("expected MSG_TALENT_WIPE_CONFIRM (0x%x), got op=0x%x err=%v", protocol.OpcodeMSG_TALENT_WIPE_CONFIRM, op, err)
+	}
+	r = protocol.NewReader(data)
+	wGuid, _ := r.ReadU64()
+	cost, _ := r.ReadU32()
+	if wGuid != guid || cost != 100000 {
+		t.Fatalf("expected wipe guid %x cost 100000, got guid %x cost %d", guid, wGuid, cost)
+	}
+}
+

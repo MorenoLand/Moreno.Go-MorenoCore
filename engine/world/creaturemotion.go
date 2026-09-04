@@ -172,6 +172,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		}
 	}
 	if motion != nil && motion.Health > 0 {
+		if !motion.InCombat {
+			s.broadcastAIReaction(motion.Map, creatureGUID, 2) // AI_REACTION_HOSTILE
+		}
 		motion.TargetGUID = playerGUID
 		motion.InCombat = true
 		motion.Moving = false
@@ -426,6 +429,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.InCombat = true
 			motion.TargetGUID = p.GUID
 			motion.Moving = false
+			s.broadcastAIReaction(motion.Map, motion.GUID, 2) // AI_REACTION_HOSTILE
 			_ = p.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), buildAttackStart(motion.GUID, p.GUID), true)
 			return
 		}
@@ -610,3 +614,18 @@ func (s *Server) broadcastMonsterMoveStop(mapID uint32, guid uint64, x, y, z flo
 		}
 	}
 }
+
+func (s *Server) broadcastAIReaction(mapID uint32, guid uint64, reactionType uint32) {
+	buf := protocol.NewBuffer(12)
+	buf.WriteU64(guid)
+	buf.WriteU32(reactionType)
+	s.sessionsMu.RLock()
+	defer s.sessionsMu.RUnlock()
+	for sess := range s.sessions {
+		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
+			continue
+		}
+		_ = sess.write(uint16(protocol.OpcodeSMSG_AI_REACTION), buf.Bytes(), true)
+	}
+}
+
