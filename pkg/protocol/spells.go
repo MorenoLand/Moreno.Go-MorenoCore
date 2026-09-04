@@ -142,6 +142,10 @@ func writeSpellCastHeader(packet *Buffer, casterGUID, casterUnitGUID uint64, cas
 	packet.WriteU32(castFlags)
 	packet.WriteU32(castTime)
 }
+// WriteSpellTargetData writes serialized SpellTargetData into packet.
+func WriteSpellTargetData(packet *Buffer, target SpellTargetData) {
+	writeSpellTargetData(packet, target)
+}
 
 func writeSpellTargetData(packet *Buffer, target SpellTargetData) {
 	packet.WriteU32(target.Flags)
