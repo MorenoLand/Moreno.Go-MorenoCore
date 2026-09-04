@@ -97,3 +97,39 @@ func TestTalentLoading(t *testing.T) {
 		t.Fatalf("unexpected non-existent talent found: %v", found2)
 	}
 }
+
+func TestMapLoading(t *testing.T) {
+	dbcDir := t.TempDir()
+	const fieldCount = 66
+	record := make([]uint32, fieldCount)
+	record[0] = 33 // Shadowfang Keep
+	record[2] = 1  // InstanceType = MAP_INSTANCE
+	record[59] = 0 // CorpseMapID = Eastern Kingdoms (0)
+
+	recordBytes := make([]byte, fieldCount*4)
+	for i, val := range record {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:(i+1)*4], val)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "Map.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(dbcDir)
+	m, found, err := store.Map(33)
+	if err != nil || !found {
+		t.Fatalf("expected map 33 found, err: %v", err)
+	}
+	if !m.IsDungeon() || !m.IsNonRaidDungeon() || m.IsRaid() {
+		t.Fatalf("expected dungeon map 33, got %+v", m)
+	}
+	if m.CorpseMapID != 0 {
+		t.Fatalf("expected corpseMapID 0, got %d", m.CorpseMapID)
+	}
+}
+
