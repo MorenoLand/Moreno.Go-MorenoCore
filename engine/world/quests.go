@@ -414,6 +414,27 @@ func (s *session) handleQuestlogSwapQuest(ctx context.Context, payload []byte) b
 	return true
 }
 
+const (
+	QuestPartyMsgSharingQuest        = 0
+	QuestPartyMsgCantTakeQuest       = 1
+	QuestPartyMsgAcceptQuest         = 2
+	QuestPartyMsgDeclineQuest        = 3
+	QuestPartyMsgBusy                = 4
+	QuestPartyMsgLogFull             = 5
+	QuestPartyMsgHaveQuest           = 6
+	QuestPartyMsgFinishQuest         = 7
+	QuestPartyMsgCantBeSharedToday   = 8
+	QuestPartyMsgSharingTimerExpired = 9
+	QuestPartyMsgNotInParty          = 10
+)
+
+func (s *session) sendPushToPartyResponse(targetGUID uint64, msg uint8) {
+	buf := protocol.NewBuffer(9)
+	buf.WriteU64(targetGUID)
+	buf.WriteU8(msg)
+	_ = s.write(uint16(protocol.OpcodeMSG_QUEST_PUSH_RESULT), buf.Bytes(), true)
+}
+
 // handlePushQuestToParty processes CMSG_PUSHQUESTTOPARTY (0x199).
 // Reference: WorldSession::HandlePushQuestToParty (QuestHandler.cpp:565).
 func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bool {
@@ -424,41 +445,100 @@ func (s *session) handlePushQuestToParty(ctx context.Context, payload []byte) bo
 	questID, _ := r.ReadU32()
 
 	if s.groupID == 0 || s.server == nil {
-		buf := protocol.NewBuffer(13)
-		buf.WriteU32(questID)
-		buf.WriteU8(5) // QUEST_PARTY_MSG_NOT_IN_PARTY
-		buf.WriteU64(s.playerGUID)
-		_ = s.write(uint16(protocol.OpcodeMSG_QUEST_PUSH_RESULT), buf.Bytes(), true)
+		s.sendPushToPartyResponse(s.playerGUID, QuestPartyMsgNotInParty)
 		return true
 	}
 
-	buf := protocol.NewBuffer(13)
-	buf.WriteU32(questID)
-	buf.WriteU8(0) // QUEST_PARTY_MSG_SHARING_QUEST
-	buf.WriteU64(s.playerGUID)
-	s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeMSG_QUEST_PUSH_RESULT), buf.Bytes())
+	data, err := s.loadQuestDetailData(ctx, questID)
+	if err != nil {
+		return true
+	}
+
+	members := s.server.getGroupSessions(s.groupID)
+	for _, receiver := range members {
+		if receiver == nil || receiver == s || !receiver.playerLoaded || receiver.player == nil {
+			continue
+		}
+
+		if receiver.isQuestRewarded(ctx, questID) {
+			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgFinishQuest)
+			continue
+		}
+
+		st, _ := receiver.characterQuestStatus(ctx, questID)
+		if st != 0 {
+			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgHaveQuest)
+			continue
+		}
+
+		canTake, _ := receiver.canTakeQuest(ctx, questID)
+		if !canTake {
+			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgCantTakeQuest)
+			continue
+		}
+
+		// Check active quest log capacity
+		activeCount := 0
+		for _, q := range receiver.player.QuestLog {
+			if q.QuestID != 0 {
+				activeCount++
+			}
+		}
+		if activeCount >= 25 {
+			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgLogFull)
+			continue
+		}
+
+		if receiver.sharingQuestID != 0 {
+			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgBusy)
+			continue
+		}
+
+		// Sharing initiated
+		s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgSharingQuest)
+
+		// Check AutoAccept
+		var specialFlags int64
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SpecialFlags FROM quest_template_addon WHERE ID = ?", questID).Scan(&specialFlags)
+		}
+		if specialFlags&4 != 0 {
+			receiver.addQuestToPlayer(ctx, questID)
+			s.sendPushToPartyResponse(receiver.playerGUID, QuestPartyMsgAcceptQuest)
+		} else {
+			receiver.sharingQuestID = questID
+			receiver.sharingQuestSender = s.playerGUID
+			details := buildQuestGiverDetails(data, s.playerGUID, 0)
+			_ = receiver.write(uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS), details, true)
+		}
+	}
 	return true
 }
 
 // handleQuestPushResult processes MSG_QUEST_PUSH_RESULT (0x276).
-// Reference: WorldSession::HandleQuestPushResult (QuestHandler.cpp:645).
+// Reference: WorldSession::HandleQuestPushResult (QuestHandler.cpp:647).
 func (s *session) handleQuestPushResult(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 13 {
 		return true
 	}
 	r := protocol.NewReader(payload)
+	sharerGUID, _ := r.ReadU64()
 	questID, _ := r.ReadU32()
 	msg, _ := r.ReadU8()
-	sharerGUID, _ := r.ReadU64()
 
 	if s.server != nil {
 		sharerSess := s.server.findSessionByGUID(sharerGUID)
-		if sharerSess != nil {
-			buf := protocol.NewBuffer(13)
-			buf.WriteU32(questID)
-			buf.WriteU8(msg)
-			buf.WriteU64(s.playerGUID)
-			_ = sharerSess.write(uint16(protocol.OpcodeMSG_QUEST_PUSH_RESULT), buf.Bytes(), true)
+		if s.sharingQuestSender == sharerGUID && s.sharingQuestID == questID {
+			if msg == QuestPartyMsgAcceptQuest {
+				s.addQuestToPlayer(ctx, questID)
+			}
+			if sharerSess != nil {
+				sharerSess.sendPushToPartyResponse(s.playerGUID, msg)
+			}
+			s.sharingQuestID = 0
+			s.sharingQuestSender = 0
+		} else if sharerSess != nil {
+			sharerSess.sendPushToPartyResponse(s.playerGUID, msg)
 		}
 	}
 	return true

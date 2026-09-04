@@ -3,7 +3,9 @@ package world
 import (
 	"context"
 	"database/sql"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -191,3 +193,149 @@ func TestQuestgiverAcceptQuestItemStarterAndGuidZero(t *testing.T) {
 		t.Fatalf("expected quest 302 in player quest log slot 1, got %d", state.player.QuestLog[1].QuestID)
 	}
 }
+
+func TestQuestSharingToPartyParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, statement := range []string{
+		"CREATE TABLE quest_template (ID INTEGER PRIMARY KEY, QuestLevel INTEGER NOT NULL DEFAULT 10, MinLevel INTEGER NOT NULL DEFAULT 1, Flags INTEGER NOT NULL DEFAULT 0, LogTitle TEXT DEFAULT 'Shared Quest', Details TEXT DEFAULT 'Quest Details', LogDescription TEXT DEFAULT 'Objectives')",
+		"CREATE TABLE quest_template_addon (ID INTEGER PRIMARY KEY, SpecialFlags INTEGER NOT NULL DEFAULT 0)",
+		"CREATE TABLE character_queststatus (guid INTEGER NOT NULL, quest INTEGER NOT NULL, status INTEGER NOT NULL)",
+		"CREATE TABLE character_queststatus_rewarded (guid INTEGER NOT NULL, quest INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1)",
+		"INSERT INTO quest_template (ID, LogTitle) VALUES (777, 'Party Shared Quest')",
+		"INSERT INTO quest_template_addon (ID, SpecialFlags) VALUES (777, 0)",
+		"INSERT INTO quest_template (ID, LogTitle) VALUES (888, 'AutoAccept Shared Quest')",
+		"INSERT INTO quest_template_addon (ID, SpecialFlags) VALUES (888, 4)", // 4 = AutoAccept
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{
+		WorldStore:      store,
+		CharactersStore: store,
+		Config:          config.Default(),
+		sessions:        make(map[*session]struct{}),
+	}
+
+	cConn1, sConn1 := net.Pipe()
+	defer cConn1.Close()
+	defer sConn1.Close()
+
+	cConn2, sConn2 := net.Pipe()
+	defer cConn2.Close()
+	defer sConn2.Close()
+
+	sess1 := &session{server: srv, conn: sConn1, playerGUID: 101, playerLoaded: true, groupID: 1, player: &playerState{GUID: 101, Level: 20}}
+	sess2 := &session{server: srv, conn: sConn2, playerGUID: 102, playerLoaded: true, groupID: 1, player: &playerState{GUID: 102, Level: 20}}
+
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+
+	ctx := context.Background()
+
+	// 1. Not in party rejection test
+	soloSession := &session{server: srv, playerGUID: 201, playerLoaded: true, groupID: 0, player: &playerState{GUID: 201}}
+	pSolo := protocol.NewBuffer(4)
+	pSolo.WriteU32(777)
+	if !soloSession.handlePushQuestToParty(ctx, pSolo.Bytes()) {
+		t.Fatal("handlePushQuestToParty failed for solo session")
+	}
+
+	// 2. Share standard quest 777 to party (sess1 -> sess2)
+	readCh1 := make(chan uint16, 5)
+	readCh2 := make(chan uint16, 5)
+	go func() {
+		for {
+			_ = cConn1.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			op, _, err := readServerFrame(cConn1, nil)
+			if err != nil {
+				return
+			}
+			readCh1 <- op
+		}
+	}()
+	go func() {
+		for {
+			_ = cConn2.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			op, _, err := readServerFrame(cConn2, nil)
+			if err != nil {
+				return
+			}
+			readCh2 <- op
+		}
+	}()
+
+	pPush := protocol.NewBuffer(4)
+	pPush.WriteU32(777)
+	if !sess1.handlePushQuestToParty(ctx, pPush.Bytes()) {
+		t.Fatal("handlePushQuestToParty failed")
+	}
+
+	select {
+	case op := <-readCh1:
+		if op != uint16(protocol.OpcodeMSG_QUEST_PUSH_RESULT) {
+			t.Fatalf("expected MSG_QUEST_PUSH_RESULT on sharer, got %x", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for sharer notification")
+	}
+
+	select {
+	case op := <-readCh2:
+		if op != uint16(protocol.OpcodeSMSG_QUEST_GIVER_QUEST_DETAILS) {
+			t.Fatalf("expected SMSG_QUEST_GIVER_QUEST_DETAILS on receiver, got %x", op)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for receiver quest details")
+	}
+
+	if sess2.sharingQuestID != 777 || sess2.sharingQuestSender != 101 {
+		t.Fatalf("expected sess2 pending sharing quest 777 from 101, got %d from %d", sess2.sharingQuestID, sess2.sharingQuestSender)
+	}
+
+	// 3. Receiver 102 accepts quest 777
+	pAccept := protocol.NewBuffer(13)
+	pAccept.WriteU64(101)                    // sharerGUID
+	pAccept.WriteU32(777)                    // questID
+	pAccept.WriteU8(QuestPartyMsgAcceptQuest) // 2
+	if !sess2.handleQuestPushResult(ctx, pAccept.Bytes()) {
+		t.Fatal("handleQuestPushResult failed")
+	}
+
+	// Verify quest added to sess2 quest log
+	var questStatus int
+	_ = db.QueryRowContext(ctx, "SELECT status FROM character_queststatus WHERE guid = 102 AND quest = 777").Scan(&questStatus)
+	if questStatus != 1 && sess2.player.QuestLog[0].QuestID != 777 {
+		t.Fatalf("expected quest 777 accepted by sess2, status %d, log %d", questStatus, sess2.player.QuestLog[0].QuestID)
+	}
+
+	// Verify sess2 sharing state cleared
+	if sess2.sharingQuestID != 0 || sess2.sharingQuestSender != 0 {
+		t.Fatalf("expected sess2 sharing state cleared after accept, got %d from %d", sess2.sharingQuestID, sess2.sharingQuestSender)
+	}
+
+	// 4. AutoAccept quest 888 share
+	pAuto := protocol.NewBuffer(4)
+	pAuto.WriteU32(888)
+	if !sess1.handlePushQuestToParty(ctx, pAuto.Bytes()) {
+		t.Fatal("handlePushQuestToParty failed for auto accept")
+	}
+
+	// Verify quest 888 immediately in sess2 quest log
+	if sess2.player.QuestLog[1].QuestID != 888 {
+		var q888Status int
+		_ = db.QueryRowContext(ctx, "SELECT status FROM character_queststatus WHERE guid = 102 AND quest = 888").Scan(&q888Status)
+		if q888Status != 1 && sess2.player.QuestLog[0].QuestID != 888 && sess2.player.QuestLog[1].QuestID != 888 {
+			t.Fatalf("expected auto-accept quest 888 added to sess2")
+		}
+	}
+}
+

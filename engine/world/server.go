@@ -146,6 +146,8 @@ type session struct {
 	pendingBindMapID      uint32
 	pendingBindDiff       uint32
 	pendingBindTimer      uint32
+	sharingQuestID        uint32
+	sharingQuestSender    uint64
 }
 
 type activeCastState struct {
