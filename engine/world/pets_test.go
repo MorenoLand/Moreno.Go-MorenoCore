@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
@@ -323,6 +324,154 @@ func TestPetActionAndSetAction(t *testing.T) {
 	s3, _ := r.ReadU32()
 	if s3 != 0x07000000 {
 		t.Fatalf("expected slot 3 to be 0x07000000 (Stay), got 0x%08X (s0=%x s1=%x s2=%x)", s3, s0, s1, s2)
+	}
+}
+
+func TestPetSpellAutocastAndActionBarSync(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		`CREATE TABLE character_pet (
+			id INTEGER PRIMARY KEY,
+			entry INTEGER NOT NULL DEFAULT 0,
+			owner INTEGER NOT NULL DEFAULT 0,
+			modelid INTEGER DEFAULT 0,
+			CreatedBySpell INTEGER NOT NULL DEFAULT 0,
+			PetType INTEGER NOT NULL DEFAULT 0,
+			level INTEGER NOT NULL DEFAULT 1,
+			exp INTEGER NOT NULL DEFAULT 0,
+			Reactstate INTEGER NOT NULL DEFAULT 0,
+			name TEXT NOT NULL DEFAULT 'Pet',
+			renamed INTEGER NOT NULL DEFAULT 0,
+			slot INTEGER NOT NULL DEFAULT 0,
+			curhealth INTEGER NOT NULL DEFAULT 1,
+			curmana INTEGER NOT NULL DEFAULT 0,
+			curhappiness INTEGER NOT NULL DEFAULT 0,
+			savetime INTEGER NOT NULL DEFAULT 0,
+			abdata TEXT
+		)`,
+		`CREATE TABLE pet_spell (
+			guid INTEGER NOT NULL,
+			spell INTEGER NOT NULL,
+			active INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (guid, spell)
+		)`,
+		// abdata with 10 slots: slot 3 is spell 16827 with actType 129 (0x81, disabled)
+		"INSERT INTO character_pet (id, entry, owner, modelid, level, name, slot, Reactstate, abdata) VALUES (42, 100, 1, 50, 10, 'Fluffy', 0, 1, '7 2 7 1 7 0 129 16827 0 0 0 0 0 0 6 2 6 1 6 0')",
+		"INSERT INTO pet_spell (guid, spell, active) VALUES (42, 16827, 0)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: store, Config: config.Default()}
+	sess := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Name: "Hero"}}
+	ctx := context.Background()
+
+	petGUID := uint64(42) | (uint64(0xF140) << 48)
+
+	// 1. Toggle autocast on for spell 16827 via handlePetSpellAutocast
+	autoBuf := protocol.NewBuffer(13)
+	autoBuf.WriteU64(petGUID)
+	autoBuf.WriteU32(16827)
+	autoBuf.WriteU8(1) // enable
+	if !sess.handlePetSpellAutocast(ctx, autoBuf.Bytes()) {
+		t.Fatal("handlePetSpellAutocast failed")
+	}
+
+	// Verify pet_spell table has active = 1
+	var active int
+	err = db.QueryRow("SELECT active FROM pet_spell WHERE guid = 42 AND spell = 16827").Scan(&active)
+	if err != nil || active != 1 {
+		t.Fatalf("expected pet_spell active=1, got %d (err: %v)", active, err)
+	}
+
+	// Verify abdata in character_pet updated slot 3 to 193 (0xC1)
+	var abdata string
+	_ = db.QueryRow("SELECT abdata FROM character_pet WHERE id = 42").Scan(&abdata)
+	if !strings.Contains(abdata, "193 16827") {
+		t.Fatalf("expected abdata to contain '193 16827' (ACT_ENABLED), got %q", abdata)
+	}
+
+	// 2. Modify action bar via handlePetSetAction: turn off autocast on slot 3 (0x81000000 | 16827)
+	setBuf := protocol.NewBuffer(16)
+	setBuf.WriteU64(petGUID)
+	setBuf.WriteU32(3)                               // slot 3
+	setBuf.WriteU32(uint32(0x81<<24) | uint32(16827)) // ACT_DISABLED | 16827
+	if !sess.handlePetSetAction(ctx, setBuf.Bytes()) {
+		t.Fatal("handlePetSetAction failed")
+	}
+
+	// Verify pet_spell table was updated to active = 0
+	_ = db.QueryRow("SELECT active FROM pet_spell WHERE guid = 42 AND spell = 16827").Scan(&active)
+	if active != 0 {
+		t.Fatalf("expected pet_spell active=0 after set action, got %d", active)
+	}
+}
+
+func TestPetCastSpellAndActionSpellGo(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{Config: config.Default()}
+	sess := &session{server: srv, conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Name: "Hero"}}
+	ctx := context.Background()
+
+	petGUID := uint64(42) | (uint64(0xF140) << 48)
+	targetGUID := uint64(99999)
+
+	// 1. Test handlePetCastSpell emits SMSG_SPELL_GO
+	castBuf := protocol.NewBuffer(32)
+	castBuf.WriteU64(petGUID)
+	castBuf.WriteU8(1)     // castCount
+	castBuf.WriteU32(16827) // Claw
+	castBuf.WriteU8(0)     // castFlags
+	// Write SpellTargetData with targetGUID
+	targetData := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+	protocol.WriteSpellTargetData(castBuf, targetData)
+
+	go func() {
+		sess.handlePetCastSpell(ctx, castBuf.Bytes())
+	}()
+
+	op, data, err := readServerFrame(clientConn, nil)
+	if err != nil || op != uint16(protocol.OpcodeSMSG_SPELL_GO) {
+		t.Fatalf("expected SMSG_SPELL_GO, got op=0x%x err=%v", op, err)
+	}
+	r := protocol.NewReader(data)
+	casterGUID, _ := r.ReadPackedGUID()
+	if casterGUID != petGUID {
+		t.Fatalf("expected casterGUID %x, got %x", petGUID, casterGUID)
+	}
+
+	// 2. Test handlePetAction with spellOrAction and targetGUID emits SMSG_AI_REACTION followed by SMSG_SPELL_GO
+	actBuf := protocol.NewBuffer(20)
+	actBuf.WriteU64(petGUID)
+	actBuf.WriteU32(uint32(0x81<<24) | 16827) // ACT_DISABLED | 16827
+	actBuf.WriteU64(targetGUID)
+
+	go func() {
+		sess.handlePetAction(ctx, actBuf.Bytes())
+	}()
+
+	// First packet: SMSG_AI_REACTION
+	op1, _, err := readServerFrame(clientConn, nil)
+	if err != nil || op1 != uint16(protocol.OpcodeSMSG_AI_REACTION) {
+		t.Fatalf("expected SMSG_AI_REACTION, got op=0x%x err=%v", op1, err)
+	}
+
+	// Second packet: SMSG_SPELL_GO
+	op2, _, err := readServerFrame(clientConn, nil)
+	if err != nil || op2 != uint16(protocol.OpcodeSMSG_SPELL_GO) {
+		t.Fatalf("expected SMSG_SPELL_GO, got op=0x%x err=%v", op2, err)
 	}
 }
 
