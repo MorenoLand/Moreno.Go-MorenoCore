@@ -91,6 +91,7 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	info.Flags = sanitizeMovementFlags(info.Flags)
 	if info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling) != 0 {
 		s.interruptCurrentCast()
+		s.interruptCurrentChannel()
 	}
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
 	s.checkDuelBounds()

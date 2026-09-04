@@ -191,7 +191,7 @@ func (s *session) handleGMReportLag(ctx context.Context, payload []byte) bool {
 		cdb := s.server.CharactersStore.DB
 		now := time.Now().Unix()
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO lag_reports (guid, lagType, mapId, posX, posY, posZ, latency, createTime) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-			s.playerGUID, lagType, mapID, x, y, z, s.latency, now)
+			s.playerGUID, lagType, mapID, x, y, z, s.latency.Load(), now)
 	}
 	s.debug("gm report lag", "account", s.accountName, "lagType", lagType, "map", mapID)
 	return true

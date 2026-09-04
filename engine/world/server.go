@@ -137,14 +137,19 @@ type session struct {
 	afkReporters       map[uint64]struct{}
 	targetGlyphSlot    uint8
 	activeCast         *activeCastState
+	activeChannel      *activeChannelState
 	castMu             sync.Mutex
 }
 
 type activeCastState struct {
-	CastID    uint8
-	SpellID   uint32
-	Timer     *time.Timer
-	Cancelled bool
+	CastID       uint8
+	SpellID      uint32
+	Timer        *time.Timer
+	Cancelled    bool
+	StartAt      time.Time
+	CastTimeMs   uint32
+	Pushbacks    int
+	InterruptFlg uint32
 }
 
 type bgQueueEntry struct {

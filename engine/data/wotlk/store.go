@@ -61,6 +61,7 @@ type SpellEffect struct {
 	Effect          uint32
 	BasePoints      int32
 	Aura            uint32
+	AuraPeriod      uint32
 	ImplicitTargetA uint32
 	ImplicitTargetB uint32
 	RadiusIndex     uint32
@@ -71,6 +72,7 @@ type SpellEffect struct {
 type Spell struct {
 	ID               uint32
 	Attributes       uint32
+	AttributesEx1    uint32
 	SchoolMask       uint32
 	Targets          uint32
 	CastingTimeIndex uint32
@@ -79,6 +81,9 @@ type Spell struct {
 	ManaCost         uint32
 	ManaCostPct      uint32
 	RangeIndex       uint32
+	InterruptFlags   uint32
+	ChannelInterrupt uint32
+	DurationIndex    uint32
 	Speed            float32
 	Effects          [3]SpellEffect
 }
@@ -367,6 +372,10 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{42, &spell.ManaCost},
 		{204, &spell.ManaCostPct}, // Spell.dbc field 204 = ManaCostPct (DBCStructure.h:1476)
 		{46, &spell.RangeIndex},
+		{6, &spell.AttributesEx1},   // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
+		{31, &spell.InterruptFlags}, // DBCStructure.h:1421
+		{33, &spell.ChannelInterrupt},
+		{40, &spell.DurationIndex},
 	}
 	for _, value := range values {
 		if *value.dest, err = record.Uint32(value.field); err != nil {
@@ -405,11 +414,15 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if err != nil {
 			return Spell{}, false, err
 		}
+		auraPeriod, err := record.Uint32(98 + i) // EffectAuraPeriod, DBCStructure.h:1492 area (98-100)
+		if err != nil {
+			return Spell{}, false, err
+		}
 		triggerSpell, err := record.Uint32(116 + i)
 		if err != nil {
 			return Spell{}, false, err
 		}
-		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, Aura: aura, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, TriggerSpell: triggerSpell}
+		spell.Effects[i] = SpellEffect{Effect: effect, BasePoints: basePoints, Aura: aura, AuraPeriod: auraPeriod, ImplicitTargetA: implicitTargetA, ImplicitTargetB: implicitTargetB, RadiusIndex: radiusIndex, MiscValue: miscValue, TriggerSpell: triggerSpell}
 	}
 	return spell, true, nil
 }
@@ -615,4 +628,45 @@ func (s *Store) TalentBySpell(spellID uint32) (uint32, uint8, bool) {
 		}
 	}
 	return 0, 0, false
+}
+
+// SpellDuration mirrors SpellInfo::GetDuration from SpellDuration.dbc
+// (DBCStructure.h:1524, format "niii"): Duration + DurationPerLevel * (level-1)
+// clamped to MaxDuration when positive. A negative base duration (-1) means
+// infinite and is returned as-is.
+func (s *Store) SpellDuration(id uint32, level uint32) (int32, bool, error) {
+	if id == 0 {
+		return 0, true, nil
+	}
+	file, err := s.File("SpellDuration")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false, nil
+	}
+	base, err := record.Int32(1)
+	if err != nil {
+		return 0, false, err
+	}
+	if base < 0 {
+		return base, true, nil // -1 infinite
+	}
+	if level == 0 {
+		level = 1
+	}
+	perLevel, err := record.Int32(2)
+	if err != nil {
+		return 0, false, err
+	}
+	maxDuration, err := record.Int32(3)
+	if err != nil {
+		return 0, false, err
+	}
+	duration := base + perLevel*int32(level-1)
+	if maxDuration > 0 && duration > maxDuration {
+		duration = maxDuration
+	}
+	return duration, true, nil
 }
