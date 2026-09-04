@@ -57,6 +57,12 @@ type creatureMotion struct {
 	LastAttack time.Time
 	LastSpell  time.Time
 	Spells     []uint32
+	NextSpellIdx int
+
+	ThreatMgr  *ThreatManager
+	BossAI     BossAI
+	ScriptName string
+	Name       string
 
 	PathID  uint32
 	Points  []waypointPoint
@@ -125,6 +131,12 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 		if walkSpeed <= 0 {
 			motion.Speed = creatureBaseWalkSpeed
 		}
+		if motion.ThreatMgr == nil {
+			motion.ThreatMgr = NewThreatManager(key)
+		}
+		if motion.BossAI == nil {
+			motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
+		}
 		if moveType == 2 {
 			motion.PathID = s.loadCreaturePathID(ctx, guid, entry)
 			motion.Points = s.loadWaypoints(ctx, motion.PathID)
@@ -151,29 +163,39 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	if motion == nil && s.WorldStore != nil && s.WorldStore.DB != nil {
 		var x, y, z float64
 		var mapID, faction, level int64
+		var name, scriptName string
 		if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT c.map, c.position_x, c.position_y, c.position_z,
-			COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1)
+			COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.name, ''), COALESCE(t.ScriptName, '')
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id
-			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &faction, &level); err == nil {
+			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &faction, &level, &name, &scriptName); err == nil {
 			motion = &creatureMotion{
 				GUID:  creatureGUID,
 				Entry: entry,
 				Map:   uint32(mapID),
 				HomeX: float32(x), HomeY: float32(y), HomeZ: float32(z),
 				X: float32(x), Y: float32(y), Z: float32(z),
-				Speed:     creatureBaseWalkSpeed,
-				RunSpeed:  creatureBaseRunSpeed,
-				Faction:   uint32(faction),
-				Level:     uint32(level),
-				Health:    uint32(math.Max(float64(level)*30, 42)),
-				MaxHealth: uint32(math.Max(float64(level)*30, 42)),
+				Speed:      creatureBaseWalkSpeed,
+				RunSpeed:   creatureBaseRunSpeed,
+				Faction:    uint32(faction),
+				Level:      uint32(level),
+				Health:     uint32(math.Max(float64(level)*30, 42)),
+				MaxHealth:  uint32(math.Max(float64(level)*30, 42)),
+				Name:       name,
+				ScriptName: scriptName,
 			}
 			s.creatureMotion[creatureGUID] = motion
 			s.creatureMotion[stdKey] = motion
 		}
 	}
 	if motion != nil && motion.Health > 0 {
+		if motion.ThreatMgr == nil {
+			motion.ThreatMgr = NewThreatManager(creatureGUID)
+		}
+		if motion.BossAI == nil {
+			motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
+		}
+		motion.ThreatMgr.AddThreat(playerGUID, 100.0, true)
 		if !motion.InCombat {
 			s.broadcastAIReaction(motion.Map, creatureGUID, 2) // AI_REACTION_HOSTILE
 			startPkt := buildAttackStart(creatureGUID, playerGUID)
@@ -183,8 +205,11 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 			} else {
 				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, nil)
 			}
+			if motion.BossAI != nil {
+				motion.BossAI.OnAggro(ctx, s, motion, playerGUID)
+			}
 		}
-		motion.TargetGUID = playerGUID
+		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 		motion.InCombat = true
 		motion.Moving = false
 	}
@@ -337,14 +362,28 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				break
 			}
 		}
-		// If target left map, logged out, dead, or turned on GM mode: drop combat
+		// If target left map, logged out, dead, or turned on GM mode: drop threat
 		if target == nil || target.IsDead || target.IsGM {
+			if motion.ThreatMgr != nil {
+				motion.ThreatMgr.RemoveThreat(motion.TargetGUID)
+			}
+			if motion.ThreatMgr != nil && !motion.ThreatMgr.IsEmpty() {
+				nextVictim := motion.ThreatMgr.GetCurrentVictim()
+				motion.TargetGUID = nextVictim
+				entries := motion.ThreatMgr.SortedEntries()
+				s.broadcastHighestThreatUpdate(motion.Map, motion.GUID, nextVictim, entries)
+				return
+			}
 			stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
 			if target != nil && target.Sess != nil {
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, target.Sess)
 			} else {
 				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+			}
+			s.broadcastThreatClear(motion.Map, motion.GUID)
+			if motion.BossAI != nil {
+				motion.BossAI.OnEvade(ctx, s, motion)
 			}
 			motion.InCombat = false
 			motion.TargetGUID = 0
@@ -358,12 +397,26 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		dist := float32(math.Hypot(float64(target.X-motion.X), float64(target.Y-motion.Y)))
 		if dist > 45.0 {
 			// Evade / drop combat if player ran too far: reset health, stop attack, and run back home
+			if motion.ThreatMgr != nil {
+				motion.ThreatMgr.RemoveThreat(motion.TargetGUID)
+			}
+			if motion.ThreatMgr != nil && !motion.ThreatMgr.IsEmpty() {
+				nextVictim := motion.ThreatMgr.GetCurrentVictim()
+				motion.TargetGUID = nextVictim
+				entries := motion.ThreatMgr.SortedEntries()
+				s.broadcastHighestThreatUpdate(motion.Map, motion.GUID, nextVictim, entries)
+				return
+			}
 			stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
 			if target.Sess != nil {
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, target.Sess)
 			} else {
 				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+			}
+			s.broadcastThreatClear(motion.Map, motion.GUID)
+			if motion.BossAI != nil {
+				motion.BossAI.OnEvade(ctx, s, motion)
 			}
 			motion.InCombat = false
 			motion.TargetGUID = 0
@@ -384,11 +437,16 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			return
 		}
 
+		if motion.BossAI != nil {
+			motion.BossAI.OnUpdate(ctx, s, motion, 200*time.Millisecond, players, now)
+		}
+
 		if len(motion.Spells) == 0 && s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
 			motion.Spells = s.loadCreatureSpells(ctx, motion.Entry)
 		}
 		if len(motion.Spells) > 0 && dist <= 30.0 && (motion.LastSpell.IsZero() || now.Sub(motion.LastSpell) >= 6*time.Second) {
-			spellID := motion.Spells[0]
+			spellID := motion.Spells[motion.NextSpellIdx%len(motion.Spells)]
+			motion.NextSpellIdx++
 			castID := uint8(1)
 			castTimeStamp := uint32(now.UnixMilli())
 			hitTargets := []uint64{target.GUID}
@@ -422,6 +480,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					overkill = damage - target.Sess.player.Health
 					target.Sess.player.Health = 0
 					target.Sess.killPlayer(ctx)
+					if motion.BossAI != nil {
+						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
+					}
 				} else {
 					target.Sess.player.Health -= damage
 					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
@@ -503,6 +564,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				overkill = damage - target.Sess.player.Health
 				target.Sess.player.Health = 0
 				target.Sess.killPlayer(ctx)
+				if motion.BossAI != nil {
+					motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
+				}
 			} else {
 				target.Sess.player.Health -= damage
 				// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
@@ -533,6 +597,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		aggroDist := float32(15.0)
 		if s.isHostileFaction(motion.Faction, p) && dist <= aggroDist {
 			motion.InCombat = true
+			if motion.ThreatMgr == nil {
+				motion.ThreatMgr = NewThreatManager(motion.GUID)
+			}
+			if motion.BossAI == nil {
+				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
+			}
+			motion.ThreatMgr.AddThreat(p.GUID, 100.0, true)
 			motion.TargetGUID = p.GUID
 			motion.Moving = false
 			s.broadcastAIReaction(motion.Map, motion.GUID, 2) // AI_REACTION_HOSTILE
@@ -544,6 +615,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			startPkt := buildAttackStart(motion.GUID, p.GUID)
 			_ = p.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
 			s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, p.Sess)
+			if motion.BossAI != nil {
+				motion.BossAI.OnAggro(ctx, s, motion, p.GUID)
+			}
 			return
 		}
 	}

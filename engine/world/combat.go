@@ -197,6 +197,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			motion.Moving = false
+			if motion.ThreatMgr != nil {
+				motion.ThreatMgr.ClearThreat()
+			}
 		}
 		s.server.motionMu.Unlock()
 
@@ -205,6 +208,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 			unitFieldHealth:       0,
 			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
 		})
+		s.server.broadcastThreatClear(target.Map, target.GUID)
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target)
@@ -218,6 +222,23 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		}
 		if motion != nil {
 			motion.Health = newHealth
+			if motion.ThreatMgr == nil {
+				motion.ThreatMgr = NewThreatManager(target.GUID)
+			}
+			if motion.BossAI == nil {
+				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
+			}
+			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
+			inMelee := dist <= meleeAttackRange
+			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, float32(damage), inMelee)
+			if switched && newVictim != motion.TargetGUID {
+				motion.TargetGUID = newVictim
+				entries := motion.ThreatMgr.SortedEntries()
+				s.server.broadcastHighestThreatUpdate(motion.Map, motion.GUID, newVictim, entries)
+			}
+			if motion.BossAI != nil {
+				motion.BossAI.OnDamageTaken(ctx, s.server, motion, s.playerGUID, damage)
+			}
 		}
 		s.server.motionMu.Unlock()
 
