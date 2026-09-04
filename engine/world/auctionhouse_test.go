@@ -3,8 +3,10 @@ package world
 import (
 	"context"
 	"database/sql"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -156,5 +158,145 @@ func TestAuctionCancellationRefundsActiveBidder(t *testing.T) {
 	err = db.QueryRow("SELECT receiver FROM mail_items WHERE item_guid = 201").Scan(&itemReceiver)
 	if err != nil || itemReceiver != 1 {
 		t.Fatalf("seller item return mail not found or receiver mismatch: %v (receiver=%d)", err, itemReceiver)
+	}
+}
+
+func TestAuctionHousePendingSalesParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, name TEXT, money INTEGER)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, played_time INTEGER, text TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, name TEXT, displayid INTEGER)",
+		"CREATE TABLE auctionhouse (id INTEGER PRIMARY KEY, houseid INTEGER, itemguid INTEGER, item_template INTEGER, itemCount INTEGER, itemowner INTEGER, buyoutprice INTEGER, time INTEGER, buyguid INTEGER, lastbid INTEGER, startbid INTEGER, deposit INTEGER)",
+		"CREATE TABLE mail (id INTEGER PRIMARY KEY, messageType INTEGER, stationery INTEGER, mailTemplateId INTEGER, sender INTEGER, receiver INTEGER, subject TEXT, body TEXT, has_items INTEGER, expire_time INTEGER, deliver_time INTEGER, money INTEGER, cod INTEGER, checked INTEGER)",
+		"CREATE TABLE mail_items (mail_id INTEGER, item_guid INTEGER, item_template INTEGER, receiver INTEGER)",
+		"INSERT INTO characters VALUES (10, 'ArtisanSeller', 10000)",
+		"INSERT INTO characters VALUES (20, 'RichBuyer', 99000)",
+		"INSERT INTO item_template VALUES (777, 'Arcanite Reaper', 250)",
+		"INSERT INTO item_instance VALUES (999, 777, 10, 0, 1, 0, '', 0, '', 0, 100, 0, '')",
+		"INSERT INTO character_inventory VALUES (10, 0, 23, 999)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: charStore, WorldStore: charStore, sessions: make(map[*session]struct{})}
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	sessSeller := &session{conn: serverConn, server: srv, playerGUID: 10, playerLoaded: true, player: &playerState{GUID: 10, Name: "ArtisanSeller", Money: 10000}}
+	sessBuyer := &session{server: srv, playerGUID: 20, playerLoaded: true, player: &playerState{GUID: 20, Name: "RichBuyer", Money: 99000}}
+	srv.sessions[sessSeller] = struct{}{}
+	srv.sessions[sessBuyer] = struct{}{}
+
+	ctx := context.Background()
+
+	// Drain frames in background to prevent pipe deadlock
+	type packetData struct {
+		opcode  uint16
+		payload []byte
+	}
+	pktChan := make(chan packetData, 10)
+	go func() {
+		for {
+			header := make([]byte, 4)
+			if _, err := clientConn.Read(header); err != nil {
+				return
+			}
+			sz := int(header[0])<<8 | int(header[1])
+			op := uint16(header[2]) | uint16(header[3])<<8
+			payload := make([]byte, sz-2)
+			if _, err := clientConn.Read(payload); err != nil {
+				return
+			}
+			pktChan <- packetData{opcode: op, payload: payload}
+		}
+	}()
+
+	// 1. Seller lists item
+	sellBuf := protocol.NewBuffer(64)
+	sellBuf.WriteU64(0)
+	sellBuf.WriteU32(1)
+	sellBuf.WriteU64(999)
+	sellBuf.WriteU32(1)
+	sellBuf.WriteU32(10000)
+	sellBuf.WriteU32(50000)
+	sellBuf.WriteU32(1440)
+	if !sessSeller.handleAuctionSellItem(ctx, sellBuf.Bytes()) {
+		t.Fatal("handleAuctionSellItem failed")
+	}
+
+	// 2. Buyer buys out item
+	bidBuf := protocol.NewBuffer(32)
+	bidBuf.WriteU64(0)
+	bidBuf.WriteU32(1)
+	bidBuf.WriteU32(50000)
+	if !sessBuyer.handleAuctionPlaceBid(ctx, bidBuf.Bytes()) {
+		t.Fatal("handleAuctionPlaceBid failed")
+	}
+
+	// 3. Verify delayed seller profit mail and immediate invoice mail exist
+	var profitMailDeliverTime int64
+	err = db.QueryRow("SELECT deliver_time FROM mail WHERE receiver = 10 AND money = 50000").Scan(&profitMailDeliverTime)
+	if err != nil {
+		t.Fatalf("expected delayed profit mail: %v", err)
+	}
+	if profitMailDeliverTime <= time.Now().Unix() {
+		t.Fatalf("expected profit mail deliver_time in the future, got %d", profitMailDeliverTime)
+	}
+
+	// 4. Seller queries pending sales
+	qBuf := protocol.NewBuffer(8)
+	qBuf.WriteU64(0)
+	if !sessSeller.handleAuctionListPendingSales(ctx, qBuf.Bytes()) {
+		t.Fatal("handleAuctionListPendingSales failed")
+	}
+
+	var foundPkt bool
+	for !foundPkt {
+		select {
+		case pkt := <-pktChan:
+			if pkt.opcode == uint16(protocol.OpcodeSMSG_AUCTION_LIST_PENDING_SALES) {
+				foundPkt = true
+				r := protocol.NewReader(pkt.payload)
+				count, err := r.ReadU32()
+				if err != nil || count != 1 {
+					t.Fatalf("expected count 1 pending sale, got %d, err %v", count, err)
+				}
+				itemName, err := r.ReadCString()
+				if err != nil || itemName == "" {
+					t.Fatalf("expected non-empty itemName, got %q, err %v", itemName, err)
+				}
+				buyerName, err := r.ReadCString()
+				if err != nil || buyerName != "RichBuyer" {
+					t.Fatalf("expected buyerName 'RichBuyer', got %q, err %v", buyerName, err)
+				}
+				bid, err := r.ReadU32()
+				if err != nil || bid != 50000 {
+					t.Fatalf("expected bid 50000, got %d, err %v", bid, err)
+				}
+				buyout, err := r.ReadU32()
+				if err != nil || buyout != 50000 {
+					t.Fatalf("expected buyout 50000, got %d, err %v", buyout, err)
+				}
+				timeLeft, err := r.ReadF32()
+				if err != nil || timeLeft <= 0 {
+					t.Fatalf("expected timeLeft > 0, got %f, err %v", timeLeft, err)
+				}
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for SMSG_AUCTION_LIST_PENDING_SALES")
+		}
 	}
 }
