@@ -194,6 +194,10 @@ func TestGameObjectLooting(t *testing.T) {
 		"CREATE TABLE gameobject_template (entry INTEGER PRIMARY KEY, type INTEGER, data1 INTEGER, displayId INTEGER, name TEXT)",
 		"CREATE TABLE gameobject_loot_template (Entry INTEGER, Item INTEGER, Chance REAL, QuestRequired INTEGER, LootMode INTEGER, GroupId INTEGER, MinCount INTEGER, MaxCount INTEGER)",
 		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"INSERT INTO characters VALUES (1, 100, '')",
 		"INSERT INTO gameobject VALUES (50, 1001, 0, 10.0, 20.0, 30.0)",
 		"INSERT INTO gameobject_template VALUES (1001, 3, 2001, 555, 'Solid Chest')",
 		"INSERT INTO gameobject_loot_template VALUES (2001, 8888, 100.0, 0, 1, 0, 2, 2)",
@@ -205,7 +209,7 @@ func TestGameObjectLooting(t *testing.T) {
 	}
 
 	worldStore := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
-	srv := &Server{WorldStore: worldStore, creatureLoot: make(map[uint64]*activeLootState)}
+	srv := &Server{WorldStore: worldStore, CharactersStore: worldStore, creatureLoot: make(map[uint64]*activeLootState)}
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
 	defer serverConn.Close()
@@ -262,6 +266,71 @@ func TestGameObjectLooting(t *testing.T) {
 	itemCount, _ := r.ReadU32()
 	if itemCount != 2 {
 		t.Fatalf("expected itemCount 2, got %d", itemCount)
+	}
+
+	// Now autostore item from slot 0
+	itemBuf := protocol.NewBuffer(1)
+	itemBuf.WriteU8(0)
+
+	receivedOpcodes := make(chan uint16, 20)
+	stopReader := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stopReader:
+				return
+			default:
+				_ = clientConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+				op, _, err := readServerFrame(clientConn, nil)
+				if err == nil {
+					receivedOpcodes <- op
+				}
+			}
+		}
+	}()
+
+	if !sess.handleAutostoreLootItem(context.Background(), itemBuf.Bytes()) {
+		t.Fatal("handleAutostoreLootItem failed")
+	}
+	time.Sleep(50 * time.Millisecond)
+	close(stopReader)
+
+	gotLootRemoved := false
+	gotItemPushResult := false
+	for len(receivedOpcodes) > 0 {
+		op := <-receivedOpcodes
+		if op == uint16(protocol.OpcodeSMSG_LOOT_REMOVED) {
+			gotLootRemoved = true
+		}
+		if op == uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT) {
+			gotItemPushResult = true
+		}
+	}
+
+	if !gotLootRemoved {
+		t.Fatal("expected SMSG_LOOT_REMOVED")
+	}
+	if !gotItemPushResult {
+		t.Fatal("expected SMSG_ITEM_PUSH_RESULT")
+	}
+
+	var storedItemEntry int64
+	err = db.QueryRow("SELECT ii.itemEntry FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = 1").Scan(&storedItemEntry)
+	if err != nil || storedItemEntry != 8888 {
+		t.Fatalf("expected item 8888 stored in inventory, err=%v entry=%d", err, storedItemEntry)
+	}
+
+	// Release loot
+	releaseBuf := protocol.NewBuffer(8)
+	releaseBuf.WriteU64(goGUID)
+	if !sess.handleLootRelease(releaseBuf.Bytes()) {
+		t.Fatal("handleLootRelease failed")
+	}
+	if sess.activeLoot != nil {
+		t.Fatal("expected activeLoot to be cleared")
+	}
+	if len(srv.creatureLoot) != 0 {
+		t.Fatal("expected creatureLoot to be cleared")
 	}
 }
 
