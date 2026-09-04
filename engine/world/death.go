@@ -117,6 +117,7 @@ func (s *session) killPlayer(ctx context.Context) {
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET death_expire_time = ? WHERE guid = ?", s.deathExpireTime, s.playerGUID)
 	}
+	s.durabilityLossAll(ctx, 0.10, false)
 	s.debug("player killed", "account", s.accountName, "guid", s.playerGUID)
 }
 
@@ -751,7 +752,8 @@ func (s *session) handleHearthAndResurrect(ctx context.Context) bool {
 }
 
 // handleSpiritHealerActivate processes CMSG_SPIRIT_HEALER_ACTIVATE (0x21C).
-// Reference: WorldSession::HandleSpiritHealerActivateOpcode (MiscHandler.cpp:712).
+// Reference: WorldSession::HandleSpiritHealerActivateOpcode (MiscHandler.cpp:712)
+// and WorldSession::SendSpiritResurrect (NPCHandler.cpp:219).
 func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -762,9 +764,18 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 		return true
 	}
 	s.resurrectPlayer(ctx, 0.5)
+	s.durabilityLossAll(ctx, 0.25, true)
 	if s.player.Level > 10 {
-		s.applyAura(15007) // Resurrection Sickness
+		// Characters level 1-10 have no sickness.
+		// Characters level 11-19 suffer 1 minute per level above 10 (1-9 minutes).
+		// Characters level 20+ suffer 10 minutes of sickness (TC Player::ResurrectPlayer:4740-4753).
+		durationMinutes := s.player.Level - 10
+		if durationMinutes > 10 {
+			durationMinutes = 10
+		}
+		s.applyAuraWithDuration(15007, uint32(durationMinutes)*60*1000)
 	}
+	s.spawnCorpseBones(ctx)
 	return true
 }
 

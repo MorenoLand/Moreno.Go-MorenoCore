@@ -636,6 +636,10 @@ func (s *session) sendAuraUpdate(slot uint8, spellID uint32, remove bool, maxDur
 }
 
 func (s *session) applyAura(spellID uint32) {
+	s.applyAuraWithDuration(spellID, 1800000)
+}
+
+func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	if s.auras == nil {
 		s.auras = make(map[uint32]struct{})
 	}
@@ -660,7 +664,6 @@ func (s *session) applyAura(spellID uint32) {
 		slot = freeSlot
 		s.auraSlots[spellID] = slot
 	}
-	durationMs := uint32(1800000)
 	s.sendAuraUpdate(slot, spellID, false, durationMs, durationMs)
 	s.sendPlayerUpdate()
 }
