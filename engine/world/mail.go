@@ -7,6 +7,36 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+// Reference: SharedDefines.h:3533 (enum MailResponseType)
+const (
+	mailSend             uint32 = 0
+	mailMoneyTaken       uint32 = 1
+	mailItemTaken        uint32 = 2
+	mailReturnedToSender uint32 = 3
+	mailDeleted          uint32 = 4
+	mailMadePermanent    uint32 = 5
+)
+
+// Reference: SharedDefines.h:3543 (enum MailResponseResult)
+const (
+	mailOk                       uint32 = 0
+	mailErrEquipError            uint32 = 1
+	mailErrCannotSendToSelf      uint32 = 2
+	mailErrNotEnoughMoney        uint32 = 3
+	mailErrRecipientNotFound     uint32 = 4
+	mailErrNotYourTeam           uint32 = 5
+	mailErrInternalError         uint32 = 6
+	mailErrDisabledForTrialAcc   uint32 = 14
+	mailErrRecipientCapReached   uint32 = 15
+	mailErrCantSendWrappedCOD    uint32 = 16
+	mailErrMailAndChatSuspended  uint32 = 17
+	mailErrTooManyAttachments    uint32 = 18
+	mailErrMailAttachmentInvalid uint32 = 19
+	mailErrItemHasExpired        uint32 = 21
+
+	equipErrMailBoundItem uint32 = 72
+)
+
 type mailEntryRecord struct {
 	ID           uint32
 	MessageType  uint8
@@ -198,8 +228,39 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	var receiverGUID int64
 	err = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE UPPER(name) = UPPER(?) LIMIT 1", targetName).Scan(&receiverGUID)
 	if err != nil || receiverGUID == 0 {
-		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, 0, 1), true) // MAIL_ERR_RECIPIENT_NOT_FOUND = 1
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrRecipientNotFound, 0, 0, 0), true)
 		return true
+	}
+	if uint64(receiverGUID) == s.playerGUID {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrCannotSendToSelf, 0, 0, 0), true)
+		return true
+	}
+	var receiverRace int64
+	_ = cdb.QueryRowContext(ctx, "SELECT race FROM characters WHERE guid = ?", receiverGUID).Scan(&receiverRace)
+	if s.player.Race != 0 && receiverRace != 0 && teamForRace(s.player.Race) != teamForRace(uint8(receiverRace)) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrNotYourTeam, 0, 0, 0), true)
+		return true
+	}
+	var mailCount int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COUNT(*) FROM mail WHERE receiver = ?", receiverGUID).Scan(&mailCount)
+	if mailCount >= 100 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrRecipientCapReached, 0, 0, 0), true)
+		return true
+	}
+	if len(attachments) > 12 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrTooManyAttachments, 0, 0, 0), true)
+		return true
+	}
+	if len(attachments) == 0 {
+		cod = 0
+	}
+	for _, att := range attachments {
+		var itemFlags int64
+		_ = cdb.QueryRowContext(ctx, "SELECT flags FROM item_instance WHERE guid = ?", att.ItemGUID).Scan(&itemFlags)
+		if itemFlags&1 != 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrEquipError, equipErrMailBoundItem, 0, 0), true)
+			return true
+		}
 	}
 	postageFee := uint32(30)
 	if len(attachments) > 0 {
@@ -207,7 +268,7 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 	}
 	totalRequired := postageFee + money
 	if s.player.Money < totalRequired {
-		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, 0, 3), true) // MAIL_ERR_NOT_ENOUGH_MONEY = 3
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrNotEnoughMoney, 0, 0, 0), true)
 		return true
 	}
 	s.player.Money -= totalRequired
@@ -242,17 +303,11 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", receiverGUID, att.ItemGUID)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO mail_items (mail_id, item_guid, item_template, receiver) VALUES (?, ?, ?, ?)", nextMailID, att.ItemGUID, itemEntry, receiverGUID)
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(uint32(nextMailID), 0, 0), true) // MAIL_OK = 0
+	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(uint32(nextMailID), mailSend, mailOk, 0, 0, 0), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()
-	// Notify receiver if online
-	targetSess := s.server.findSessionByGUID(uint64(receiverGUID))
-	if targetSess != nil {
-		recvPacket := protocol.NewBuffer(4)
-		recvPacket.WriteF32(0) // time remaining
-		_ = targetSess.write(uint16(protocol.OpcodeSMSG_RECEIVED_MAIL), recvPacket.Bytes(), true)
-	}
+	s.sendMailNotify(uint64(receiverGUID))
 	s.debug("mail sent successfully", "from", s.accountName, "to", targetName, "mail_id", nextMailID)
 	return true
 }
@@ -279,7 +334,7 @@ func (s *session) handleMailTakeMoney(ctx context.Context, payload []byte) bool 
 	s.player.Money += uint32(money)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "UPDATE mail SET money = 0 WHERE id = ?", mailID)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, 1, 0), true) // MAIL_MONEY_TAKEN = 1, MAIL_OK = 0
+	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMoneyTaken, mailOk, 0, 0, 0), true)
 	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()
 	s.debug("mail money collected", "account", s.accountName, "mail_id", mailID, "money", money)
@@ -316,7 +371,7 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	// Check COD (Cash On Delivery) payment
 	if cod > 0 {
 		if s.player.Money < uint32(cod) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, 2, 3), true) // MAIL_ITEM_TAKEN = 2, MAIL_ERR_NOT_ENOUGH_MONEY = 3
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailErrNotEnoughMoney, 0, 0, 0), true)
 			return true
 		}
 	}
@@ -340,6 +395,7 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		}
 	}
 	if freeSlot == 0xFF {
+		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailErrEquipError, uint32(equipErrInvFull), 0, 0), true)
 		return true
 	}
 
@@ -371,8 +427,13 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 	if remainingCount == 0 {
 		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET has_items = 0 WHERE id = ?", mailID)
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, 2, 0), true) // MAIL_ITEM_TAKEN = 2, MAIL_OK = 0
-	_ = s.sendItemCreate(uint64(attachID), uint32(itemEntry), 1, 0, freeSlot)
+	var itemCount int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(count, 1) FROM item_instance WHERE guid = ?", attachID).Scan(&itemCount)
+	if itemCount <= 0 {
+		itemCount = 1
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailOk, 0, attachID, uint32(itemCount)), true)
+	_ = s.sendItemCreate(uint64(attachID), uint32(itemEntry), uint32(itemCount), 0, freeSlot)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("mail item collected", "account", s.accountName, "mail_id", mailID, "item", itemEntry, "slot", freeSlot)
@@ -394,7 +455,7 @@ func (s *session) handleMailDelete(ctx context.Context, payload []byte) bool {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM mail WHERE id = ? AND receiver = ?", mailID, s.playerGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", mailID)
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, 3, 0), true) // MAIL_DELETED = 3, MAIL_OK = 0
+	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailDeleted, mailOk, 0, 0, 0), true)
 	s.debug("mail deleted", "account", s.accountName, "mail_id", mailID)
 	return true
 }
@@ -491,11 +552,20 @@ func (s *session) handleQueryNextMailTime(ctx context.Context) bool {
 	return true
 }
 
-func buildSendMailResult(mailID, action, result uint32) []byte {
-	buf := protocol.NewBuffer(12)
+// buildSendMailResult builds SMSG_SEND_MAIL_RESULT (0x239).
+// Reference: WorldPackets::Mail::MailCommandResult::Write (MailPackets.cpp:204).
+func buildSendMailResult(mailID, action, result, equipError, attachID, count uint32) []byte {
+	buf := protocol.NewBuffer(24)
 	buf.WriteU32(mailID)
 	buf.WriteU32(action)
 	buf.WriteU32(result)
+	if result == mailErrEquipError {
+		buf.WriteU32(equipError)
+	}
+	if action == mailItemTaken && (result == mailOk || result == mailErrItemHasExpired) {
+		buf.WriteU32(attachID)
+		buf.WriteU32(count)
+	}
 	return buf.Bytes()
 }
 
@@ -533,12 +603,7 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 		}
 		if freeSlot == 0xFF {
 			// Inventory full error (MAIL_ERR_EQUIP_ERROR)
-			buf := protocol.NewBuffer(16)
-			buf.WriteU32(mailID)
-			buf.WriteU32(9) // MAIL_MADE_PERMANENT
-			buf.WriteU32(1) // MAIL_ERR_EQUIP_ERROR
-			buf.WriteU32(uint32(equipErrInvFull))
-			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buf.Bytes(), true)
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMadePermanent, mailErrEquipError, uint32(equipErrInvFull), 0, 0), true)
 			return true
 		}
 
@@ -553,23 +618,19 @@ func (s *session) handleMailCreateTextItem(ctx context.Context, payload []byte) 
 		const mailBodyItemTemplate uint32 = 8383 // Plain Letter
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 1, 0, '', 1, '', 0, 0, 0, ?)", nextGUID, mailBodyItemTemplate, s.playerGUID, body)
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
-		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET checked = checked | 8 WHERE id = ?", mailID) // MAIL_CHECK_MASK_COPIED = 8
+		_, _ = cdb.ExecContext(ctx, "UPDATE mail SET checked = checked | 4 WHERE id = ?", mailID) // MAIL_CHECK_MASK_COPIED = 4
 		_ = s.sendItemCreate(nextGUID, mailBodyItemTemplate, 1, 0, freeSlot)
 		_ = s.sendInventoryItems(ctx)
 		s.sendPlayerUpdate()
 	}
 
-	// Send result: action 9 (MAIL_MADE_PERMANENT), result 0 (MAIL_OK)
-	buf := protocol.NewBuffer(12)
-	buf.WriteU32(mailID)
-	buf.WriteU32(9) // MAIL_MADE_PERMANENT
-	buf.WriteU32(0) // MAIL_OK
-	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buf.Bytes(), true)
+	// Send result: action 5 (MAIL_MADE_PERMANENT), result 0 (MAIL_OK)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailMadePermanent, mailOk, 0, 0, 0), true)
 	return true
 }
 
 // handleMailReturnToSender processes CMSG_MAIL_RETURN_TO_SENDER (0x248).
-// Reference: WorldSession::HandleMailReturnToSender (MailHandler.cpp:387).
+// Reference: WorldSession::HandleMailReturnToSender (MailHandler.cpp:351).
 func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 12 {
 		return true
@@ -583,15 +644,52 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		cdb := s.server.CharactersStore.DB
-		_, _ = cdb.ExecContext(ctx, `UPDATE mail SET
-			receiver = sender,
-			sender = receiver,
-			messageType = 0,
-			deliver_time = ?
-			WHERE id = ? AND receiver = ?`, time.Now().Unix(), mailID, s.playerGUID)
+
+		var senderGUID, receiverGUID int64
+		var messageType int
+		err := cdb.QueryRowContext(ctx, "SELECT sender, receiver, messageType FROM mail WHERE id = ? AND receiver = ? LIMIT 1", mailID, s.playerGUID).Scan(&senderGUID, &receiverGUID, &messageType)
+		if err != nil {
+			_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailReturnedToSender, mailErrInternalError, 0, 0, 0), true)
+			return true
+		}
+
+		// Only return normal mail if the original sender exists
+		if messageType == 0 && senderGUID > 0 {
+			var origSenderExists int64
+			_ = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE guid = ? LIMIT 1", senderGUID).Scan(&origSenderExists)
+			if origSenderExists == 0 {
+				// Sender character no longer exists; delete mail and attached items
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", mailID)
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", mailID)
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM mail WHERE id = ?", mailID)
+				_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailReturnedToSender, mailOk, 0, 0, 0), true)
+				return true
+			}
+
+			// Update attached items ownership back to the original sender
+			_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", senderGUID, mailID)
+			_, _ = cdb.ExecContext(ctx, "UPDATE mail_items SET receiver = ? WHERE mail_id = ?", senderGUID, mailID)
+
+			now := time.Now().Unix()
+			expireTime := now + 30*86400 // 30 days
+			_, _ = cdb.ExecContext(ctx, `UPDATE mail SET
+				receiver = ?,
+				sender = ?,
+				messageType = 0,
+				checked = 2,
+				deliver_time = ?,
+				expire_time = ?
+				WHERE id = ?`, senderGUID, receiverGUID, now, expireTime, mailID)
+
+			s.sendMailNotify(uint64(senderGUID))
+		} else {
+			// Not normal player mail (e.g. auction/creature mail without sender), just delete
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", mailID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", mailID)
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM mail WHERE id = ?", mailID)
+		}
 	}
 
-	res := buildSendMailResult(mailID, 2, 0) // MAIL_RES_RETURNED_TO_NAME
-	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), res, true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailReturnedToSender, mailOk, 0, 0, 0), true)
 	return true
 }
