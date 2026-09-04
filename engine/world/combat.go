@@ -27,6 +27,21 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
+	// Check if target is an online player (e.g. duel opponent or PvP target)
+	if s.server != nil {
+		if playerSess := s.server.findSessionByGUID(guid); playerSess != nil && playerSess.player != nil {
+			return combatTarget{
+				GUID:       guid,
+				Map:        playerSess.player.Map,
+				X:          playerSess.player.X,
+				Y:          playerSess.player.Y,
+				Z:          playerSess.player.Z,
+				Health:     playerSess.player.Health,
+				UnitFlags:  playerSess.player.UnitFlags,
+				FlagsExtra: 0,
+			}, true
+		}
+	}
 	s.server.motionMu.Lock()
 	if s.server.creatureMotion != nil {
 		motion := s.server.creatureMotion[guid]
@@ -124,6 +139,31 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		overkill = damage - target.Health
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), buildAttackerStateUpdate(s.playerGUID, target.GUID, damage, overkill), true)
+
+	// If target is an online player (e.g. duel opponent or PvP)
+	if s.server != nil {
+		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil && playerSess.player != nil {
+			if damage >= playerSess.player.Health {
+				if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
+					// Duel defeat: loser drops to 1 HP and kneels (TC: Player::DuelComplete)
+					playerSess.player.Health = 1
+					playerSess.sendPlayerUpdate()
+					s.endDuel(true, s.playerGUID)
+				} else {
+					playerSess.player.Health = 0
+					playerSess.sendPlayerUpdate()
+					playerSess.killPlayer(ctx)
+				}
+			} else {
+				playerSess.player.Health -= damage
+				playerSess.sendPlayerUpdate()
+			}
+			_ = s.sendAttackStop(target.GUID, true)
+			s.attackTarget = 0
+			return
+		}
+	}
+
 	low := uint32(target.GUID & 0x00FFFFFF)
 	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(low, entry)
@@ -322,11 +362,26 @@ func (s *session) handleDuelAccepted(ctx context.Context, payload []byte) bool {
 	buf := protocol.NewBuffer(4)
 	buf.WriteU32(3000) // 3000ms duel countdown
 	_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_COUNTDOWN), buf.Bytes(), true)
+	var partner *session
 	if s.duelPartner != 0 && s.server != nil {
-		if partner := s.server.findSessionByGUID(s.duelPartner); partner != nil {
+		partner = s.server.findSessionByGUID(s.duelPartner)
+		if partner != nil {
 			_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COUNTDOWN), buf.Bytes(), true)
 		}
 	}
+
+	// After 3-second countdown, set PLAYER_DUEL_TEAM to start the duel! (TC: Player::UpdateDuelFlag)
+	time.AfterFunc(3*time.Second, func() {
+		if s.duelPartner == 0 || s.player == nil {
+			return
+		}
+		s.player.DuelTeam = 1
+		s.sendPlayerUpdate()
+		if partner != nil && partner.player != nil {
+			partner.player.DuelTeam = 2
+			partner.sendPlayerUpdate()
+		}
+	})
 	return true
 }
 
@@ -336,15 +391,33 @@ func (s *session) handleDuelCancelled(ctx context.Context, payload []byte) bool 
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	s.endDuel(false, 0)
+	return true
+}
+
+// endDuel cleans up duel flags, clears arbiter/team, and emits SMSG_DUEL_COMPLETE.
+// Reference: Player::DuelComplete (Player.cpp:7435-7450).
+func (s *session) endDuel(won bool, winnerGUID uint64) {
+	result := uint8(0) // 0 = interrupted / fled / cancelled
+	if won {
+		result = 1 // 1 = won
+	}
 	buf := protocol.NewBuffer(1)
-	buf.WriteU8(0) // interrupted
+	buf.WriteU8(result)
+
+	s.player.DuelArbiter = 0
+	s.player.DuelTeam = 0
+	s.sendPlayerUpdate()
 	_ = s.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
+
 	if s.duelPartner != 0 && s.server != nil {
-		if partner := s.server.findSessionByGUID(s.duelPartner); partner != nil {
+		if partner := s.server.findSessionByGUID(s.duelPartner); partner != nil && partner.player != nil {
+			partner.player.DuelArbiter = 0
+			partner.player.DuelTeam = 0
+			partner.sendPlayerUpdate()
 			partner.duelPartner = 0
 			_ = partner.write(uint16(protocol.OpcodeSMSG_DUEL_COMPLETE), buf.Bytes(), true)
 		}
 		s.duelPartner = 0
 	}
-	return true
 }
