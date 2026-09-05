@@ -127,6 +127,9 @@ type session struct {
 	isSwimming         bool
 	breathTimer        int32
 	lastBreathTick     time.Time
+	inDarkWater        bool
+	fatigueTimer       int32
+	lastFatigueTick    time.Time
 	lastRegenTick      time.Time
 	lastCastTime       time.Time
 	lastCombatTime     time.Time
@@ -540,7 +543,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 	}()
 	defer close(closed)
-	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), scale: 1}
+	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), scale: 1, breathTimer: -1, fatigueTimer: -1}
 	s.addSession(state)
 	defer s.removeSession(state)
 	defer state.logout()

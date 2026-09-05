@@ -12,7 +12,9 @@ const (
 	mirrorTimerBreath  uint32 = 1
 	mirrorTimerFire    uint32 = 2
 
-	maxBreathTimerMs int32 = 180000 // 3 minutes in 3.3.5 (Player.cpp:826)
+	maxFatigueTimerMs int32 = 60000  // 1 minute in 3.3.5 (Player.cpp:819)
+	maxBreathTimerMs  int32 = 180000 // 3 minutes in 3.3.5 (Player.cpp:826)
+	maxFireTimerMs    int32 = 1000   // 1 second in 3.3.5 (Player.cpp:834)
 )
 
 // buildStartMirrorTimer builds SMSG_START_MIRROR_TIMER (0x1D9).
@@ -161,12 +163,164 @@ func (s *session) handleDrowningTick(ctx context.Context, now time.Time) {
 	}
 }
 
-// updatePlayerUnderwater iterates over active sessions and processes drowning/breath ticks.
+// handleEnterDarkWater initializes fatigue countdown if fatigue is not disabled.
+func (s *session) handleEnterDarkWater() {
+	if s.player == nil {
+		return
+	}
+	// Denveous's Marker AX3: GM / security check (Player.cpp:817)
+	if (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0 {
+		s.fatigueTimer = -1
+		return
+	}
+	// In flight (Player.cpp:24539)
+	if s.isInFlight() {
+		s.fatigueTimer = -1
+		return
+	}
+	// Dead and not a ghost
+	isGhost := s.player.PlayerFlags&playerFlagGhost != 0
+	if s.player.Health == 0 && !isGhost {
+		s.fatigueTimer = -1
+		return
+	}
+	if s.fatigueTimer <= 0 {
+		s.fatigueTimer = maxFatigueTimerMs
+	}
+	s.lastFatigueTick = time.Now()
+	s.sendMirrorTimer(mirrorTimerFatigue, uint32(s.fatigueTimer), uint32(maxFatigueTimerMs), -1)
+}
+
+// handleExitDarkWater switches fatigue mirror timer into regen mode (+10 scale) until full.
+func (s *session) handleExitDarkWater() {
+	if s.fatigueTimer != -1 && s.fatigueTimer < maxFatigueTimerMs {
+		s.lastFatigueTick = time.Now()
+		s.sendMirrorTimer(mirrorTimerFatigue, uint32(s.fatigueTimer), uint32(maxFatigueTimerMs), 10)
+	} else if s.fatigueTimer >= maxFatigueTimerMs {
+		s.fatigueTimer = -1
+		s.stopMirrorTimer(mirrorTimerFatigue)
+	}
+}
+
+// setInDarkWater sets whether the session is currently in dark water (fatigue zone).
+func (s *session) setInDarkWater(darkWater bool) {
+	if s.inDarkWater == darkWater {
+		return
+	}
+	s.inDarkWater = darkWater
+	if darkWater {
+		s.handleEnterDarkWater()
+	} else {
+		s.handleExitDarkWater()
+	}
+}
+
+// handleFatigueTick updates fatigue countdown or deals exhaustion environmental damage / teleports ghost.
+// Mirrors TrinityCore Player::HandleDrowning (Player.cpp:901-937).
+func (s *session) handleFatigueTick(ctx context.Context, now time.Time) {
+	if s.player == nil {
+		if s.fatigueTimer != -1 {
+			s.fatigueTimer = -1
+			s.stopMirrorTimer(mirrorTimerFatigue)
+		}
+		return
+	}
+
+	isGhost := s.player.PlayerFlags&playerFlagGhost != 0
+	if s.player.Health == 0 && !isGhost {
+		if s.fatigueTimer != -1 {
+			s.fatigueTimer = -1
+			s.stopMirrorTimer(mirrorTimerFatigue)
+		}
+		return
+	}
+
+	if s.inDarkWater {
+		// Fatigue immunity / bypass check (GM or flight)
+		if (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || s.security > 0 || s.isInFlight() {
+			if s.fatigueTimer != -1 {
+				s.fatigueTimer = -1
+				s.stopMirrorTimer(mirrorTimerFatigue)
+			}
+			return
+		}
+
+		if s.fatigueTimer == -1 {
+			s.fatigueTimer = maxFatigueTimerMs
+			s.lastFatigueTick = now
+			s.sendMirrorTimer(mirrorTimerFatigue, uint32(s.fatigueTimer), uint32(maxFatigueTimerMs), -1)
+			return
+		}
+
+		if s.lastFatigueTick.IsZero() {
+			s.lastFatigueTick = now
+			return
+		}
+
+		diffMs := int32(now.Sub(s.lastFatigueTick).Milliseconds())
+		if diffMs <= 0 {
+			return
+		}
+		s.lastFatigueTick = now
+		s.fatigueTimer -= diffMs
+
+		if s.fatigueTimer <= 0 {
+			// Fatigue timer depleted (Player.cpp:914-924):
+			// Reset timer to 1 second so damage ticks every 1000ms
+			s.fatigueTimer += 1000
+			if s.fatigueTimer < 0 {
+				s.fatigueTimer = 0
+			}
+			if s.player.Health > 0 && !isGhost {
+				damage := s.player.MaxHealth / 5
+				if damage == 0 {
+					damage = 1
+				}
+				s.environmentalDamage(ctx, damageExhausted, damage)
+			} else if isGhost {
+				s.repopAtGraveyard(ctx)
+			}
+		}
+	} else if s.fatigueTimer != -1 {
+		// Regenerate fatigue at 10x speed when out of dark water (Player.cpp:932)
+		if s.lastFatigueTick.IsZero() {
+			s.lastFatigueTick = now
+			return
+		}
+		diffMs := int32(now.Sub(s.lastFatigueTick).Milliseconds())
+		if diffMs <= 0 {
+			return
+		}
+		s.lastFatigueTick = now
+		s.fatigueTimer += 10 * diffMs
+		if s.fatigueTimer >= maxFatigueTimerMs || (s.player.Health == 0 && !isGhost) {
+			s.fatigueTimer = -1
+			s.stopMirrorTimer(mirrorTimerFatigue)
+		}
+	}
+}
+
+// stopMirrorTimers stops all active mirror timers.
+// Mirrors Player::StopMirrorTimers (Player.cpp:848-853).
+func (s *session) stopMirrorTimers() {
+	if s.breathTimer != -1 {
+		s.breathTimer = -1
+		s.stopMirrorTimer(mirrorTimerBreath)
+	}
+	if s.fatigueTimer != -1 {
+		s.fatigueTimer = -1
+		s.stopMirrorTimer(mirrorTimerFatigue)
+	}
+}
+
+// updatePlayerUnderwater iterates over active sessions and processes drowning/breath and fatigue ticks.
 func (s *Server) updatePlayerUnderwater(ctx context.Context, now time.Time) {
 	s.sessionsMu.RLock()
 	var sessions []*session
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && (sess.isSwimming || (sess.breathTimer != -1 && sess.breathTimer < maxBreathTimerMs)) {
+		if sess.playerLoaded && sess.player != nil &&
+			(sess.isSwimming || (sess.breathTimer != -1 && sess.breathTimer < maxBreathTimerMs) ||
+				sess.inDarkWater || (sess.fatigueTimer != -1 && sess.fatigueTimer < maxFatigueTimerMs)) {
 			sessions = append(sessions, sess)
 		}
 	}
@@ -174,5 +328,6 @@ func (s *Server) updatePlayerUnderwater(ctx context.Context, now time.Time) {
 
 	for _, sess := range sessions {
 		sess.handleDrowningTick(ctx, now)
+		sess.handleFatigueTick(ctx, now)
 	}
 }

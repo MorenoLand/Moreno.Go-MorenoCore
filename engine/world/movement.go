@@ -119,6 +119,11 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		s.handleExitSwimming()
 	}
 
+	// In flight cancels dark water / fatigue (TC Player.cpp:24539)
+	if s.isInFlight() && s.inDarkWater {
+		s.setInDarkWater(false)
+	}
+
 	// Fall damage generation and parachute interrupts (TC MovementHandler.cpp:359-365)
 	if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
 		s.handleFall(ctx, info)
