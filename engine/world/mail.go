@@ -66,10 +66,11 @@ func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return true
 	}
+	s.expireOldMails(ctx)
 	db := s.server.CharactersStore.DB
 	now := time.Now().Unix()
 	rows, err := db.QueryContext(ctx, `SELECT id, messageType, stationery, mailTemplateId, sender, receiver, subject, body, expire_time, deliver_time, money, cod, checked
-		FROM mail WHERE receiver = ? AND deliver_time <= ? ORDER BY id DESC LIMIT 50`, s.playerGUID, now)
+		FROM mail WHERE receiver = ? AND deliver_time <= ? AND expire_time > ? ORDER BY id DESC LIMIT 50`, s.playerGUID, now, now)
 	if err != nil {
 		return true
 	}
@@ -676,4 +677,65 @@ func (s *session) handleMailReturnToSender(ctx context.Context, payload []byte) 
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailReturnedToSender, mailOk, 0, 0, 0), true)
 	return true
+}
+
+// expireOldMails sweeps expired mails in characters DB.
+// Reference: ObjectMgr::ReturnOrDeleteOldMails (ObjectMgr.cpp:6308).
+func (s *session) expireOldMails(ctx context.Context) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	now := time.Now().Unix()
+	rows, err := cdb.QueryContext(ctx, `SELECT id, messageType, sender, receiver, has_items, checked FROM mail WHERE expire_time <= ?`, now)
+	if err != nil {
+		return
+	}
+	type expiredMail struct {
+		id, msgType, sender, receiver, hasItems, checked int64
+	}
+	var expired []expiredMail
+	for rows.Next() {
+		var em expiredMail
+		if err := rows.Scan(&em.id, &em.msgType, &em.sender, &em.receiver, &em.hasItems, &em.checked); err == nil {
+			expired = append(expired, em)
+		}
+	}
+	rows.Close()
+
+	for _, em := range expired {
+		if em.hasItems > 0 {
+			// If not normal player mail, or already returned / COD payment, delete attached items and mail
+			if em.msgType != 0 || (em.checked&(2|0x08)) != 0 {
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", em.id)
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", em.id)
+				_, _ = cdb.ExecContext(ctx, "DELETE FROM mail WHERE id = ?", em.id)
+			} else {
+				// Return mail to sender
+				var senderExists int64
+				_ = cdb.QueryRowContext(ctx, "SELECT guid FROM characters WHERE guid = ? LIMIT 1", em.sender).Scan(&senderExists)
+				if senderExists == 0 {
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", em.id)
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ?", em.id)
+					_, _ = cdb.ExecContext(ctx, "DELETE FROM mail WHERE id = ?", em.id)
+				} else {
+					_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid IN (SELECT item_guid FROM mail_items WHERE mail_id = ?)", em.sender, em.id)
+					_, _ = cdb.ExecContext(ctx, "UPDATE mail_items SET receiver = ? WHERE mail_id = ?", em.sender, em.id)
+					expireTime := now + 30*86400
+					_, _ = cdb.ExecContext(ctx, `UPDATE mail SET
+						receiver = ?,
+						sender = ?,
+						messageType = 0,
+						checked = 2,
+						deliver_time = ?,
+						expire_time = ?
+						WHERE id = ?`, em.sender, em.receiver, now, expireTime, em.id)
+					s.sendMailNotify(uint64(em.sender))
+				}
+			}
+		} else {
+			// No items attached, delete expired mail
+			_, _ = cdb.ExecContext(ctx, "DELETE FROM mail WHERE id = ?", em.id)
+		}
+	}
 }
