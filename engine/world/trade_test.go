@@ -240,3 +240,117 @@ func TestTradeNonTradedSlotAndCancel(t *testing.T) {
 		t.Fatal("expected trade states cleared after cancel")
 	}
 }
+
+func TestTradeParitySoulboundDistanceBags(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, name TEXT, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, played_time INTEGER, text TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, ContainerSlots INTEGER)",
+		"INSERT INTO characters VALUES (1, 'Player1', 1000, '')",
+		"INSERT INTO characters VALUES (2, 'Player2', 1000, '')",
+		// Soulbound item (flags = 1) in slot 23 for player 1
+		"INSERT INTO item_instance VALUES (301, 8001, 1, 0, 1, 0, '', 1, '', 0, 100, 0, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 301)",
+		// Normal item (flags = 0) in slot 24 for player 1
+		"INSERT INTO item_instance VALUES (302, 8002, 1, 0, 1, 0, '', 0, '', 0, 100, 0, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 24, 302)",
+		// Equipped bag (guid 500, entry 9001 with 4 slots) in slot 19 for player 2
+		"INSERT INTO item_template VALUES (9001, 4)",
+		"INSERT INTO item_instance VALUES (500, 9001, 2, 0, 1, 0, '', 0, '', 0, 100, 0, '')",
+		"INSERT INTO character_inventory VALUES (2, 0, 19, 500)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Fill Player 2's backpack (slots 23..38) completely
+	for sl := 23; sl <= 38; sl++ {
+		dummyGUID := 600 + sl
+		_, err := db.Exec("INSERT INTO item_instance VALUES (?, 9999, 2, 0, 1, 0, '', 0, '', 0, 100, 0, '')", dummyGUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = db.Exec("INSERT INTO character_inventory VALUES (2, 0, ?, ?)", sl, dummyGUID)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{AuthStore: store, CharactersStore: store, WorldStore: store, sessions: make(map[*session]struct{})}
+	sess1 := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Name: "Player1", Health: 100, MaxHealth: 100, Race: 1, Map: 0, X: 0, Y: 0, Z: 0, Money: 1000}}
+	sess2 := &session{server: srv, playerGUID: 2, playerLoaded: true, player: &playerState{GUID: 2, Name: "Player2", Health: 100, MaxHealth: 100, Race: 1, Map: 0, X: 0, Y: 0, Z: 0, Money: 1000}}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+
+	ctx := context.Background()
+
+	// 1. Initiate trade
+	initBuf := protocol.NewBuffer(8)
+	initBuf.WriteU64(2)
+	sess1.handleInitiateTrade(ctx, initBuf.Bytes())
+	sess2.handleBeginTrade(ctx)
+
+	// 2. Try placing soulbound item (301) into traded slot 0 -> should be rejected!
+	itemBufSoulbound := protocol.NewBuffer(3)
+	itemBufSoulbound.WriteU8(0)  // slot 0
+	itemBufSoulbound.WriteU8(0)  // bag 0
+	itemBufSoulbound.WriteU8(23) // inv slot 23 (item 301, soulbound)
+	sess1.handleSetTradeItem(ctx, itemBufSoulbound.Bytes())
+	if sess1.trade.Items[0].ItemGUID != 0 {
+		t.Fatalf("expected soulbound item not placed in slot 0, got %d", sess1.trade.Items[0].ItemGUID)
+	}
+
+	// 3. Placing soulbound item into non-traded slot 6 -> should be allowed!
+	itemBufSoulbound6 := protocol.NewBuffer(3)
+	itemBufSoulbound6.WriteU8(6)  // slot 6
+	itemBufSoulbound6.WriteU8(0)  // bag 0
+	itemBufSoulbound6.WriteU8(23) // inv slot 23
+	sess1.handleSetTradeItem(ctx, itemBufSoulbound6.Bytes())
+	if sess1.trade.Items[6].ItemGUID != 301 {
+		t.Fatalf("expected soulbound item allowed in non-traded slot 6, got %d", sess1.trade.Items[6].ItemGUID)
+	}
+
+	// 4. Test distance check on accept: if partner is > 11.11 yards away
+	sess2.player.X = 15.0 // partner moved away
+	sess1.handleAcceptTrade(ctx)
+	if sess1.trade != nil || sess2.trade != nil {
+		t.Fatal("expected trade canceled due to distance on accept")
+	}
+	sess2.player.X = 0.0 // reset position
+
+	// Re-initiate trade
+	sess1.handleInitiateTrade(ctx, initBuf.Bytes())
+	sess2.handleBeginTrade(ctx)
+
+	// 5. Test trade into equipped bag:
+	// Player 1 offers normal tradeable item 302
+	itemBufNormal := protocol.NewBuffer(3)
+	itemBufNormal.WriteU8(0)  // slot 0
+	itemBufNormal.WriteU8(0)  // bag 0
+	itemBufNormal.WriteU8(24) // inv slot 24 (item 302)
+	sess1.handleSetTradeItem(ctx, itemBufNormal.Bytes())
+
+	// Both accept
+	sess1.handleAcceptTrade(ctx)
+	sess2.handleAcceptTrade(ctx)
+
+	// Item 302 should now belong to player 2, placed in player 2's equipped bag (bag = 500, slot = 0)
+	var owner302, bag302, slot302 int64
+	err = db.QueryRow("SELECT owner_guid FROM item_instance WHERE guid = 302").Scan(&owner302)
+	if err != nil || owner302 != 2 {
+		t.Fatalf("expected item 302 transferred to player 2, err=%v, owner=%d", err, owner302)
+	}
+	err = db.QueryRow("SELECT bag, slot FROM character_inventory WHERE item = 302").Scan(&bag302, &slot302)
+	if err != nil || bag302 != 500 || slot302 != 0 {
+		t.Fatalf("expected item 302 in bag 500 slot 0, got bag=%d, slot=%d, err=%v", bag302, slot302, err)
+	}
+}
+
