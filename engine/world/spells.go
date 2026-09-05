@@ -178,6 +178,14 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 	}
 
+	// Dispel check: if spell has only SPELL_EFFECT_DISPEL effects (and not area-targeting), verify target has dispellable auras
+	// Mirrors TrinityCore Spell::CheckCast (Spell.cpp:5520-5565)
+	if failReason := s.checkDispelPreCast(spell, targetGUID); failReason != 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "nothing to dispel")
+		return true
+	}
+
 	// Interrupt any existing spell cast (TC: Unit::InterruptNonMeleeSpells)
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
@@ -356,7 +364,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				continue
 			}
 			switch eff.Effect {
-			case 2, 87, 108, 17: // Damage effects (School damage, Weapon damage, etc.)
+			case 2, 17, 31, 58, 87: // Damage effects (School damage, Weapon damage, etc.)
 				damage := uint32(eff.BasePoints + 1)
 				if damage <= 1 {
 					damage = uint32(20 + int(s.player.Level)*10)
@@ -457,6 +465,12 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleTameCreature(effCtx, spellID, targetGUID)
 			case 135: // SPELL_EFFECT_CALL_PET
 				s.handleSummonPet(effCtx, spellID, 0)
+			case 38: // SPELL_EFFECT_DISPEL
+				s.handleEffectDispel(effCtx, targetGUID, spell, eff)
+			case 108: // SPELL_EFFECT_DISPEL_MECHANIC
+				s.handleEffectDispelMechanic(effCtx, targetGUID, spell, eff)
+			case 126: // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
+				s.handleEffectSpellsteal(effCtx, targetGUID, spell, eff)
 			}
 		}
 		if spellID == 2641 { // Dismiss Pet
@@ -866,22 +880,24 @@ func (s *session) handleCancelAura(payload []byte) bool {
 
 // activeAura tracks an applied periodic or timed aura on a unit (player or creature).
 type activeAura struct {
-	SpellID     uint32
-	AuraType    uint32
-	CasterGUID  uint64
-	TargetGUID  uint64
-	SchoolMask  uint32
-	Amount      uint32
-	DurationMs  uint32
-	PeriodMs    uint32
-	RemainingMs uint32
-	Slot        uint8
+	SpellID            uint32
+	DispelType         uint32
+	Mechanic           uint32
+	AuraType           uint32
+	CasterGUID         uint64
+	TargetGUID         uint64
+	SchoolMask         uint32
+	Amount             uint32
+	DurationMs         uint32
+	PeriodMs           uint32
+	RemainingMs        uint32
+	Slot               uint8
 	Positive           bool
 	CasterLevel        uint8
 	AuraInterruptFlags uint32
 	Timer              *time.Timer
-	TickTimer   *time.Timer
-	Stopped     bool
+	TickTimer          *time.Timer
+	Stopped            bool
 }
 
 func isHarmfulAura(auraType uint32) bool {
@@ -1150,9 +1166,13 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	}
 	var auraInterruptFlags uint32
 	var auraType uint32
+	var dispelType uint32
+	var mechanic uint32
 	if s.server != nil && s.server.Data != nil {
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
 			auraInterruptFlags = sp.AuraInterruptFlags
+			dispelType = sp.DispelType
+			mechanic = sp.Mechanic
 			if len(sp.Effects) > 0 {
 				auraType = sp.Effects[0].Aura
 			}
@@ -1160,6 +1180,8 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	}
 	aura := &activeAura{
 		SpellID:            spellID,
+		DispelType:         dispelType,
+		Mechanic:           mechanic,
 		AuraType:           auraType,
 		CasterGUID:         s.playerGUID,
 		TargetGUID:         s.playerGUID,
@@ -1280,16 +1302,18 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		}
 
 		aura := &activeAura{
-			SpellID:     spell.ID,
-			AuraType:    eff.Aura,
-			CasterGUID:  s.playerGUID,
-			TargetGUID:  targetGUID,
-			SchoolMask:  schoolMask,
-			Amount:      amount,
-			DurationMs:  durationMs,
-			PeriodMs:    periodMs,
-			RemainingMs: durationMs,
-			Slot:        slot,
+			SpellID:            spell.ID,
+			DispelType:         spell.DispelType,
+			Mechanic:           spell.Mechanic,
+			AuraType:           eff.Aura,
+			CasterGUID:         s.playerGUID,
+			TargetGUID:         targetGUID,
+			SchoolMask:         schoolMask,
+			Amount:             amount,
+			DurationMs:         durationMs,
+			PeriodMs:           periodMs,
+			RemainingMs:        durationMs,
+			Slot:               slot,
 			Positive:           positive,
 			CasterLevel:        s.player.Level,
 			AuraInterruptFlags: spell.AuraInterruptFlags,
@@ -1351,6 +1375,8 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	slot := uint8(len(s.server.activeCreatureAuras[targetGUID]) % 64)
 	aura := &activeAura{
 		SpellID:     spell.ID,
+		DispelType:  spell.DispelType,
+		Mechanic:    spell.Mechanic,
 		AuraType:    eff.Aura,
 		CasterGUID:  s.playerGUID,
 		TargetGUID:  targetGUID,

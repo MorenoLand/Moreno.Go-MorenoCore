@@ -75,6 +75,8 @@ type SpellEffect struct {
 
 type Spell struct {
 	ID               uint32
+	DispelType       uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
+	Mechanic         uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 	Attributes       uint32
 	AttributesEx1    uint32
 	SchoolMask       uint32
@@ -408,6 +410,8 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		field int
 		dest  *uint32
 	}{
+		{2, &spell.DispelType},   // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
+		{3, &spell.Mechanic},     // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 		{4, &spell.Attributes},
 		{225, &spell.SchoolMask}, // Spell.dbc field 225 = SchoolMask (DBCStructure.h:1492)
 		{16, &spell.Targets},
