@@ -3,7 +3,9 @@ package world
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -368,3 +370,93 @@ func TestMailCreateTextItem(t *testing.T) {
 		t.Fatalf("expected checked mask to contain bit 4 (COPIED), got %d (err: %v)", checked, err)
 	}
 }
+
+func TestMailExpirationSweep(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	now := time.Now().Unix()
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, name TEXT, money INTEGER)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, played_time INTEGER, text TEXT)",
+		"CREATE TABLE mail (id INTEGER PRIMARY KEY, messageType INTEGER, stationery INTEGER, mailTemplateId INTEGER, sender INTEGER, receiver INTEGER, subject TEXT, body TEXT, has_items INTEGER, expire_time INTEGER, deliver_time INTEGER, money INTEGER, cod INTEGER, checked INTEGER)",
+		"CREATE TABLE mail_items (mail_id INTEGER, item_guid INTEGER, item_template INTEGER, receiver INTEGER, PRIMARY KEY (mail_id, item_guid))",
+		"INSERT INTO characters VALUES (1, 'Alice', 1000)",
+		"INSERT INTO characters VALUES (2, 'Bob', 1000)",
+		// Item instances
+		"INSERT INTO item_instance VALUES (101, 2001, 2, 0, 1, 0, '', 0, '', 0, 100, 0, '')", // normal mail item
+		"INSERT INTO item_instance VALUES (102, 2002, 2, 0, 1, 0, '', 0, '', 0, 100, 0, '')", // returned mail item
+		"INSERT INTO item_instance VALUES (103, 2003, 2, 0, 1, 0, '', 0, '', 0, 100, 0, '')", // auction mail item
+		// Mail 1: Normal player mail with item (expired 1 hour ago) -> Should return to Alice (1)
+		fmt.Sprintf("INSERT INTO mail VALUES (1, 0, 41, 0, 1, 2, 'Gift', 'For you', 1, %d, %d, 0, 0, 0)", now-3600, now-86400),
+		"INSERT INTO mail_items VALUES (1, 101, 2001, 2)",
+		// Mail 2: Already returned mail with item (expired) -> Should delete permanently
+		fmt.Sprintf("INSERT INTO mail VALUES (2, 0, 41, 0, 1, 2, 'Returned Gift', '', 1, %d, %d, 0, 0, 2)", now-3600, now-86400),
+		"INSERT INTO mail_items VALUES (2, 102, 2002, 2)",
+		// Mail 3: Auction mail with item (expired) -> Should delete permanently
+		fmt.Sprintf("INSERT INTO mail VALUES (3, 2, 62, 0, 1, 2, '103:0:3:1:1', '', 1, %d, %d, 0, 0, 4)", now-3600, now-86400),
+		"INSERT INTO mail_items VALUES (3, 103, 2003, 2)",
+		// Mail 4: Normal mail without items (expired) -> Should delete
+		fmt.Sprintf("INSERT INTO mail VALUES (4, 0, 41, 0, 1, 2, 'Chat', 'Hello', 0, %d, %d, 0, 0, 0)", now-3600, now-86400),
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: charStore, sessions: make(map[*session]struct{})}
+	sessAlice := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Name: "Alice"}}
+	srv.sessions[sessAlice] = struct{}{}
+
+	ctx := context.Background()
+
+	// Run expiration sweep
+	sessAlice.expireOldMails(ctx)
+
+	// 1. Mail 1 must be returned to Alice (receiver = 1, sender = 2, checked = 2)
+	var m1Receiver, m1Sender, m1Checked int64
+	err = db.QueryRow("SELECT receiver, sender, checked FROM mail WHERE id = 1").Scan(&m1Receiver, &m1Sender, &m1Checked)
+	if err != nil {
+		t.Fatalf("expected mail 1 returned to Alice: %v", err)
+	}
+	if m1Receiver != 1 || m1Sender != 2 || m1Checked != 2 {
+		t.Fatalf("expected mail 1 receiver=1, sender=2, checked=2, got receiver=%d, sender=%d, checked=%d", m1Receiver, m1Sender, m1Checked)
+	}
+	var mi1Receiver, item1Owner int64
+	_ = db.QueryRow("SELECT receiver FROM mail_items WHERE mail_id = 1").Scan(&mi1Receiver)
+	_ = db.QueryRow("SELECT owner_guid FROM item_instance WHERE guid = 101").Scan(&item1Owner)
+	if mi1Receiver != 1 || item1Owner != 1 {
+		t.Fatalf("expected item 101 owner updated to Alice (1), got miReceiver=%d, itemOwner=%d", mi1Receiver, item1Owner)
+	}
+
+	// 2. Mail 2 (already returned) must be deleted along with item 102
+	var m2Count, it2Count int64
+	_ = db.QueryRow("SELECT COUNT(*) FROM mail WHERE id = 2").Scan(&m2Count)
+	_ = db.QueryRow("SELECT COUNT(*) FROM item_instance WHERE guid = 102").Scan(&it2Count)
+	if m2Count != 0 || it2Count != 0 {
+		t.Fatalf("expected mail 2 and item 102 deleted, got m2Count=%d, it2Count=%d", m2Count, it2Count)
+	}
+
+	// 3. Mail 3 (auction mail) must be deleted along with item 103
+	var m3Count, it3Count int64
+	_ = db.QueryRow("SELECT COUNT(*) FROM mail WHERE id = 3").Scan(&m3Count)
+	_ = db.QueryRow("SELECT COUNT(*) FROM item_instance WHERE guid = 103").Scan(&it3Count)
+	if m3Count != 0 || it3Count != 0 {
+		t.Fatalf("expected mail 3 and item 103 deleted, got m3Count=%d, it3Count=%d", m3Count, it3Count)
+	}
+
+	// 4. Mail 4 (no items) must be deleted
+	var m4Count int64
+	_ = db.QueryRow("SELECT COUNT(*) FROM mail WHERE id = 4").Scan(&m4Count)
+	if m4Count != 0 {
+		t.Fatalf("expected mail 4 deleted, got m4Count=%d", m4Count)
+	}
+}
+
