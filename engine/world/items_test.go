@@ -706,6 +706,163 @@ func TestInventoryTwoItemSwapAndEquipParity(t *testing.T) {
 	}
 }
 
+func TestBankBagSwapValidations(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT, bankSlots INTEGER)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, InventoryType INTEGER, ContainerSlots INTEGER)",
+		"INSERT INTO characters VALUES (1, 1000, '', 1)", // 1 purchased bank bag slot (slot 67)
+		// 101: 1H Sword (InventoryType 13)
+		"INSERT INTO item_template VALUES (101, 1, 13, 0)",
+		// 102: 6-slot Bag (InventoryType 18)
+		"INSERT INTO item_template VALUES (102, 2, 18, 6)",
+		// 103: Dummy item
+		"INSERT INTO item_template VALUES (103, 3, 0, 0)",
+		// Sword (item 1001) in backpack slot 23
+		"INSERT INTO item_instance (guid, itemEntry, owner_guid) VALUES (1001, 101, 1)",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 1001)",
+		// Bag (item 1002) in backpack slot 24
+		"INSERT INTO item_instance (guid, itemEntry, owner_guid) VALUES (1002, 102, 1)",
+		"INSERT INTO character_inventory VALUES (1, 0, 24, 1002)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{AuthStore: store, CharactersStore: store, WorldStore: store}
+	sess := &session{
+		conn:         serverConn,
+		server:       srv,
+		playerGUID:   1,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:         1,
+			BankBagSlots: 1, // only slot 67 is purchased
+		},
+	}
+
+	type serverPkt struct {
+		opcode uint16
+		data   []byte
+	}
+	receivedPkts := make(chan serverPkt, 64)
+	go func() {
+		for {
+			op, data, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+			receivedPkts <- serverPkt{opcode: op, data: data}
+		}
+	}()
+
+	// 1. Attempt to move sword (slot 23) into bank bag slot 67 (purchased) -> must be rejected (not a bag)
+	go func() {
+		_ = sess.handleSwapInvItem(context.Background(), []byte{67, 23})
+	}()
+	pkt1 := <-receivedPkts
+	if pkt1.opcode != uint16(protocol.OpcodeSMSG_INVENTORY_CHANGE_FAILURE) {
+		t.Fatalf("expected SMSG_INVENTORY_CHANGE_FAILURE, got op=%x", pkt1.opcode)
+	}
+	if pkt1.data[0] != equipErrItemDoesntGoToSlot {
+		t.Fatalf("expected equipErrItemDoesntGoToSlot (%d), got %d", equipErrItemDoesntGoToSlot, pkt1.data[0])
+	}
+
+	// Verify sword didn't move
+	var s23 int
+	_ = db.QueryRow("SELECT item FROM character_inventory WHERE guid = 1 AND bag = 0 AND slot = 23").Scan(&s23)
+	if s23 != 1001 {
+		t.Fatalf("sword should not have moved from slot 23, got %d", s23)
+	}
+
+	// 2. Attempt to move bag (slot 24) into unpurchased bank bag slot 68 -> must be rejected
+	go func() {
+		_ = sess.handleSwapInvItem(context.Background(), []byte{68, 24})
+	}()
+	pkt2 := <-receivedPkts
+	if pkt2.opcode != uint16(protocol.OpcodeSMSG_INVENTORY_CHANGE_FAILURE) {
+		t.Fatalf("expected SMSG_INVENTORY_CHANGE_FAILURE, got op=%x", pkt2.opcode)
+	}
+	if pkt2.data[0] != equipErrItemDoesntGoToSlot {
+		t.Fatalf("expected equipErrItemDoesntGoToSlot (%d) for unpurchased slot, got %d", equipErrItemDoesntGoToSlot, pkt2.data[0])
+	}
+
+	// 3. Move bag (slot 24) into purchased bank bag slot 67 -> succeeds!
+	done3 := make(chan bool, 1)
+	go func() {
+		done3 <- sess.handleSwapInvItem(context.Background(), []byte{67, 24})
+	}()
+	pkt3 := <-receivedPkts
+	if pkt3.opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && pkt3.opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected update object, got op=%x", pkt3.opcode)
+	}
+	pkt3b := <-receivedPkts
+	if pkt3b.opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && pkt3b.opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected player update object, got op=%x", pkt3b.opcode)
+	}
+	<-done3
+	var s67 int
+	_ = db.QueryRow("SELECT item FROM character_inventory WHERE guid = 1 AND bag = 0 AND slot = 67").Scan(&s67)
+	if s67 != 1002 {
+		t.Fatalf("expected bag 1002 in bank bag slot 67, got %d", s67)
+	}
+
+	// 4. Place an item inside bank bag 1002
+	_, _ = db.Exec("INSERT INTO item_instance (guid, itemEntry, owner_guid) VALUES (1003, 103, 1)")
+	_, _ = db.Exec("INSERT INTO character_inventory VALUES (1, 1002, 0, 1003)")
+
+	// 5. Attempt to unequip bank bag (slot 67) back to slot 24 -> must fail because bag is NOT empty!
+	go func() {
+		_ = sess.handleSwapInvItem(context.Background(), []byte{24, 67})
+	}()
+	pkt4 := <-receivedPkts
+	if pkt4.opcode != uint16(protocol.OpcodeSMSG_INVENTORY_CHANGE_FAILURE) {
+		t.Fatalf("expected SMSG_INVENTORY_CHANGE_FAILURE, got op=%x", pkt4.opcode)
+	}
+	if pkt4.data[0] != equipErrCanOnlyDoWithEmptyBags {
+		t.Fatalf("expected equipErrCanOnlyDoWithEmptyBags (%d), got %d", equipErrCanOnlyDoWithEmptyBags, pkt4.data[0])
+	}
+
+	// Verify bag 1002 is still in slot 67
+	_ = db.QueryRow("SELECT item FROM character_inventory WHERE guid = 1 AND bag = 0 AND slot = 67").Scan(&s67)
+	if s67 != 1002 {
+		t.Fatalf("non-empty bag should still be in slot 67, got %d", s67)
+	}
+
+	// 6. Empty the bag: remove item 1003
+	_, _ = db.Exec("DELETE FROM character_inventory WHERE item = 1003")
+
+	// 7. Now unequip bank bag (slot 67) back to slot 24 -> succeeds!
+	done7 := make(chan bool, 1)
+	go func() {
+		done7 <- sess.handleSwapInvItem(context.Background(), []byte{24, 67})
+	}()
+	pkt5 := <-receivedPkts
+	if pkt5.opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && pkt5.opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected update object for empty bag move, got op=%x", pkt5.opcode)
+	}
+	<-done7
+	var s24Final int
+	err = db.QueryRow("SELECT item FROM character_inventory WHERE guid = 1 AND bag = 0 AND slot = 24").Scan(&s24Final)
+	if err != nil || s24Final != 1002 {
+		t.Fatalf("expected bag 1002 moved back to backpack slot 24, got err=%v item=%d", err, s24Final)
+	}
+}
+
 func TestHandleSocketGemsParity(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
