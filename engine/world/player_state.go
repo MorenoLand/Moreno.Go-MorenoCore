@@ -218,6 +218,7 @@ type playerState struct {
 	RangedAttackTime  uint32
 	CombatRatings     [25]uint32
 	SpellPower        uint32
+	CombatReach       float32
 	DungeonDifficulty uint8
 	RaidDifficulty    uint8
 	VehicleGUID       uint64
@@ -391,6 +392,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	state.MinRangedDamage = 1.0
 	state.MaxRangedDamage = 2.0
 	state.RangedAttackTime = 2000
+	state.CombatReach = 1.5
 	state.Armor = 0
 	state.Block = 0
 	state.AttackPower = 0

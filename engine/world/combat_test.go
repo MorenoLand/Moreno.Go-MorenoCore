@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"math"
 	"net"
 	"sync"
 	"testing"
@@ -765,6 +766,14 @@ func TestPvPMeleeSwingContinuationAndNearbyBroadcast(t *testing.T) {
 		target, ok := attSess.getCombatTarget(context.Background(), 20)
 		if ok {
 			attSess.executeMeleeSwing(context.Background(), target, protocol.BaseAttack)
+			select {
+			case <-attOpcodes:
+			case <-time.After(100 * time.Millisecond):
+			}
+			select {
+			case <-vicOpcodes:
+			case <-time.After(100 * time.Millisecond):
+			}
 		}
 	}
 	if vicSess.player.Health >= 1000 {
@@ -1488,6 +1497,79 @@ func TestParryHaste_Integration(t *testing.T) {
 
 	if !parried {
 		t.Logf("no parry occurred during 200 trials (within normal RNG variance)")
+	}
+}
+
+func TestCalcMeleeRange_FormulasAndLargeCreatureReach(t *testing.T) {
+	// 1. Standard humanoid (1.5 yd) vs standard humanoid (1.5 yd):
+	// 1.5 + 1.5 + 4/3 = 4.333 yd -> capped at 5.0 yd (NOMINAL_MELEE_RANGE)
+	r1 := calcMeleeRange(1.5, 1.5)
+	if r1 != 5.0 {
+		t.Fatalf("expected nominal melee range 5.0, got %f", r1)
+	}
+
+	// 2. Giant creature/dragon (e.g. 8.0 yd combat reach) vs player (1.5 yd):
+	// 8.0 + 1.5 + 4/3 = 10.833 yd
+	r2 := calcMeleeRange(1.5, 8.0)
+	expected := 1.5 + 8.0 + 4.0/3.0
+	if math.Abs(r2-expected) > 0.001 {
+		t.Fatalf("expected large creature melee reach ~%f, got %f", expected, r2)
+	}
+
+	// 3. Verify handleAttackSwing succeeds when player is 9 yards from an 8.0-reach boss
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	bossGUID := uint64(555) | (uint64(500) << 24) | (uint64(0xF130) << 48)
+	srv := &Server{
+		creatureMotion: map[uint64]*creatureMotion{
+			bossGUID: {
+				GUID:        bossGUID,
+				X:           9.0, // 9 yards away
+				Y:           0,
+				Z:           0,
+				Health:      50000,
+				MaxHealth:   50000,
+				CombatReach: 8.0, // Onyxia-sized reach
+				Level:       80,
+			},
+		},
+		sessions: make(map[*session]struct{}),
+	}
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   10,
+		player: &playerState{
+			GUID:        10,
+			X:           0,
+			Y:           0,
+			Z:           0,
+			CombatReach: 1.5,
+			Level:       80,
+			Health:      1000,
+			MaxHealth:   1000,
+		},
+	}
+	srv.sessions[sess] = struct{}{}
+
+	go func() {
+		for {
+			if _, _, err := readServerFrame(clientConn, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(bossGUID)
+	if !sess.handleAttackSwing(context.Background(), payload.Bytes()) {
+		t.Fatal("handleAttackSwing failed for large boss at 9 yards")
+	}
+	if sess.attackTarget != bossGUID {
+		t.Fatalf("expected attackTarget %d, got %d", bossGUID, sess.attackTarget)
 	}
 }
 

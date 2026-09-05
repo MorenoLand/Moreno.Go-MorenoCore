@@ -314,7 +314,13 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 			offSpeed = time.Duration(sess.player.OffhandAttackTime) * time.Millisecond
 		}
 
-		if distance3D(sess.player.X, sess.player.Y, sess.player.Z, target.X, target.Y, target.Z) <= meleeAttackRange+2.0 {
+		pReach := float32(1.5)
+		if sess.player.CombatReach > 0 {
+			pReach = sess.player.CombatReach
+		}
+		allowedRange := calcMeleeRange(pReach, target.CombatReach) + 2.0
+
+		if distance3D(sess.player.X, sess.player.Y, sess.player.Z, target.X, target.Y, target.Z) <= allowedRange {
 			// Main hand attack
 			if now.Sub(sess.lastSwing) >= mainSpeed {
 				if sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) < attackDisplayDelay {
