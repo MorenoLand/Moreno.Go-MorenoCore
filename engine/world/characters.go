@@ -411,6 +411,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.playerGUID = guid
 	s.player = &state
 	s.playerLoaded = true
+	s.lastFallZ = state.Z
+	s.lastFallTime = 0
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
 	timePacket := protocol.NewBuffer(12)
 	timePacket.WritePackedTime(time.Now())

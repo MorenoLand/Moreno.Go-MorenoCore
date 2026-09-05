@@ -122,6 +122,8 @@ type session struct {
 	autoRepeatSpell    uint32
 	autoRepeatTarget   uint64
 	isMoving           bool
+	lastFallZ          float32
+	lastFallTime       uint32
 	lastRegenTick      time.Time
 	lastCastTime       time.Time
 	lastCombatTime     time.Time

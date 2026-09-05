@@ -876,9 +876,10 @@ type activeAura struct {
 	PeriodMs    uint32
 	RemainingMs uint32
 	Slot        uint8
-	Positive    bool
-	CasterLevel uint8
-	Timer       *time.Timer
+	Positive           bool
+	CasterLevel        uint8
+	AuraInterruptFlags uint32
+	Timer              *time.Timer
 	TickTimer   *time.Timer
 	Stopped     bool
 }
@@ -1147,14 +1148,26 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 			existing.TickTimer.Stop()
 		}
 	}
+	var auraInterruptFlags uint32
+	var auraType uint32
+	if s.server != nil && s.server.Data != nil {
+		if sp, found, _ := s.server.Data.Spell(spellID); found {
+			auraInterruptFlags = sp.AuraInterruptFlags
+			if len(sp.Effects) > 0 {
+				auraType = sp.Effects[0].Aura
+			}
+		}
+	}
 	aura := &activeAura{
-		SpellID:     spellID,
-		CasterGUID:  s.playerGUID,
-		TargetGUID:  s.playerGUID,
-		DurationMs:  durationMs,
-		RemainingMs: durationMs,
-		Slot:        slot,
-		Positive:    true,
+		SpellID:            spellID,
+		AuraType:           auraType,
+		CasterGUID:         s.playerGUID,
+		TargetGUID:         s.playerGUID,
+		DurationMs:         durationMs,
+		RemainingMs:        durationMs,
+		Slot:               slot,
+		Positive:           true,
+		AuraInterruptFlags: auraInterruptFlags,
 	}
 	if durationMs > 0 && durationMs < 18000000 {
 		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
@@ -1277,8 +1290,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			PeriodMs:    periodMs,
 			RemainingMs: durationMs,
 			Slot:        slot,
-			Positive:    positive,
-			CasterLevel: s.player.Level,
+			Positive:           positive,
+			CasterLevel:        s.player.Level,
+			AuraInterruptFlags: spell.AuraInterruptFlags,
 		}
 		targetSess.activeAuras[spell.ID] = aura
 		targetSess.castMu.Unlock()

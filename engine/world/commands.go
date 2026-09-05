@@ -141,6 +141,8 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 		_, _ = s.server.CharactersStore.DB.Exec("UPDATE characters SET map = ?, position_x = ?, position_y = ?, position_z = ?, orientation = ? WHERE guid = ?",
 			mapID, x, y, z, orientation, s.playerGUID)
 	}
+	s.lastFallZ = z
+	s.lastFallTime = 0
 	s.sendPlayerUpdate()
 }
 

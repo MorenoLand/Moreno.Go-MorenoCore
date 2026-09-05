@@ -85,8 +85,9 @@ type Spell struct {
 	ManaCost         uint32
 	ManaCostPct      uint32
 	RangeIndex       uint32
-	InterruptFlags   uint32
-	ChannelInterrupt uint32
+	InterruptFlags     uint32
+	AuraInterruptFlags uint32
+	ChannelInterrupt   uint32
 	DurationIndex    uint32
 	SpellLevel       uint32
 	Speed            float32
@@ -418,6 +419,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{46, &spell.RangeIndex},
 		{6, &spell.AttributesEx1},   // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
 		{31, &spell.InterruptFlags}, // DBCStructure.h:1421
+		{32, &spell.AuraInterruptFlags}, // DBCStructure.h:1422
 		{33, &spell.ChannelInterrupt},
 		{40, &spell.DurationIndex},
 		{39, &spell.SpellLevel},
