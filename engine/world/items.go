@@ -539,12 +539,11 @@ func (s *session) handleSwapItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	srcBag, srcSlot, srcBagKey, srcItemGUID := slotBagA, slotSlotA, bagKeyA, itemGUIDA
-	dstBag, dstSlot, dstBagKey, dstItemGUID := slotBagB, slotSlotB, bagKeyB, itemGUIDB
-	// If slotA was empty but slotB has an item, normalize so src is the slot with the item
+	dstBag, dstSlot, dstBagKey, dstItemGUID := slotBagA, slotSlotA, bagKeyA, itemGUIDA
+	srcBag, srcSlot, srcBagKey, srcItemGUID := slotBagB, slotSlotB, bagKeyB, itemGUIDB
+	// If src was empty but dst has an item, normalize so src is the slot with the item
 	if srcItemGUID == 0 && dstItemGUID != 0 {
-		srcBag, srcSlot, srcBagKey, srcItemGUID = slotBagB, slotSlotB, bagKeyB, itemGUIDB
-		dstBag, dstSlot, dstBagKey, dstItemGUID = slotBagA, slotSlotA, bagKeyA, itemGUIDA
+		srcBag, srcSlot, srcBagKey, srcItemGUID, dstBag, dstSlot, dstBagKey, dstItemGUID = dstBag, dstSlot, dstBagKey, dstItemGUID, srcBag, srcSlot, srcBagKey, srcItemGUID
 	}
 
 	if srcItemGUID != 0 && dstItemGUID != 0 {

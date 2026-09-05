@@ -1141,10 +1141,10 @@ func (s *Server) raceFaction(race uint8) uint32 {
 	return 0
 }
 
-// buildPlayerValuesUpdate assembles an UPDATETYPE_VALUES block (packed GUID,
+// buildPlayerValuesBlock assembles an UPDATETYPE_VALUES block (packed GUID,
 // update mask, changed values) the way Object::_BuildValuesUpdate does for
 // in-place field changes such as quest log slots.
-func (s *Server) buildPlayerValuesUpdate(guid uint64, fields map[int]uint32) (*protocol.Packet, error) {
+func buildPlayerValuesBlock(guid uint64, fields map[int]uint32) []byte {
 	values := make([]uint32, playerValuesCount)
 	mask := protocol.NewUpdateMask(playerValuesCount)
 	for index, value := range fields {
@@ -1153,7 +1153,7 @@ func (s *Server) buildPlayerValuesUpdate(guid uint64, fields map[int]uint32) (*p
 		}
 		values[index] = value
 		if err := mask.Set(index); err != nil {
-			return nil, err
+			continue
 		}
 	}
 	block := protocol.NewBuffer(64 + len(fields)*4)
@@ -1166,8 +1166,13 @@ func (s *Server) buildPlayerValuesUpdate(guid uint64, fields map[int]uint32) (*p
 			block.WriteU32(values[index])
 		}
 	}
+	return block.Bytes()
+}
+
+func (s *Server) buildPlayerValuesUpdate(guid uint64, fields map[int]uint32) (*protocol.Packet, error) {
+	block := buildPlayerValuesBlock(guid, fields)
 	updates := protocol.NewUpdateData()
-	updates.AddUpdateBlock(block.Bytes())
+	updates.AddUpdateBlock(block)
 	return updates.BuildPacket(0)
 }
 
@@ -1243,9 +1248,11 @@ func buildItemCreateBlockForLocationWithDurability(fullGUID uint64, itemEntry, c
 	var values []uint32
 	var objectTypeId uint8
 	if containerSlots > 0 {
-		values = make([]uint32, 66+containerSlots*2)
+		// TrinityCore: CONTAINER_END = ITEM_END + 0x004A = 64 + 74 = 138
+		values = make([]uint32, 138)
 		objectTypeId = 2 // TYPEID_CONTAINER
-		values[2] = 0x07 // TYPE_OBJECT (1) | TYPE_ITEM (4) | TYPE_CONTAINER (2)
+		// TrinityCore: TYPEMASK_OBJECT (1) | TYPEMASK_ITEM (2) | TYPEMASK_CONTAINER (4) = 7
+		values[2] = 0x07
 		values[64] = containerSlots
 		for slot, itemGUID := range contents {
 			if slot >= containerSlots {
@@ -1255,9 +1262,11 @@ func buildItemCreateBlockForLocationWithDurability(fullGUID uint64, itemEntry, c
 			values[67+slot*2] = uint32(itemGUID >> 32)
 		}
 	} else {
+		// TrinityCore: ITEM_END = OBJECT_END + 0x003A = 6 + 58 = 64
 		values = make([]uint32, 64)
 		objectTypeId = 1 // TYPEID_ITEM
-		values[2] = 0x05 // TYPE_OBJECT (1) | TYPE_ITEM (4)
+		// TrinityCore: TYPEMASK_OBJECT (1) | TYPEMASK_ITEM (2) = 3
+		values[2] = 0x03
 	}
 	values[0] = uint32(fullGUID)
 	values[1] = uint32(fullGUID >> 32)
@@ -1304,10 +1313,8 @@ func buildItemCreateBlockForLocationWithDurability(fullGUID uint64, itemEntry, c
 }
 
 func buildContainerValuesUpdate(bagGUID uint64, containerSlots uint32, contents map[uint32]uint64) []byte {
-	if containerSlots > 36 {
-		containerSlots = 36
-	}
-	totalFields := int(66 + containerSlots*2)
+	// TrinityCore: CONTAINER_END = 138
+	totalFields := 138
 	values := make([]uint32, totalFields)
 	mask := protocol.NewUpdateMask(totalFields)
 	for slot := uint32(0); slot < containerSlots; slot++ {
@@ -1340,22 +1347,19 @@ func (s *session) sendItemCreate(itemGUID uint64, itemEntry, count uint32, bag, 
 	block := buildItemCreateBlock(fullGUID, itemEntry, count, s.playerGUID)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(block)
-	packet, err := updates.BuildPacket(0)
-	if err != nil {
-		return err
-	}
-	if err := s.write(packet.Opcode, packet.Payload.Bytes(), true); err != nil {
-		return err
-	}
 	fields := map[int]uint32{
 		324 + int(slot)*2:     uint32(fullGUID),
 		324 + int(slot)*2 + 1: uint32(fullGUID >> 32),
 	}
-	playerPacket, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
+	valBlock := buildPlayerValuesBlock(s.playerGUID, fields)
+	if valBlock != nil {
+		updates.AddUpdateBlock(valBlock)
+	}
+	packet, err := updates.BuildPacket(0)
 	if err != nil {
 		return err
 	}
-	return s.write(playerPacket.Opcode, playerPacket.Payload.Bytes(), true)
+	return s.write(packet.Opcode, packet.Payload.Bytes(), true)
 }
 
 func (s *session) sendInventoryItems(ctx context.Context) error {
@@ -1478,14 +1482,14 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			fields[playerVisibleItemStart+slot*2+1] = enchant
 		}
 	}
-	if updates.HasData() {
-		packet, err := updates.BuildPacket(0)
-		if err == nil && packet != nil {
-			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+	if len(fields) > 0 {
+		valBlock := buildPlayerValuesBlock(s.playerGUID, fields)
+		if valBlock != nil {
+			updates.AddUpdateBlock(valBlock)
 		}
 	}
-	if len(fields) > 0 {
-		packet, err := s.server.buildPlayerValuesUpdate(s.playerGUID, fields)
+	if updates.HasData() {
+		packet, err := updates.BuildPacket(0)
 		if err == nil && packet != nil {
 			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		}

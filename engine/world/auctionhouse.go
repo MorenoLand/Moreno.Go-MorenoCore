@@ -111,9 +111,13 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	if err != nil || itemCount == 0 {
 		return false
 	}
-	itemGUID, err := reader.ReadU64()
+	rawItemGUID, err := reader.ReadU64()
 	if err != nil {
 		return false
+	}
+	itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
+	if itemGUID == 0 {
+		itemGUID = int64(rawItemGUID)
 	}
 	stackCount, err := reader.ReadU32()
 	if err != nil {
@@ -143,7 +147,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	s.player.Money -= deposit
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
-	s.despawnItem(itemGUID)
+	s.despawnItem(uint64(itemGUID))
 	now := time.Now().Unix()
 	expire := now + int64(etime*60)
 	var nextID int64

@@ -54,91 +54,145 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 	greeting := "Hello! Ready for some training?"
 	var trainerType uint32 = 0
 
-	// 1. TrinityCore 3.3.5: trainer_spell + trainer + creature_default_trainer
-	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT ts.SpellId, COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqLevel, 0),
-		COALESCE(ts.ReqAbility1, 0), COALESCE(ts.ReqAbility2, 0), COALESCE(ts.ReqAbility3, 0),
-		COALESCE(t.Type, 0), COALESCE(t.Requirement, 0), COALESCE(t.Greeting, 'Hello! Ready for some training?')
-		FROM trainer_spell AS ts
-		LEFT JOIN trainer AS t ON t.Id = ts.TrainerId
-		WHERE ts.TrainerId IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
-		   OR ts.TrainerId = ?
-		ORDER BY ts.ReqLevel, ts.SpellId LIMIT 512`, creatureEntry, creatureEntry)
+	// 1. Resolve trainer & validate for player
+	var trainerID, tType, tReq int64
+	var greet sql.NullString
+	foundTrainer := false
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT t.Id, COALESCE(t.Type, 0), COALESCE(t.Requirement, 0), COALESCE(t.Greeting, 'Hello! Ready for some training?')
+		FROM trainer AS t
+		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
+		   OR t.Id = ?
+		LIMIT 1`, creatureEntry, creatureEntry).Scan(&trainerID, &tType, &tReq, &greet)
 	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel, reqAb1, reqAb2, reqAb3, tType, tReq int64
-			var greet sql.NullString
-			if err := rows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel, &reqAb1, &reqAb2, &reqAb3, &tType, &tReq, &greet); err != nil {
+		foundTrainer = true
+		if greet.Valid && greet.String != "" {
+			greeting = greet.String
+		}
+		trainerType = uint32(tType)
+
+		// Check if trainer is valid for player (TrinityCore: if (!IsTrainerValidForPlayer(player)) return;)
+		if !s.isTrainerValidForPlayer(uint32(tType), uint32(tReq)) {
+			s.debug("trainer not valid for player", "account", s.accountName, "trainer", trainerGUID, "type", tType, "req", tReq)
+			return true
+		}
+		type rawSpell struct {
+			spellID       uint32
+			moneyCost     uint32
+			reqSkill      uint32
+			reqSkillValue uint32
+			reqLevel      uint8
+			reqAb1        uint32
+			reqAb2        uint32
+			reqAb3        uint32
+		}
+		var rawList []rawSpell
+
+		rows, qErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT ts.SpellId, COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqLevel, 0),
+			COALESCE(ts.ReqAbility1, 0), COALESCE(ts.ReqAbility2, 0), COALESCE(ts.ReqAbility3, 0)
+			FROM trainer_spell AS ts
+			WHERE ts.TrainerId = ?
+			ORDER BY ts.ReqLevel, ts.SpellId LIMIT 512`, trainerID)
+		if qErr == nil {
+			for rows.Next() {
+				var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel, reqAb1, reqAb2, reqAb3 int64
+				if err := rows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel, &reqAb1, &reqAb2, &reqAb3); err == nil {
+					rawList = append(rawList, rawSpell{
+						spellID:       uint32(spellID),
+						moneyCost:     uint32(moneyCost),
+						reqSkill:      uint32(reqSkill),
+						reqSkillValue: uint32(reqSkillValue),
+						reqLevel:      uint8(reqLevel),
+						reqAb1:        uint32(reqAb1),
+						reqAb2:        uint32(reqAb2),
+						reqAb3:        uint32(reqAb3),
+					})
+				}
+			}
+			_ = rows.Close()
+		}
+
+		for _, raw := range rawList {
+			if !s.isSpellFitByClassAndRace(raw.spellID) {
 				continue
 			}
-			if tType == 0 && tReq != 0 && tReq != int64(s.player.Class) {
-				continue
-			}
-			if tType == 1 && tReq != 0 && tReq != int64(s.player.Race) {
-				continue
-			}
-			if greet.Valid && greet.String != "" {
-				greeting = greet.String
-			}
-			trainerType = uint32(tType)
-			serviceState := uint8(0) // Available
-			if s.hasLearnedSpell(uint32(spellID)) {
-				serviceState = 2 // Already Known
-			} else if s.player.Level < uint8(reqLevel) {
-				serviceState = 1 // Not Available
-			} else if reqSkill > 0 && s.getSkillValue(uint32(reqSkill)) < uint32(reqSkillValue) {
-				serviceState = 1 // Not Available
-			} else if reqAb1 > 0 && !s.hasLearnedSpell(uint32(reqAb1)) {
-				serviceState = 1 // Not Available
-			}
+			reqAbs := []uint32{raw.reqAb1, raw.reqAb2, raw.reqAb3}
+			serviceState := s.getTrainerSpellState(raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, reqAbs)
 			spells = append(spells, trainerSpellRecord{
-				SpellID:       uint32(spellID),
+				SpellID:       raw.spellID,
 				ServiceState:  serviceState,
-				Cost:          uint32(moneyCost),
-				ReqLevel:      uint8(reqLevel),
-				ReqSkill:      uint32(reqSkill),
-				ReqSkillValue: uint32(reqSkillValue),
-				ReqSpell:      uint32(reqAb1),
-				ReqSpellChain: uint32(reqAb2),
-				ReqSpell3:     uint32(reqAb3),
+				Cost:          raw.moneyCost,
+				ReqLevel:      raw.reqLevel,
+				ReqSkill:      raw.reqSkill,
+				ReqSkillValue: raw.reqSkillValue,
+				ReqSpell:      raw.reqAb1,
+				ReqSpellChain: raw.reqAb2,
+				ReqSpell3:     raw.reqAb3,
 			})
 		}
 	}
 
-	// 2. Fallback to legacy npc_trainer if trainer_spell returned no rows
-	if len(spells) == 0 {
+	// 2. Fallback to legacy npc_trainer if no trainer row found
+	if !foundTrainer {
+		type rawFb struct {
+			spellID       uint32
+			moneyCost     uint32
+			reqSkill      uint32
+			reqSkillValue uint32
+			reqLevel      uint8
+		}
+		var rawFbList []rawFb
+
 		fbRows, fbErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT SpellID, COALESCE(MoneyCost, 0), COALESCE(ReqSkill, 0), COALESCE(ReqSkillValue, 0), COALESCE(ReqLevel, 0)
 			FROM npc_trainer WHERE ID = ?
 			ORDER BY ReqLevel, SpellID LIMIT 128`, creatureEntry)
 		if fbErr == nil {
-			defer fbRows.Close()
 			for fbRows.Next() {
 				var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel int64
-				if err := fbRows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel); err != nil {
-					continue
+				if err := fbRows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel); err == nil {
+					rawFbList = append(rawFbList, rawFb{
+						spellID:       uint32(spellID),
+						moneyCost:     uint32(moneyCost),
+						reqSkill:      uint32(reqSkill),
+						reqSkillValue: uint32(reqSkillValue),
+						reqLevel:      uint8(reqLevel),
+					})
 				}
-				serviceState := uint8(0)
-				if s.hasLearnedSpell(uint32(spellID)) {
-					serviceState = 2
-				} else if s.player.Level < uint8(reqLevel) {
-					serviceState = 1
-				} else if reqSkill > 0 && s.getSkillValue(uint32(reqSkill)) < uint32(reqSkillValue) {
-					serviceState = 1
-				}
-				spells = append(spells, trainerSpellRecord{
-					SpellID:       uint32(spellID),
-					ServiceState:  serviceState,
-					Cost:          uint32(moneyCost),
-					ReqLevel:      uint8(reqLevel),
-					ReqSkill:      uint32(reqSkill),
-					ReqSkillValue: uint32(reqSkillValue),
-				})
 			}
+			_ = fbRows.Close()
+		}
+
+		for _, raw := range rawFbList {
+			if !s.isSpellFitByClassAndRace(raw.spellID) {
+				continue
+			}
+			serviceState := s.getTrainerSpellState(raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, nil)
+			spells = append(spells, trainerSpellRecord{
+				SpellID:       raw.spellID,
+				ServiceState:  serviceState,
+				Cost:          raw.moneyCost,
+				ReqLevel:      raw.reqLevel,
+				ReqSkill:      raw.reqSkill,
+				ReqSkillValue: raw.reqSkillValue,
+			})
 		}
 	}
 
-	// 3. Fallback to class trainer matching player's class (TrinityCore _classTrainers)
-	if len(spells) == 0 && s.player != nil && s.player.Class > 0 {
+	// 3. Fallback to class trainer ONLY if no trainer row was found at all for this creature (for tests/custom spawns)
+	if !foundTrainer && len(spells) == 0 && s.player != nil && s.player.Class > 0 {
+		type rawCt struct {
+			spellID       uint32
+			moneyCost     uint32
+			reqSkill      uint32
+			reqSkillValue uint32
+			reqLevel      uint8
+			reqAb1        uint32
+			reqAb2        uint32
+			reqAb3        uint32
+			tType         uint32
+			greet         string
+		}
+		var rawCtList []rawCt
+
 		ctRows, ctErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT ts.SpellId, COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqLevel, 0),
 			COALESCE(ts.ReqAbility1, 0), COALESCE(ts.ReqAbility2, 0), COALESCE(ts.ReqAbility3, 0),
 			COALESCE(t.Type, 0), COALESCE(t.Greeting, 'Hello! Ready for some training?')
@@ -147,39 +201,52 @@ func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool 
 			WHERE t.Type = 0 AND t.Requirement = ?
 			ORDER BY ts.ReqLevel, ts.SpellId LIMIT 128`, s.player.Class)
 		if ctErr == nil {
-			defer ctRows.Close()
 			for ctRows.Next() {
 				var spellID, moneyCost, reqSkill, reqSkillValue, reqLevel, reqAb1, reqAb2, reqAb3, tType int64
 				var greet sql.NullString
-				if err := ctRows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel, &reqAb1, &reqAb2, &reqAb3, &tType, &greet); err != nil {
-					continue
+				if err := ctRows.Scan(&spellID, &moneyCost, &reqSkill, &reqSkillValue, &reqLevel, &reqAb1, &reqAb2, &reqAb3, &tType, &greet); err == nil {
+					gStr := ""
+					if greet.Valid {
+						gStr = greet.String
+					}
+					rawCtList = append(rawCtList, rawCt{
+						spellID:       uint32(spellID),
+						moneyCost:     uint32(moneyCost),
+						reqSkill:      uint32(reqSkill),
+						reqSkillValue: uint32(reqSkillValue),
+						reqLevel:      uint8(reqLevel),
+						reqAb1:        uint32(reqAb1),
+						reqAb2:        uint32(reqAb2),
+						reqAb3:        uint32(reqAb3),
+						tType:         uint32(tType),
+						greet:         gStr,
+					})
 				}
-				if greet.Valid && greet.String != "" {
-					greeting = greet.String
-				}
-				trainerType = uint32(tType)
-				serviceState := uint8(0) // Available
-				if s.hasLearnedSpell(uint32(spellID)) {
-					serviceState = 2 // Already Known
-				} else if s.player.Level < uint8(reqLevel) {
-					serviceState = 1 // Not Available
-				} else if reqSkill > 0 && s.getSkillValue(uint32(reqSkill)) < uint32(reqSkillValue) {
-					serviceState = 1 // Not Available
-				} else if reqAb1 > 0 && !s.hasLearnedSpell(uint32(reqAb1)) {
-					serviceState = 1 // Not Available
-				}
-				spells = append(spells, trainerSpellRecord{
-					SpellID:       uint32(spellID),
-					ServiceState:  serviceState,
-					Cost:          uint32(moneyCost),
-					ReqLevel:      uint8(reqLevel),
-					ReqSkill:      uint32(reqSkill),
-					ReqSkillValue: uint32(reqSkillValue),
-					ReqSpell:      uint32(reqAb1),
-					ReqSpellChain: uint32(reqAb2),
-					ReqSpell3:     uint32(reqAb3),
-				})
 			}
+			_ = ctRows.Close()
+		}
+
+		for _, raw := range rawCtList {
+			if !s.isSpellFitByClassAndRace(raw.spellID) {
+				continue
+			}
+			if raw.greet != "" {
+				greeting = raw.greet
+			}
+			trainerType = raw.tType
+			reqAbs := []uint32{raw.reqAb1, raw.reqAb2, raw.reqAb3}
+			serviceState := s.getTrainerSpellState(raw.spellID, raw.reqLevel, raw.reqSkill, raw.reqSkillValue, reqAbs)
+			spells = append(spells, trainerSpellRecord{
+				SpellID:       raw.spellID,
+				ServiceState:  serviceState,
+				Cost:          raw.moneyCost,
+				ReqLevel:      raw.reqLevel,
+				ReqSkill:      raw.reqSkill,
+				ReqSkillValue: raw.reqSkillValue,
+				ReqSpell:      raw.reqAb1,
+				ReqSpellChain: raw.reqAb2,
+				ReqSpell3:     raw.reqAb3,
+			})
 		}
 	}
 
@@ -220,6 +287,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		return false
 	}
 	if s.hasLearnedSpell(spellID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true) // AlreadyKnown = 0
 		return true
 	}
 	wdb := s.server.WorldStore.DB
@@ -239,58 +307,95 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT id FROM creature WHERE guid = ?", spawnGUID).Scan(&creatureEntry)
 	}
 
-	var moneyCost, reqLevel, tType, tReq, reqSkill, reqSkillValue, reqSpell1 int64
-	err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0), COALESCE(t.Type, 0), COALESCE(t.Requirement, 0),
-		COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqAbility1, 0)
-		FROM trainer_spell AS ts
-		LEFT JOIN trainer AS t ON t.Id = ts.TrainerId
-		WHERE (ts.TrainerId IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
-		   OR ts.TrainerId = ?) AND ts.SpellId = ? LIMIT 1`,
-		creatureEntry, creatureEntry, spellID).Scan(&moneyCost, &reqLevel, &tType, &tReq, &reqSkill, &reqSkillValue, &reqSpell1)
+	// 1. Resolve trainer & validate for player
+	var trainerID, tType, tReq int64
+	var foundTrainer bool
+	err = wdb.QueryRowContext(ctx, `SELECT t.Id, COALESCE(t.Type, 0), COALESCE(t.Requirement, 0)
+		FROM trainer AS t
+		WHERE t.Id IN (SELECT TrainerId FROM creature_default_trainer WHERE CreatureId = ?)
+		   OR t.Id = ? LIMIT 1`, creatureEntry, creatureEntry).Scan(&trainerID, &tType, &tReq)
 	if err == nil {
-		if tType == 0 && tReq != 0 && tReq != int64(s.player.Class) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true)
+		foundTrainer = true
+		if !s.isTrainerValidForPlayer(uint32(tType), uint32(tReq)) {
+			_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
 			return true
 		}
-		if tType == 1 && tReq != 0 && tReq != int64(s.player.Race) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true)
-			return true
+	}
+
+	// 2. Fetch spell requirements on this trainer
+	var moneyCost, reqLevel, reqSkill, reqSkillValue, reqAb1, reqAb2, reqAb3 int64
+	var foundSpell bool
+	if foundTrainer {
+		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(MoneyCost, 0), COALESCE(ReqLevel, 0),
+			COALESCE(ReqSkillLine, 0), COALESCE(ReqSkillRank, 0),
+			COALESCE(ReqAbility1, 0), COALESCE(ReqAbility2, 0), COALESCE(ReqAbility3, 0)
+			FROM trainer_spell WHERE TrainerId = ? AND SpellId = ? LIMIT 1`,
+			trainerID, spellID).Scan(&moneyCost, &reqLevel, &reqSkill, &reqSkillValue, &reqAb1, &reqAb2, &reqAb3)
+		if err == nil {
+			foundSpell = true
 		}
-	} else if s.player != nil && s.player.Class > 0 {
-		// Fallback to class trainer only for player's own class
+	}
+
+	// Fallback for legacy npc_trainer or tests where creature has no trainer row
+	if !foundSpell && !foundTrainer {
+		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(MoneyCost, 0), COALESCE(ReqLevel, 0),
+			COALESCE(ReqSkill, 0), COALESCE(ReqSkillValue, 0), 0, 0, 0
+			FROM npc_trainer WHERE ID = ? AND SpellID = ? LIMIT 1`,
+			creatureEntry, spellID).Scan(&moneyCost, &reqLevel, &reqSkill, &reqSkillValue, &reqAb1, &reqAb2, &reqAb3)
+		if err == nil {
+			foundSpell = true
+		}
+	}
+
+	// Test fallback: if trainer row was NOT found at all, check class fallback
+	if !foundSpell && !foundTrainer && s.player != nil && s.player.Class > 0 {
 		err = wdb.QueryRowContext(ctx, `SELECT COALESCE(ts.MoneyCost, 0), COALESCE(ts.ReqLevel, 0),
-			COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0), COALESCE(ts.ReqAbility1, 0)
+			COALESCE(ts.ReqSkillLine, 0), COALESCE(ts.ReqSkillRank, 0),
+			COALESCE(ts.ReqAbility1, 0), COALESCE(ts.ReqAbility2, 0), COALESCE(ts.ReqAbility3, 0)
 			FROM trainer_spell AS ts
 			JOIN trainer AS t ON t.Id = ts.TrainerId
 			WHERE t.Type = 0 AND t.Requirement = ? AND ts.SpellId = ? LIMIT 1`,
-			s.player.Class, spellID).Scan(&moneyCost, &reqLevel, &reqSkill, &reqSkillValue, &reqSpell1)
+			s.player.Class, spellID).Scan(&moneyCost, &reqLevel, &reqSkill, &reqSkillValue, &reqAb1, &reqAb2, &reqAb3)
+		if err == nil {
+			foundSpell = true
+		}
 	}
-	if err != nil {
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 0), true)
+
+	if !foundSpell {
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
 		s.debug("trainer spell not found", "account", s.accountName, "trainer", trainerGUID, "entry", creatureEntry, "spell", spellID)
 		return true
 	}
+
+	// 3. Class & Race check
+	if !s.isSpellFitByClassAndRace(spellID) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
+		return true
+	}
+
+	// 4. Validate TrainerSpellState (must be 0 / Available)
+	reqAbilities := []uint32{uint32(reqAb1), uint32(reqAb2), uint32(reqAb3)}
+	state := s.getTrainerSpellState(spellID, uint8(reqLevel), uint32(reqSkill), uint32(reqSkillValue), reqAbilities)
+	if state != 0 {
+		reason := uint32(2) // NotEnoughSkill = 2
+		if state == 2 {
+			reason = 0 // AlreadyKnown = 0
+		}
+		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, reason), true)
+		return true
+	}
+
+	// 5. Money check
 	if s.player.Money < uint32(moneyCost) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 1), true) // NotEnoughMoney = 1
 		return true
 	}
-	if s.player.Level < uint8(reqLevel) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true) // NotEnoughSkill = 2
-		return true
-	}
-	if reqSkill > 0 && s.getSkillValue(uint32(reqSkill)) < uint32(reqSkillValue) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
-		return true
-	}
-	if reqSpell1 > 0 && !s.hasLearnedSpell(uint32(reqSpell1)) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_FAILED), buildTrainerBuyFailed(trainerGUID, spellID, 2), true)
-		return true
-	}
 
+	// 6. Deduct money & update DB
 	s.player.Money -= uint32(moneyCost)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
-	// 1. Play visual on trainer NPC (TC: npc->SendPlaySpellVisual(179))
+	// 7. Play visual on trainer NPC (TC: npc->SendPlaySpellVisual(179))
 	visualBuf := protocol.NewBuffer(12)
 	visualBuf.WriteU64(trainerGUID)
 	visualBuf.WriteU32(179) // SpellVisualKit 179: Trainer Teach
@@ -299,7 +404,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SPELL_VISUAL), visualBuf.Bytes(), s)
 	}
 
-	// 2. Play impact on player with sound chime (TC: npc->SendPlaySpellImpact(player->GetGUID(), 362))
+	// 8. Play impact on player with sound chime (TC: npc->SendPlaySpellImpact(player->GetGUID(), 362))
 	impactBuf := protocol.NewBuffer(12)
 	impactBuf.WriteU64(s.playerGUID)
 	impactBuf.WriteU32(362) // SpellVisualKit 362: Spell Learn Chime & Impact
@@ -308,11 +413,10 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), s)
 	}
 
-	// 3. Play learning chime and spellbook open sounds on client (TC: PlaySound(1455))
-	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(1455), true) // SOUNDKIT 1455: Spell Learn Chime
-	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(618), true)  // SOUNDKIT 618: Spellbook Open
+	// 9. Play learning chime sound on client (TC: PlaySound(1455))
+	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(1455), true)
 
-	// 4. Check if trainerSpell is castable (HasEffect SPELL_EFFECT_LEARN_SPELL = 36)
+	// 10. Check if trainerSpell is castable (HasEffect SPELL_EFFECT_LEARN_SPELL = 36)
 	isCastable := false
 	var triggerSpell uint32
 	if s.server != nil && s.server.Data != nil {
@@ -345,7 +449,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		s.learnSpell(ctx, spellID)
 	}
 
-	// 5. Check spell_learn_spell for dependent spells (e.g. Find Herbs, Smelting, Campfire, etc.)
+	// 11. Check spell_learn_spell for dependent spells (e.g. Find Herbs, Smelting, Campfire, etc.)
 	var depSpells []uint32
 	depRows, dErr := wdb.QueryContext(ctx, "SELECT SpellID FROM spell_learn_spell WHERE entry = ?", spellID)
 	if dErr == nil {
@@ -363,10 +467,9 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		}
 	}
 
-	// 6. Send teach succeeded (TC: SendTeachSucceeded(npc, player, spellId))
+	// 12. Send teach succeeded (TC: SendTeachSucceeded(npc, player, spellId))
 	_ = s.write(uint16(protocol.OpcodeSMSG_TRAINER_BUY_SUCCEEDED), buildTrainerBuySucceeded(trainerGUID, spellID), true)
 	s.sendPlayerUpdate()
-	_ = s.sendTrainerList(ctx, trainerGUID)
 	s.debug("trainer spell learned", "account", s.accountName, "spell", spellID, "cost", moneyCost)
 	return true
 }
@@ -379,7 +482,10 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 
 	// Check if this spell supercedes an earlier rank (TrinityCore: Player::SendSupercededSpell)
 	var prevSpellID uint32
-	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+	if s.server != nil {
+		prevSpellID = s.server.getPrevSpellInChain(spellID)
+	}
+	if prevSpellID == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		_ = s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT r1.spell_id FROM spell_ranks AS r1
 			JOIN spell_ranks AS r2 ON r1.first_spell_id = r2.first_spell_id
 			WHERE r2.spell_id = ? AND r1.rank = r2.rank - 1 LIMIT 1`, spellID).Scan(&prevSpellID)
@@ -405,6 +511,18 @@ func (s *session) learnSpell(ctx context.Context, spellID uint32) {
 	learnedBuf.WriteU32(spellID)
 	learnedBuf.WriteU16(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), learnedBuf.Bytes(), true)
+
+	// Yellow chat notification: "You have learned a new spell: <Name>."
+	if s.server != nil && s.server.Data != nil {
+		if name, rank, ok, err := s.server.Data.SpellName(spellID); err == nil && ok && name != "" {
+			msg := "You have learned a new spell: " + name
+			if rank != "" {
+				msg += " (" + rank + ")"
+			}
+			msg += "."
+			s.sendSystemMessage(msg)
+		}
+	}
 
 	// Check if passive spell (TC: if (spellInfo->IsPassive()) CastSpell(this, spellId, true))
 	if s.server != nil && s.server.Data != nil {
@@ -549,4 +667,135 @@ func buildSupercededSpell(oldSpell, newSpell uint32) []byte {
 	buf.WriteU32(oldSpell)
 	buf.WriteU32(newSpell)
 	return buf.Bytes()
+}
+
+func (s *Server) getPrevSpellInChain(spellID uint32) uint32 {
+	if s == nil {
+		return 0
+	}
+	s.spellChainMu.RLock()
+	if s.spellChainLoaded {
+		prev := s.prevSpellInChain[spellID]
+		s.spellChainMu.RUnlock()
+		return prev
+	}
+	s.spellChainMu.RUnlock()
+
+	s.spellChainMu.Lock()
+	defer s.spellChainMu.Unlock()
+	if s.spellChainLoaded {
+		return s.prevSpellInChain[spellID]
+	}
+	s.prevSpellInChain = make(map[uint32]uint32)
+	s.spellChainLoaded = true
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		rows, err := s.WorldStore.DB.Query(`SELECT r2.spell_id, r1.spell_id
+			FROM spell_ranks AS r1
+			JOIN spell_ranks AS r2 ON r1.first_spell_id = r2.first_spell_id AND r1.rank = r2.rank - 1`)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var higherSpell, prevSpell uint32
+				if err := rows.Scan(&higherSpell, &prevSpell); err == nil && higherSpell > 0 && prevSpell > 0 {
+					s.prevSpellInChain[higherSpell] = prevSpell
+				}
+			}
+		}
+	}
+	return s.prevSpellInChain[spellID]
+}
+
+func (s *session) isTrainerValidForPlayer(tType, requirement uint32) bool {
+	if s.player == nil {
+		return false
+	}
+	switch tType {
+	case 0, 3: // TRAINER_TYPE_CLASS, TRAINER_TYPE_PETS
+		if requirement != 0 && requirement != uint32(s.player.Class) {
+			return false
+		}
+	case 1: // TRAINER_TYPE_MOUNTS
+		if requirement != 0 && requirement != uint32(s.player.Race) {
+			return false
+		}
+	case 2: // TRAINER_TYPE_TRADESKILLS
+		if requirement != 0 && !s.hasLearnedSpell(requirement) {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *session) isSpellFitByClassAndRace(spellID uint32) bool {
+	if s.player == nil {
+		return false
+	}
+	if s.server == nil || s.server.Data == nil {
+		return true
+	}
+	abilities, ok, err := s.server.Data.SkillLineAbilities(spellID)
+	if err != nil || !ok || len(abilities) == 0 {
+		return true
+	}
+
+	raceMask := uint32(0)
+	if s.player.Race > 0 && s.player.Race <= 32 {
+		raceMask = uint32(1) << (s.player.Race - 1)
+	}
+	classMask := uint32(0)
+	if s.player.Class > 0 && s.player.Class <= 32 {
+		classMask = uint32(1) << (s.player.Class - 1)
+	}
+
+	for _, entry := range abilities {
+		if entry.RaceMask != 0 && raceMask != 0 && (entry.RaceMask&raceMask) == 0 {
+			continue
+		}
+		if entry.ClassMask != 0 && classMask != 0 && (entry.ClassMask&classMask) == 0 {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func (s *session) getTrainerSpellState(spellID uint32, reqLevel uint8, reqSkill, reqSkillValue uint32, reqAbilities []uint32) uint8 {
+	if s.player == nil {
+		return 1 // Unavailable
+	}
+
+	// 1. Already known: Green (2)
+	if s.hasLearnedSpell(spellID) {
+		return 2
+	}
+
+	// 2. Check previous rank in chain (TrinityCore: GetPrevSpellInChain)
+	if s.server != nil {
+		if prevSpell := s.server.getPrevSpellInChain(spellID); prevSpell > 0 && !s.hasLearnedSpell(prevSpell) {
+			return 1 // Unavailable
+		}
+	}
+
+	// 3. Check player level
+	if s.player.Level < reqLevel {
+		return 1 // Unavailable
+	}
+
+	// 4. Check required skill
+	if reqSkill > 0 && s.getSkillValue(reqSkill) < reqSkillValue {
+		return 1 // Unavailable
+	}
+
+	// 5. Check required abilities
+	for _, reqAb := range reqAbilities {
+		if reqAb > 0 && !s.hasLearnedSpell(reqAb) {
+			return 1 // Unavailable
+		}
+	}
+
+	return 0 // Available
+}
+
+func (s *session) sendSystemMessage(message string) {
+	_ = s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), protocol.BuildSystemChatMessage(message), true)
 }

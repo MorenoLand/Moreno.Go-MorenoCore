@@ -197,9 +197,13 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
-	itemGUID, err := reader.ReadU64()
+	rawItemGUID, err := reader.ReadU64()
 	if err != nil {
 		return false
+	}
+	itemGUID := int64(rawItemGUID & 0xFFFFFFFF)
+	if itemGUID == 0 {
+		itemGUID = int64(rawItemGUID)
 	}
 	count, err := reader.ReadU8()
 	if err != nil || count == 0 {
@@ -228,7 +232,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	if currentCount <= int64(count) {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
-		s.despawnItem(itemGUID)
+		s.despawnItem(uint64(itemGUID))
 	} else {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
 	}
@@ -241,7 +245,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		s.buyback = s.buyback[len(s.buyback)-12:]
 	}
 	s.syncEquipmentCache(ctx)
-	_ = s.write(uint16(protocol.OpcodeSMSG_SELL_ITEM), buildSellResult(vendorGUID, itemGUID, 0), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SELL_ITEM), buildSellResult(vendorGUID, rawItemGUID, 0), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
 	s.debug("item sold to vendor", "account", s.accountName, "item", itemEntry, "guid", itemGUID, "count", count, "earned", earned)
