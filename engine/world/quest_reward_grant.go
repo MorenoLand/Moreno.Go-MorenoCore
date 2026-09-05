@@ -22,7 +22,7 @@ const (
 var errQuestInventoryFull = errors.New("quest reward inventory is full")
 
 type inventoryRewardRecord struct {
-	Bag      uint8
+	Bag      int64
 	Slot     uint8
 	ItemGUID uint32
 	Entry    uint32
@@ -89,7 +89,7 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	} else if !complete {
 		return true
 	}
-	grants, err := s.commitQuestReward(ctx, view, reward)
+	grants, destroyedGUIDs, err := s.commitQuestReward(ctx, view, reward)
 	if errors.Is(err, errQuestInventoryFull) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_QUEST_FAILED), buildQuestFailed(view.Detail.ID, questInventoryFull), true)
 		return true
@@ -98,10 +98,11 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		s.debug("quest reward commit failed", "account", s.accountName, "quest", questID, "error", err)
 		return false
 	}
+	for _, fullGUID := range destroyedGUIDs {
+		s.sendDestroyObject(fullGUID, false)
+		s.despawnItem(fullGUID)
+	}
 	for _, grant := range grants {
-		if !grant.Stacked && grant.ItemGUID != 0 {
-			_ = s.sendItemCreate(uint64(grant.ItemGUID), grant.Entry, grant.Count, grant.Bag, uint8(grant.Slot))
-		}
 		if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildItemPushResult(s.playerGUID, grant.Bag, grant.Slot, grant.Entry, grant.Count, grant.InventoryCount, grant.Stacked), true); err != nil {
 			return false
 		}
@@ -152,29 +153,46 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 	return true
 }
 
-func (s *session) commitQuestReward(ctx context.Context, view questRewardView, choice uint32) ([]questItemGrant, error) {
+func (s *session) commitQuestReward(ctx context.Context, view questRewardView, choice uint32) ([]questItemGrant, []uint64, error) {
 	s.server.inventoryMu.Lock()
 	defer s.server.inventoryMu.Unlock()
+
+	fixed := append([]questRewardItem(nil), view.Detail.RewardItems...)
+	if len(view.Detail.ChoiceItems) > 0 && choice < uint32(len(view.Detail.ChoiceItems)) {
+		fixed = append(fixed, view.Detail.ChoiceItems[choice])
+	}
+	equippedBags := s.getEquippedBags(ctx, s.playerGUID)
+	stackables := make(map[uint32]int64)
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		for _, it := range fixed {
+			if it.ID > 0 {
+				var st int64
+				_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT stackable FROM item_template WHERE entry = ?", it.ID).Scan(&st)
+				if st < 1 {
+					st = 1
+				}
+				stackables[it.ID] = st
+			}
+		}
+	}
+
 	tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	rollback := func(cause error) ([]questItemGrant, error) {
+	rollback := func(cause error) ([]questItemGrant, []uint64, error) {
 		_ = tx.Rollback()
-		return nil, cause
+		return nil, nil, cause
 	}
 	inventory, err := loadInventoryRewardRecords(ctx, tx, s.playerGUID)
 	if err != nil {
 		return rollback(err)
 	}
-	if err := consumeQuestItems(ctx, tx, inventory, view.RequiredItems); err != nil {
+	destroyedGUIDs, err := consumeQuestItems(ctx, tx, inventory, view.RequiredItems)
+	if err != nil {
 		return rollback(err)
 	}
-	fixed := append([]questRewardItem(nil), view.Detail.RewardItems...)
-	if len(view.Detail.ChoiceItems) > 0 && choice < uint32(len(view.Detail.ChoiceItems)) {
-		fixed = append(fixed, view.Detail.ChoiceItems[choice])
-	}
-	grants, err := s.storeQuestRewardItems(ctx, tx, inventory, fixed)
+	grants, err := s.storeQuestRewardItems(ctx, tx, inventory, fixed, equippedBags, stackables)
 	if err != nil {
 		return rollback(err)
 	}
@@ -194,9 +212,9 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 		return rollback(err)
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return grants, nil
+	return grants, destroyedGUIDs, nil
 }
 
 func loadInventoryRewardRecords(ctx context.Context, tx *sql.Tx, guid uint64) ([]inventoryRewardRecord, error) {
@@ -211,18 +229,18 @@ func loadInventoryRewardRecords(ctx context.Context, tx *sql.Tx, guid uint64) ([
 		if err := rows.Scan(&bag, &slot, &itemGUID, &entry, &count); err != nil {
 			return nil, err
 		}
-		if bag < 0 || bag > 255 || slot < 0 || slot > 255 || itemGUID < 0 || itemGUID > int64(^uint32(0)) || entry < 0 || entry > int64(^uint32(0)) || count <= 0 {
+		if bag < 0 || slot < 0 || slot > 255 || itemGUID < 0 || itemGUID > int64(^uint32(0)) || entry < 0 || entry > int64(^uint32(0)) || count <= 0 {
 			continue
 		}
 		if count > int64(^uint32(0)) {
 			count = int64(^uint32(0))
 		}
-		result = append(result, inventoryRewardRecord{Bag: uint8(bag), Slot: uint8(slot), ItemGUID: uint32(itemGUID), Entry: uint32(entry), Count: uint32(count)})
+		result = append(result, inventoryRewardRecord{Bag: bag, Slot: uint8(slot), ItemGUID: uint32(itemGUID), Entry: uint32(entry), Count: uint32(count)})
 	}
 	return result, rows.Err()
 }
 
-func consumeQuestItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, required []questRewardItem) error {
+func consumeQuestItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, required []questRewardItem) ([]uint64, error) {
 	needed := make(map[uint32]uint64)
 	for _, item := range required {
 		if item.ID != 0 && item.Quantity != 0 {
@@ -234,6 +252,7 @@ func consumeQuestItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRew
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	var destroyed []uint64
 	for _, entry := range ids {
 		remaining := needed[entry]
 		for index := range inventory {
@@ -248,24 +267,32 @@ func consumeQuestItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRew
 			record.Count -= uint32(remove)
 			remaining -= remove
 			if record.Count == 0 {
+				fullGUID := uint64(record.ItemGUID) | (uint64(0x4000) << 48)
+				destroyed = append(destroyed, fullGUID)
 				if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", record.ItemGUID); err != nil {
-					return err
+					return nil, err
 				}
 				if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", record.ItemGUID); err != nil {
-					return err
+					return nil, err
 				}
 			} else if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", record.Count, record.ItemGUID); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		if remaining != 0 {
-			return fmt.Errorf("required quest item %d is unavailable", entry)
+			return nil, fmt.Errorf("required quest item %d is unavailable", entry)
 		}
 	}
-	return nil
+	return destroyed, nil
 }
 
-func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, items []questRewardItem) ([]questItemGrant, error) {
+type rewardSlotLocation struct {
+	BagKey    int64
+	ClientBag uint8
+	Slot      uint8
+}
+
+func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, inventory []inventoryRewardRecord, items []questRewardItem, equippedBags []equippedBagInfo, stackables map[uint32]int64) ([]questItemGrant, error) {
 	grants := make([]questItemGrant, 0, len(items))
 	var nextGUID uint32
 	if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) FROM item_instance").Scan(&nextGUID); err != nil {
@@ -275,10 +302,7 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 		if item.ID == 0 || item.Quantity == 0 {
 			continue
 		}
-		var stackable int64
-		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT stackable FROM item_template WHERE entry = ?", item.ID).Scan(&stackable); err != nil {
-			return nil, err
-		}
+		stackable := stackables[item.ID]
 		if stackable < 1 {
 			stackable = 1
 		}
@@ -298,21 +322,18 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 			if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", record.Count, record.ItemGUID); err != nil {
 				return nil, err
 			}
-			grants = append(grants, questItemGrant{Entry: item.ID, Count: uint32(add), InventoryCount: record.Count, Stacked: true})
+			clientBag := resolveRewardClientBag(record.Bag, equippedBags)
+			grants = append(grants, questItemGrant{
+				Entry:          item.ID,
+				Count:          uint32(add),
+				Bag:            clientBag,
+				Slot:           uint32(record.Slot),
+				InventoryCount: record.Count,
+				Stacked:        true,
+			})
 		}
 		for remaining != 0 {
-			if len(inventory) >= inventoryRewardLast-inventoryRewardFirst+1 {
-				occupied := make(map[uint8]bool)
-				for _, record := range inventory {
-					if record.Bag == inventoryRewardBag && record.Slot >= inventoryRewardFirst && record.Slot <= inventoryRewardLast && record.Count != 0 {
-						occupied[record.Slot] = true
-					}
-				}
-				if len(occupied) >= inventoryRewardLast-inventoryRewardFirst+1 {
-					return nil, errQuestInventoryFull
-				}
-			}
-			slot, ok := nextRewardSlot(inventory)
+			loc, ok := findNextRewardSlot(inventory, equippedBags)
 			if !ok {
 				return nil, errQuestInventoryFull
 			}
@@ -327,30 +348,68 @@ func (s *session) storeQuestRewardItems(ctx context.Context, tx *sql.Tx, invento
 			if _, err := tx.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 0, ?, 0, '', 0, '', 0, 0, 0, NULL)", nextGUID, item.ID, s.playerGUID, add); err != nil {
 				return nil, err
 			}
-			if _, err := tx.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, inventoryRewardBag, slot, nextGUID); err != nil {
+			if _, err := tx.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, loc.BagKey, loc.Slot, nextGUID); err != nil {
 				return nil, err
 			}
-			inventory = append(inventory, inventoryRewardRecord{Bag: inventoryRewardBag, Slot: slot, ItemGUID: nextGUID, Entry: item.ID, Count: uint32(add)})
+			inventory = append(inventory, inventoryRewardRecord{Bag: loc.BagKey, Slot: loc.Slot, ItemGUID: nextGUID, Entry: item.ID, Count: uint32(add)})
 			remaining -= add
-			grants = append(grants, questItemGrant{ItemGUID: uint32(nextGUID), Entry: item.ID, Count: uint32(add), Bag: inventoryRewardBag, Slot: uint32(slot), InventoryCount: uint32(add)})
+			grants = append(grants, questItemGrant{
+				ItemGUID:       nextGUID,
+				Entry:          item.ID,
+				Count:          uint32(add),
+				Bag:            loc.ClientBag,
+				Slot:           uint32(loc.Slot),
+				InventoryCount: uint32(add),
+				Stacked:        false,
+			})
 		}
 	}
 	return grants, nil
 }
 
-func nextRewardSlot(inventory []inventoryRewardRecord) (uint8, bool) {
-	occupied := make(map[uint8]struct{})
+func findNextRewardSlot(inventory []inventoryRewardRecord, equippedBags []equippedBagInfo) (rewardSlotLocation, bool) {
+	occupiedBackpack := make(map[uint8]struct{})
 	for _, record := range inventory {
-		if record.Bag == inventoryRewardBag && record.Slot >= inventoryRewardFirst && record.Slot <= inventoryRewardLast && record.Count != 0 {
-			occupied[record.Slot] = struct{}{}
+		if record.Bag == 0 && record.Slot >= inventoryRewardFirst && record.Slot <= inventoryRewardLast && record.Count != 0 {
+			occupiedBackpack[record.Slot] = struct{}{}
 		}
 	}
 	for slot := inventoryRewardFirst; slot <= inventoryRewardLast; slot++ {
-		if _, ok := occupied[uint8(slot)]; !ok {
-			return uint8(slot), true
+		if _, ok := occupiedBackpack[uint8(slot)]; !ok {
+			return rewardSlotLocation{BagKey: 0, ClientBag: 0, Slot: uint8(slot)}, true
 		}
 	}
-	return 0, false
+
+	for _, bag := range equippedBags {
+		if bag.slots == 0 {
+			continue
+		}
+		occupiedBag := make(map[uint8]struct{})
+		for _, record := range inventory {
+			if record.Bag == bag.guid && record.Count != 0 {
+				occupiedBag[record.Slot] = struct{}{}
+			}
+		}
+		for slot := uint8(0); slot < uint8(bag.slots); slot++ {
+			if _, ok := occupiedBag[slot]; !ok {
+				return rewardSlotLocation{BagKey: bag.guid, ClientBag: bag.slot, Slot: slot}, true
+			}
+		}
+	}
+
+	return rewardSlotLocation{}, false
+}
+
+func resolveRewardClientBag(bagKey int64, equippedBags []equippedBagInfo) uint8 {
+	if bagKey == 0 {
+		return 0
+	}
+	for _, bag := range equippedBags {
+		if bag.guid == bagKey {
+			return bag.slot
+		}
+	}
+	return 0
 }
 
 func buildItemPushResult(playerGUID uint64, bag uint8, slot, entry, count, inventoryCount uint32, stacked bool) []byte {

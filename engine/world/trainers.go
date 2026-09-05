@@ -413,10 +413,7 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PLAY_SPELL_IMPACT), impactBuf.Bytes(), s)
 	}
 
-	// 9. Play learning chime sound on client (TC: PlaySound(1455))
-	_ = s.write(uint16(protocol.OpcodeSMSG_PLAY_SOUND), buildPlaySound(1455), true)
-
-	// 10. Check if trainerSpell is castable (HasEffect SPELL_EFFECT_LEARN_SPELL = 36)
+	// 9. Check if trainerSpell is castable (HasEffect SPELL_EFFECT_LEARN_SPELL = 36)
 	isCastable := false
 	var triggerSpell uint32
 	if s.server != nil && s.server.Data != nil {
