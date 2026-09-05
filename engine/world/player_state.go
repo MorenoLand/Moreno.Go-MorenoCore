@@ -203,6 +203,7 @@ type playerState struct {
 	Glyphs            [2][6]uint16
 	Stats             [5]uint32
 	Armor             uint32
+	Resistances       [7]uint32
 	Block             uint32
 	AttackPower       uint32
 	RangedAttackPower uint32
@@ -1057,6 +1058,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		armor = uint32((20 + int(state.Level)*2) * 2)
 	}
 	values[unitFieldResistances] = armor // Armor (resistance 0)
+	for i := 1; i < 7; i++ {
+		values[unitFieldResistances+i] = state.Resistances[i]
+	}
 
 	values[unitFieldBaseHealth] = maxUint32(state.MaxHealth, 1)
 	if state.BaseMana > 0 {
