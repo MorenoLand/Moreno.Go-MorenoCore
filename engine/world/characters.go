@@ -1036,7 +1036,7 @@ func (s *session) createStarterSpells(ctx context.Context, guid uint64, race, cl
 
 	// 5. Custom spells from playercreateinfo_spell_custom (only if PlayerStart.AllSpells enabled)
 	if s.server != nil && s.server.Config.PlayerStartAllSpells {
-		rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR racemask = ?) AND (classmask = 0 OR classmask = ?)", race, class)
+		rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR (racemask & ?) <> 0) AND (classmask = 0 OR (classmask & ?) <> 0)", raceMask, classMask)
 		if err == nil {
 			defer rows.Close()
 			for rows.Next() {
