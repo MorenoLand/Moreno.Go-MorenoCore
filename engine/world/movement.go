@@ -90,9 +90,18 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	}
 	info.Flags &^= movementRoot
 	info.Flags = sanitizeMovementFlags(info.Flags)
-	if info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling) != 0 {
+	isMove := info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling) != 0
+	s.isMoving = isMove
+	if isMove {
 		s.interruptCurrentCast()
 		s.interruptCurrentChannel()
+		if s.autoRepeatSpell != 0 && s.autoRepeatSpell != 75 {
+			s.autoRepeatSpell = 0
+			s.autoRepeatTarget = 0
+			buf := protocol.NewBuffer(9)
+			buf.WritePackedGUID(s.playerGUID)
+			_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+		}
 	}
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
 	s.checkDuelBounds()
