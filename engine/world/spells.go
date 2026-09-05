@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -190,14 +191,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 	targetGUID := hitTargets[0]
 
-	castTimeStamp := uint32(time.Now().UnixMilli())
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, target), true)
-
-	// Reference Spell::handle_immediate: channeled spells begin their timed
-	// channel lifecycle after the cast completes.
-	if isChanneledSpell(spell) {
-		s.startChannel(castID, spellID, spell, targetGUID)
+	// Spell hit check for offensive spells targeting another unit
+	var missStatus []protocol.SpellMissStatus
+	if targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
+		targetLevel := uint8(1)
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			targetLevel = tgt.Level
+		}
+		isPlayerVictim := s.server != nil && s.server.findSessionByGUID(targetGUID) != nil
+		missInfo := magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim)
+		if missInfo != protocol.SpellMissNone {
+			hitTargets = nil
+			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
+		}
 	}
+
+	castTimeStamp := uint32(time.Now().UnixMilli())
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, missStatus, target), true)
 
 	pType := spell.PowerType
 	cost := s.calculateSpellPowerCost(spell)
@@ -216,10 +226,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.server.broadcastToNearby(pVal.Opcode, pVal.Payload.Bytes(), s)
 			}
 		}
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			col := fmt.Sprintf("power%d", pType+1)
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), s.player.Powers[pType], s.playerGUID)
 		}
+	}
+
+	if len(hitTargets) == 0 {
+		// Spell missed, do not trigger channel, cooldown, or effects
+		return
+	}
+
+	// Reference Spell::handle_immediate: channeled spells begin their timed
+	// channel lifecycle after the cast completes.
+	if isChanneledSpell(spell) {
+		s.startChannel(castID, spellID, spell, targetGUID)
 	}
 	if spell.RecoveryTime > 0 {
 		nowUnix := time.Now().Unix()
@@ -290,8 +311,53 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					heal = uint32(30 + int(s.player.Level)*15)
 				}
 				s.executeSpellHeal(effCtx, targetGUID, spellID, heal)
-			case 6: // Apply Aura
-				s.applyAura(spellID)
+			case 6, 27, 35: // Apply Aura
+				durationMs := uint32(0)
+				if spell.DurationIndex > 0 && s.server != nil && s.server.Data != nil {
+					if val, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level)); err == nil && ok && val > 0 {
+						durationMs = uint32(val)
+					}
+				}
+				if durationMs == 0 && eff.AuraPeriod > 0 {
+					durationMs = eff.AuraPeriod * 5
+				}
+				if durationMs == 0 && eff.Effect == 6 && !isHarmfulAura(eff.Aura) {
+					durationMs = 1800000 // 30 min default for passive buffs
+				}
+				periodMs := eff.AuraPeriod
+				if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 24 || eff.Aura == 89) {
+					periodMs = 3000
+				}
+				amount := uint32(eff.BasePoints + 1)
+				if amount == 0 {
+					if eff.Aura == 3 || eff.Aura == 89 {
+						amount = uint32(10 + int(s.player.Level)*2)
+					} else if eff.Aura == 8 || eff.Aura == 20 {
+						amount = uint32(15 + int(s.player.Level)*3)
+					}
+				}
+				schoolMask := spell.SchoolMask
+				if schoolMask == 0 {
+					schoolMask = 1
+				}
+
+				auraTarget := s.playerGUID
+				if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) {
+					auraTarget = s.playerGUID
+				} else if eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) {
+					if targetGUID != 0 && targetGUID != s.playerGUID {
+						auraTarget = targetGUID
+					}
+				} else if eff.ImplicitTargetA == 21 {
+					if targetGUID != 0 {
+						auraTarget = targetGUID
+					}
+				} else {
+					if targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
+						auraTarget = targetGUID
+					}
+				}
+				s.applyAuraToTarget(effCtx, auraTarget, spell, eff, durationMs, periodMs, amount, schoolMask)
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
 			case 5: // SPELL_EFFECT_TELEPORT_UNITS (e.g. Hearthstone 8690, Astral Recall 556)
@@ -389,6 +455,14 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 	if target.Health == 0 {
 		target.Health = 100
 	}
+	// Spell crit roll (5% base crit)
+	crit := rand.Float64() < 0.05
+	hitInfo := uint32(0)
+	if crit {
+		damage = uint32(float64(damage) * 1.5)
+		hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
+	}
+
 	overkill := uint32(0)
 	if damage >= target.Health {
 		overkill = damage - target.Health
@@ -402,7 +476,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		}
 	}
 
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, 0, 0, hitInfo), true)
 
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
@@ -417,7 +491,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
-			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask), true)
+			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, 0, 0, hitInfo), true)
 			if damage >= playerSess.player.Health {
 				if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
 					// Duel defeat: loser drops to 1 HP and duel completes
@@ -542,10 +616,22 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	}
 }
 
-func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8) []byte {
+func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8, extra ...uint32) []byte {
 	// Layout matches TrinityCore Unit::SendSpellNonMeleeDamageLog (Unit.cpp:5302)
 	// packed target, packed attacker, spellID, damage, overkill, schoolMask,
 	// absorbed, resist, periodicLog, unused, blocked, HitInfo, HitInfo&debugMask
+	absorb := uint32(0)
+	resist := uint32(0)
+	hitInfo := uint32(0)
+	if len(extra) > 0 {
+		absorb = extra[0]
+	}
+	if len(extra) > 1 {
+		resist = extra[1]
+	}
+	if len(extra) > 2 {
+		hitInfo = extra[2]
+	}
 	buf := protocol.NewBuffer(64)
 	buf.WritePackedGUID(targetGUID)
 	buf.WritePackedGUID(attackerGUID)
@@ -553,13 +639,13 @@ func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damag
 	buf.WriteU32(damage)
 	buf.WriteU32(overkill)
 	buf.WriteU8(schoolMask)
-	buf.WriteU32(0) // Absorbed
-	buf.WriteU32(0) // Resist
-	buf.WriteU8(0)  // periodicLog (0 = show spell name prefix)
-	buf.WriteU8(0)  // unused
-	buf.WriteU32(0) // blocked
-	buf.WriteU32(2) // HitInfo flags (SPELL_HIT_TYPE_HIT = 2)
-	buf.WriteU8(0)  // HitInfo & debugMask (always 0, no crit/hit debug)
+	buf.WriteU32(absorb) // Absorbed
+	buf.WriteU32(resist) // Resist
+	buf.WriteU8(0)       // periodicLog (0 = show spell name prefix)
+	buf.WriteU8(0)       // unused
+	buf.WriteU32(0)       // blocked
+	buf.WriteU32(hitInfo) // HitInfo flags (0 = normal hit, 2 = SPELL_HIT_TYPE_CRIT)
+	buf.WriteU8(0)       // HitInfo & debugMask (always 0, no crit/hit debug)
 	return buf.Bytes()
 }
 
@@ -664,32 +750,152 @@ func (s *session) handleCancelAura(payload []byte) bool {
 	return true
 }
 
-func (s *session) sendAuraUpdate(slot uint8, spellID uint32, remove bool, maxDurationMs, durationMs uint32) {
-	buf := protocol.NewBuffer(32)
-	buf.WritePackedGUID(s.playerGUID)
-	buf.WriteU8(slot)
-	if remove {
-		buf.WriteU32(0)
-		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), buf.Bytes(), true)
+// activeAura tracks an applied periodic or timed aura on a unit (player or creature).
+type activeAura struct {
+	SpellID     uint32
+	AuraType    uint32
+	CasterGUID  uint64
+	TargetGUID  uint64
+	SchoolMask  uint32
+	Amount      uint32
+	DurationMs  uint32
+	PeriodMs    uint32
+	RemainingMs uint32
+	Slot        uint8
+	Positive    bool
+	CasterLevel uint8
+	Timer       *time.Timer
+	TickTimer   *time.Timer
+	Stopped     bool
+}
+
+func isHarmfulAura(auraType uint32) bool {
+	switch auraType {
+	case 3: // SPELL_AURA_PERIODIC_DAMAGE
+		return true
+	case 5: // SPELL_AURA_MOD_CONFUSE
+		return true
+	case 6: // SPELL_AURA_MOD_CHARM
+		return true
+	case 7: // SPELL_AURA_MOD_FEAR
+		return true
+	case 11: // SPELL_AURA_MOD_TAUNT
+		return true
+	case 12: // SPELL_AURA_MOD_STUN
+		return true
+	case 26: // SPELL_AURA_MOD_ROOT
+		return true
+	case 27: // SPELL_AURA_MOD_SILENCE
+		return true
+	case 33: // SPELL_AURA_MOD_DECREASE_SPEED
+		return true
+	case 53: // SPELL_AURA_PERIODIC_LEECH
+		return true
+	case 89: // SPELL_AURA_PERIODIC_DAMAGE_PERCENT
+		return true
+	default:
+		return false
+	}
+}
+
+func isHarmfulSpell(spell wotlk.Spell) bool {
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.Effect == 2 || eff.Effect == 87 || eff.Effect == 108 || eff.Effect == 17 {
+			return true
+		}
+		if eff.Effect == 6 && isHarmfulAura(eff.Aura) {
+			return true
+		}
+		if eff.ImplicitTargetA == 6 || eff.ImplicitTargetA == 15 || eff.ImplicitTargetA == 16 {
+			return true
+		}
+	}
+	return false
+}
+
+func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool) uint8 {
+	lchance := int32(11)
+	if isPlayerVictim {
+		lchance = 7
+	}
+	leveldif := int32(victimLevel) - int32(casterLevel)
+	var modHitChance int32
+	if leveldif < 3 {
+		modHitChance = 96 - leveldif
+	} else {
+		modHitChance = 94 - (leveldif-2)*lchance
+	}
+	if modHitChance < 1 {
+		modHitChance = 1
+	} else if modHitChance > 100 {
+		modHitChance = 100
+	}
+	roll := rand.IntN(100)
+	if roll >= int(modHitChance) {
+		return protocol.SpellMissMiss
+	}
+	return protocol.SpellMissNone
+}
+
+func (s *Server) clearCreatureAuras(guid uint64) {
+	if s == nil {
 		return
 	}
-	buf.WriteU32(spellID)
-	flags := uint8(0x01 | 0x08 | 0x10) // AFLAG_EFF_INDEX_0 | AFLAG_CASTER | AFLAG_POSITIVE
-	if maxDurationMs > 0 {
-		flags |= 0x20 // AFLAG_DURATION
+	s.auraMu.Lock()
+	defer s.auraMu.Unlock()
+	if s.activeCreatureAuras != nil {
+		if auras, ok := s.activeCreatureAuras[guid]; ok {
+			for _, aura := range auras {
+				if aura != nil {
+					aura.Stopped = true
+					if aura.Timer != nil {
+						aura.Timer.Stop()
+					}
+					if aura.TickTimer != nil {
+						aura.TickTimer.Stop()
+					}
+				}
+			}
+			delete(s.activeCreatureAuras, guid)
+		}
 	}
-	buf.WriteU8(flags)
+	if s.creatureAuras != nil {
+		delete(s.creatureAuras, guid)
+	}
+}
+
+func (s *session) clearActiveAuras() {
+	if s == nil {
+		return
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	if s.activeAuras != nil {
+		for _, aura := range s.activeAuras {
+			if aura != nil {
+				aura.Stopped = true
+				if aura.Timer != nil {
+					aura.Timer.Stop()
+				}
+				if aura.TickTimer != nil {
+					aura.TickTimer.Stop()
+				}
+			}
+		}
+		s.activeAuras = make(map[uint32]*activeAura)
+	}
+}
+
+func (s *session) sendAuraUpdate(slot uint8, spellID uint32, remove bool, maxDurationMs, durationMs uint32) {
 	level := uint8(1)
 	if s.player != nil && s.player.Level > 0 {
 		level = s.player.Level
 	}
-	buf.WriteU8(level)
-	buf.WriteU8(1) // stack count
-	if maxDurationMs > 0 {
-		buf.WriteU32(maxDurationMs)
-		buf.WriteU32(durationMs)
-	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), buf.Bytes(), true)
+	pkt := protocol.BuildAuraUpdate(s.playerGUID, s.playerGUID, slot, spellID, remove, true, maxDurationMs, durationMs, level)
+	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt, true)
 }
 
 func (s *session) applyAura(spellID uint32) {
@@ -721,11 +927,57 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		slot = freeSlot
 		s.auraSlots[spellID] = slot
 	}
+
+	s.castMu.Lock()
+	if s.activeAuras == nil {
+		s.activeAuras = make(map[uint32]*activeAura)
+	}
+	if existing, exists := s.activeAuras[spellID]; exists && existing != nil {
+		existing.Stopped = true
+		if existing.Timer != nil {
+			existing.Timer.Stop()
+		}
+		if existing.TickTimer != nil {
+			existing.TickTimer.Stop()
+		}
+	}
+	aura := &activeAura{
+		SpellID:     spellID,
+		CasterGUID:  s.playerGUID,
+		TargetGUID:  s.playerGUID,
+		DurationMs:  durationMs,
+		RemainingMs: durationMs,
+		Slot:        slot,
+		Positive:    true,
+	}
+	if durationMs > 0 && durationMs < 18000000 {
+		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
+			s.removeAura(spellID)
+		})
+	}
+	s.activeAuras[spellID] = aura
+	s.castMu.Unlock()
+
 	s.sendAuraUpdate(slot, spellID, false, durationMs, durationMs)
 	s.sendPlayerUpdate()
 }
 
 func (s *session) removeAura(spellID uint32) {
+	s.castMu.Lock()
+	if s.activeAuras != nil {
+		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
+			aura.Stopped = true
+			if aura.Timer != nil {
+				aura.Timer.Stop()
+			}
+			if aura.TickTimer != nil {
+				aura.TickTimer.Stop()
+			}
+			delete(s.activeAuras, spellID)
+		}
+	}
+	s.castMu.Unlock()
+
 	if s.auras != nil {
 		delete(s.auras, spellID)
 	}
@@ -744,6 +996,483 @@ func (s *session) hasAura(spellID uint32) bool {
 	}
 	_, ok := s.auras[spellID]
 	return ok
+}
+
+func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect, durationMs, periodMs, amount, schoolMask uint32) {
+	if s.player == nil {
+		return
+	}
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+
+	positive := !isHarmfulAura(eff.Aura) && eff.ImplicitTargetA != 6
+
+	// Target is a player (self or other online player)
+	var targetSess *session
+	if targetGUID == s.playerGUID || targetGUID == 0 {
+		targetSess = s
+		targetGUID = s.playerGUID
+	} else if s.server != nil {
+		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+
+	if targetSess != nil && targetSess.player != nil {
+		if targetSess.player.Health == 0 {
+			return
+		}
+		targetSess.castMu.Lock()
+		if targetSess.auras == nil {
+			targetSess.auras = make(map[uint32]struct{})
+		}
+		if targetSess.auraSlots == nil {
+			targetSess.auraSlots = make(map[uint32]uint8)
+		}
+		if targetSess.activeAuras == nil {
+			targetSess.activeAuras = make(map[uint32]*activeAura)
+		}
+
+		if existing, exists := targetSess.activeAuras[spell.ID]; exists && existing != nil {
+			existing.Stopped = true
+			if existing.Timer != nil {
+				existing.Timer.Stop()
+			}
+			if existing.TickTimer != nil {
+				existing.TickTimer.Stop()
+			}
+		}
+
+		targetSess.auras[spell.ID] = struct{}{}
+		slot, ok := targetSess.auraSlots[spell.ID]
+		if !ok {
+			used := make(map[uint8]bool)
+			for _, sl := range targetSess.auraSlots {
+				used[sl] = true
+			}
+			var freeSlot uint8
+			for sl := uint8(0); sl < 64; sl++ {
+				if !used[sl] {
+					freeSlot = sl
+					break
+				}
+			}
+			slot = freeSlot
+			targetSess.auraSlots[spell.ID] = slot
+		}
+
+		aura := &activeAura{
+			SpellID:     spell.ID,
+			AuraType:    eff.Aura,
+			CasterGUID:  s.playerGUID,
+			TargetGUID:  targetGUID,
+			SchoolMask:  schoolMask,
+			Amount:      amount,
+			DurationMs:  durationMs,
+			PeriodMs:    periodMs,
+			RemainingMs: durationMs,
+			Slot:        slot,
+			Positive:    positive,
+			CasterLevel: s.player.Level,
+		}
+		targetSess.activeAuras[spell.ID] = aura
+		targetSess.castMu.Unlock()
+
+		updatePkt := protocol.BuildAuraUpdate(targetGUID, s.playerGUID, slot, spell.ID, false, positive, durationMs, durationMs, s.player.Level)
+		_ = targetSess.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, targetSess)
+		}
+		targetSess.sendPlayerUpdate()
+
+		if periodMs > 0 {
+			targetSess.schedulePlayerPeriodicTick(aura, periodMs)
+		}
+		if durationMs > 0 && durationMs < 18000000 {
+			aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
+				targetSess.expirePlayerAura(spell.ID)
+			})
+		}
+		return
+	}
+
+	// Target is a creature in the world
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok || target.Health == 0 {
+		return
+	}
+
+	if s.server == nil {
+		return
+	}
+	s.server.auraMu.Lock()
+	if s.server.creatureAuras == nil {
+		s.server.creatureAuras = make(map[uint64]map[uint32]struct{})
+	}
+	if s.server.creatureAuras[targetGUID] == nil {
+		s.server.creatureAuras[targetGUID] = make(map[uint32]struct{})
+	}
+	s.server.creatureAuras[targetGUID][spell.ID] = struct{}{}
+
+	if s.server.activeCreatureAuras == nil {
+		s.server.activeCreatureAuras = make(map[uint64]map[uint32]*activeAura)
+	}
+	if s.server.activeCreatureAuras[targetGUID] == nil {
+		s.server.activeCreatureAuras[targetGUID] = make(map[uint32]*activeAura)
+	}
+	if existing, exists := s.server.activeCreatureAuras[targetGUID][spell.ID]; exists && existing != nil {
+		existing.Stopped = true
+		if existing.Timer != nil {
+			existing.Timer.Stop()
+		}
+		if existing.TickTimer != nil {
+			existing.TickTimer.Stop()
+		}
+	}
+	slot := uint8(len(s.server.activeCreatureAuras[targetGUID]) % 64)
+	aura := &activeAura{
+		SpellID:     spell.ID,
+		AuraType:    eff.Aura,
+		CasterGUID:  s.playerGUID,
+		TargetGUID:  targetGUID,
+		SchoolMask:  schoolMask,
+		Amount:      amount,
+		DurationMs:  durationMs,
+		PeriodMs:    periodMs,
+		RemainingMs: durationMs,
+		Slot:        slot,
+		Positive:    positive,
+		CasterLevel: s.player.Level,
+	}
+	s.server.activeCreatureAuras[targetGUID][spell.ID] = aura
+	s.server.auraMu.Unlock()
+
+	updatePkt := protocol.BuildAuraUpdate(targetGUID, s.playerGUID, slot, spell.ID, false, positive, durationMs, durationMs, s.player.Level)
+	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, true)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), updatePkt, s)
+
+	if periodMs > 0 {
+		s.scheduleCreaturePeriodicTick(aura, periodMs)
+	}
+	if durationMs > 0 && durationMs < 18000000 {
+		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
+			s.expireCreatureAura(targetGUID, spell.ID, slot)
+		})
+	}
+}
+
+func (ts *session) schedulePlayerPeriodicTick(aura *activeAura, periodMs uint32) {
+	aura.TickTimer = time.AfterFunc(time.Duration(periodMs)*time.Millisecond, func() {
+		ts.castMu.Lock()
+		if aura.Stopped || ts.player == nil || ts.player.Health == 0 {
+			ts.castMu.Unlock()
+			return
+		}
+		if aura.RemainingMs >= periodMs {
+			aura.RemainingMs -= periodMs
+		} else {
+			aura.RemainingMs = 0
+		}
+		stillRunning := aura.RemainingMs > 0 || aura.DurationMs == 0
+		ts.castMu.Unlock()
+
+		ts.executePeriodicTickOnPlayer(aura)
+
+		if stillRunning {
+			ts.castMu.Lock()
+			if !aura.Stopped {
+				ts.schedulePlayerPeriodicTick(aura, periodMs)
+			}
+			ts.castMu.Unlock()
+		}
+	})
+}
+
+func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
+	if ts.player == nil || ts.player.Health == 0 {
+		return
+	}
+
+	switch aura.AuraType {
+	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
+		dmg := aura.Amount
+		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
+			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
+		}
+		if dmg < 1 {
+			dmg = 1
+		}
+		targetHealth := ts.player.Health
+		overkill := uint32(0)
+		if dmg >= targetHealth {
+			overkill = dmg - targetHealth
+		}
+
+		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, 0, 0, false)
+		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		if ts.server != nil {
+			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
+				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+			}
+			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
+		}
+
+		if dmg >= targetHealth {
+			if ts.duelPartner != 0 && ts.player.DuelTeam != 0 {
+				ts.player.Health = 1
+				ts.sendPlayerUpdate()
+				if ts.server != nil {
+					if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil {
+						casterSess.endDuel(true, casterSess.playerGUID, false)
+					}
+				}
+			} else {
+				ts.player.Health = 0
+				ts.sendPlayerUpdate()
+				ts.killPlayer(context.Background())
+			}
+			ts.clearActiveAuras()
+		} else {
+			ts.player.Health -= dmg
+			ts.sendPlayerUpdate()
+		}
+
+	case 8, 20: // SPELL_AURA_PERIODIC_HEAL, SPELL_AURA_OBS_MOD_HEALTH
+		heal := aura.Amount
+		curHP := ts.player.Health
+		maxHP := ts.player.MaxHealth
+		newHP := curHP + heal
+		overheal := uint32(0)
+		if newHP > maxHP {
+			overheal = newHP - maxHP
+			newHP = maxHP
+		}
+
+		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, 0, false)
+		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		if ts.server != nil {
+			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
+				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+			}
+			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
+		}
+
+		ts.player.Health = newHP
+		ts.sendPlayerUpdate()
+
+	case 24: // SPELL_AURA_PERIODIC_ENERGIZE
+		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, 0, aura.Amount)
+		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		if ts.server != nil {
+			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
+				_ = casterSess.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+			}
+			ts.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, ts)
+		}
+	}
+}
+
+func (ts *session) expirePlayerAura(spellID uint32) {
+	ts.castMu.Lock()
+	if ts.activeAuras != nil {
+		if aura, ok := ts.activeAuras[spellID]; ok && aura != nil {
+			aura.Stopped = true
+			if aura.TickTimer != nil {
+				aura.TickTimer.Stop()
+			}
+			delete(ts.activeAuras, spellID)
+		}
+	}
+	ts.castMu.Unlock()
+	ts.removeAura(spellID)
+}
+
+func (s *session) scheduleCreaturePeriodicTick(aura *activeAura, periodMs uint32) {
+	aura.TickTimer = time.AfterFunc(time.Duration(periodMs)*time.Millisecond, func() {
+		if s.server == nil {
+			return
+		}
+		s.server.auraMu.Lock()
+		if aura.Stopped {
+			s.server.auraMu.Unlock()
+			return
+		}
+		if aura.RemainingMs >= periodMs {
+			aura.RemainingMs -= periodMs
+		} else {
+			aura.RemainingMs = 0
+		}
+		stillRunning := aura.RemainingMs > 0 || aura.DurationMs == 0
+		s.server.auraMu.Unlock()
+
+		targetAlive := s.executePeriodicTickOnCreature(aura)
+		if !targetAlive {
+			return
+		}
+
+		if stillRunning {
+			s.server.auraMu.Lock()
+			if !aura.Stopped {
+				s.scheduleCreaturePeriodicTick(aura, periodMs)
+			}
+			s.server.auraMu.Unlock()
+		}
+	})
+}
+
+func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
+	ctx := context.Background()
+	target, ok := s.getCombatTarget(ctx, aura.TargetGUID)
+	if !ok || target.Health == 0 {
+		if s.server != nil {
+			s.server.clearCreatureAuras(aura.TargetGUID)
+		}
+		return false
+	}
+
+	switch aura.AuraType {
+	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
+		dmg := aura.Amount
+		if aura.SchoolMask&1 != 0 && target.Armor > 0 {
+			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
+		}
+		if dmg < 1 {
+			dmg = 1
+		}
+		targetHealth := target.Health
+		overkill := uint32(0)
+		if dmg >= targetHealth {
+			overkill = dmg - targetHealth
+		}
+
+		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, 0, 0, false)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+		}
+
+		if dmg >= targetHealth {
+			// Target slain by DoT
+			if s.server != nil {
+				s.server.motionMu.Lock()
+				motion := s.server.creatureMotion[aura.TargetGUID]
+				if motion == nil {
+					low := uint32(aura.TargetGUID & 0x00FFFFFF)
+					entry := uint32((aura.TargetGUID >> 24) & 0x00FFFFFF)
+					motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
+				}
+				if motion != nil {
+					motion.Health = 0
+					motion.InCombat = false
+					motion.TargetGUID = 0
+					motion.Moving = false
+					if motion.ThreatMgr != nil {
+						motion.ThreatMgr.ClearThreat()
+					}
+				}
+				s.server.motionMu.Unlock()
+
+				s.server.stopCreatureMotion(target.Map, target.GUID, target.X, target.Y, target.Z)
+				s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+					unitFieldHealth:       0,
+					unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+				})
+				s.server.broadcastThreatClear(target.Map, target.GUID)
+				s.server.clearCreatureAuras(aura.TargetGUID)
+			}
+			_ = s.sendAttackStop(target.GUID, true)
+			s.attackTarget = 0
+			s.onCreatureKilled(ctx, target)
+			return false
+		} else {
+			newHealth := targetHealth - dmg
+			if s.server != nil {
+				s.server.motionMu.Lock()
+				motion := s.server.creatureMotion[aura.TargetGUID]
+				if motion == nil {
+					low := uint32(aura.TargetGUID & 0x00FFFFFF)
+					entry := uint32((aura.TargetGUID >> 24) & 0x00FFFFFF)
+					motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
+				}
+				if motion != nil {
+					motion.Health = newHealth
+					motion.InCombat = true
+					if motion.ThreatMgr == nil {
+						motion.ThreatMgr = NewThreatManager(target.GUID)
+					}
+					dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
+					inMelee := dist <= meleeAttackRange
+					motion.ThreatMgr.AddThreat(s.playerGUID, float32(dmg), inMelee)
+					motion.Moving = true
+				}
+				s.server.motionMu.Unlock()
+				s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
+				s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+			}
+			return true
+		}
+
+	case 8, 20: // SPELL_AURA_PERIODIC_HEAL, SPELL_AURA_OBS_MOD_HEALTH
+		heal := aura.Amount
+		curHP := target.Health
+		maxHP := target.MaxHealth
+		newHP := curHP + heal
+		overheal := uint32(0)
+		if newHP > maxHP {
+			overheal = newHP - maxHP
+			newHP = maxHP
+		}
+
+		logPkt := protocol.BuildPeriodicAuraLogHeal(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, heal, overheal, 0, false)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+			s.server.motionMu.Lock()
+			motion := s.server.creatureMotion[aura.TargetGUID]
+			if motion != nil {
+				motion.Health = newHP
+			}
+			s.server.motionMu.Unlock()
+			s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{unitFieldHealth: newHP})
+		}
+		return true
+
+	case 24: // SPELL_AURA_PERIODIC_ENERGIZE
+		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, 0, aura.Amount)
+		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)
+		}
+		return true
+	}
+	return true
+}
+
+func (s *session) expireCreatureAura(creatureGUID uint64, spellID uint32, slot uint8) {
+	if s.server == nil {
+		return
+	}
+	s.server.auraMu.Lock()
+	if s.server.activeCreatureAuras != nil {
+		if auras, ok := s.server.activeCreatureAuras[creatureGUID]; ok {
+			if aura, exists := auras[spellID]; exists && aura != nil {
+				aura.Stopped = true
+				if aura.TickTimer != nil {
+					aura.TickTimer.Stop()
+				}
+				delete(auras, spellID)
+			}
+		}
+	}
+	if s.server.creatureAuras != nil {
+		if auras, ok := s.server.creatureAuras[creatureGUID]; ok {
+			delete(auras, spellID)
+		}
+	}
+	s.server.auraMu.Unlock()
+
+	removePkt := protocol.BuildAuraUpdate(creatureGUID, s.playerGUID, slot, 0, true, false, 0, 0, 1)
+	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, true)
+	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, s)
 }
 
 // handleCancelMountAura processes CMSG_CANCEL_MOUNT_AURA (0x375).

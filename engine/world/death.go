@@ -110,6 +110,7 @@ func (s *session) killPlayer(ctx context.Context) {
 		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
 	}
 	s.deathTimer = time.Now().Add(autoRepopDelay)
+	s.clearActiveAuras()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
 	s.sendPlayerUpdate()
 	pvp := false
