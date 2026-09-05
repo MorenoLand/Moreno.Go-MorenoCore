@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -1484,3 +1485,185 @@ func TestHandleSellItemMasksHighGuid(t *testing.T) {
 		t.Fatalf("expected 150 money after sell, got %d", sess.player.Money)
 	}
 }
+
+func TestStoreOrStackItem_BackpackAndEquippedBags(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, stackable INTEGER, ContainerSlots INTEGER)",
+		"INSERT INTO characters VALUES (1, 1000, '')",
+		"INSERT INTO item_template VALUES (100, 1, 10, 5, 0, 1, 20, 0)", // stackable up to 20
+		"INSERT INTO item_template VALUES (200, 2, 50, 25, 100, 1, 1, 0)", // non-stackable
+		"INSERT INTO item_template VALUES (300, 3, 100, 50, 0, 1, 1, 4)",  // 4-slot bag
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{AuthStore: store, CharactersStore: store, WorldStore: store}
+	sess := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Money: 1000}}
+	ctx := context.Background()
+
+	// 1. Store item 100 (count = 5) into empty backpack
+	res1, err := sess.storeOrStackItem(ctx, 1, 100, 5)
+	if err != nil {
+		t.Fatalf("res1 error: %v", err)
+	}
+	if res1.Slot != 23 || res1.BagKey != 0 || res1.IsStack || res1.NewCount != 5 || res1.InventoryCount != 5 {
+		t.Fatalf("unexpected res1: %+v", res1)
+	}
+
+	// 2. Store item 100 (count = 3) -> should STACK onto slot 23
+	res2, err := sess.storeOrStackItem(ctx, 1, 100, 3)
+	if err != nil {
+		t.Fatalf("res2 error: %v", err)
+	}
+	if res2.Slot != 23 || res2.BagKey != 0 || !res2.IsStack || res2.NewCount != 8 || res2.InventoryCount != 8 {
+		t.Fatalf("unexpected res2: %+v", res2)
+	}
+	// Verify only 1 row exists in character_inventory
+	var invCount int
+	_ = db.QueryRow("SELECT COUNT(*) FROM character_inventory WHERE guid = 1").Scan(&invCount)
+	if invCount != 1 {
+		t.Fatalf("expected 1 row in inventory, got %d", invCount)
+	}
+
+	// 3. Store non-stackable item 200 -> should take slot 24
+	res3, err := sess.storeOrStackItem(ctx, 1, 200, 1)
+	if err != nil {
+		t.Fatalf("res3 error: %v", err)
+	}
+	if res3.Slot != 24 || res3.BagKey != 0 || res3.IsStack {
+		t.Fatalf("unexpected res3: %+v", res3)
+	}
+
+	// 4. Fill remaining backpack slots (25..38)
+	for s := 25; s <= 38; s++ {
+		fakeGUID := int64(1000 + s)
+		_, _ = db.Exec("INSERT INTO item_instance VALUES (?, 200, 1, 0, 1, 0, '', 0, '', 0, 100, 0, '')", fakeGUID)
+		_, _ = db.Exec("INSERT INTO character_inventory VALUES (1, 0, ?, ?)", s, fakeGUID)
+	}
+
+	// 5. Equip 4-slot bag 300 into bag slot 19
+	bagItemGUID := int64(5000)
+	_, _ = db.Exec("INSERT INTO item_instance VALUES (5000, 300, 1, 0, 1, 0, '', 0, '', 0, 0, 0, '')")
+	_, _ = db.Exec("INSERT INTO character_inventory VALUES (1, 0, 19, 5000)")
+
+	// 6. Backpack is full (23..38). Store non-stackable item 200:
+	// Should go into the equipped bag in slot 19, at container slot 0!
+	res4, err := sess.storeOrStackItem(ctx, 1, 200, 1)
+	if err != nil {
+		t.Fatalf("res4 error: %v", err)
+	}
+	if res4.BagKey != bagItemGUID || res4.ClientBag != 19 || res4.Slot != 0 || res4.IsStack {
+		t.Fatalf("expected item in bag 5000 slot 0, got %+v", res4)
+	}
+
+	// 7. Store stackable item 100 (count = 5):
+	// Goes into bag 5000 at container slot 1 (since slot 23 in backpack is full at count 8 and item 100 can stack there? Wait! Slot 23 has count 8, max is 20, so it will stack onto slot 23 in backpack!)
+	res5, err := sess.storeOrStackItem(ctx, 1, 100, 5)
+	if err != nil {
+		t.Fatalf("res5 error: %v", err)
+	}
+	if !res5.IsStack || res5.NewCount != 13 {
+		t.Fatalf("expected res5 to stack onto slot 23, got %+v", res5)
+	}
+
+	// 8. Now fill slot 23 to max (20)
+	_, _ = db.Exec("UPDATE item_instance SET count = 20 WHERE guid = ?", res1.ItemGUID)
+
+	// 9. Store item 100 (count = 4): backpack has no room for item 100, so it goes into bag 5000 container slot 1!
+	res6, err := sess.storeOrStackItem(ctx, 1, 100, 4)
+	if err != nil {
+		t.Fatalf("res6 error: %v", err)
+	}
+	if res6.BagKey != bagItemGUID || res6.ClientBag != 19 || res6.Slot != 1 || res6.IsStack {
+		t.Fatalf("expected item 100 in bag 5000 slot 1, got %+v", res6)
+	}
+
+	// 10. Store item 100 (count = 3): stacks onto slot 1 inside bag 5000!
+	res7, err := sess.storeOrStackItem(ctx, 1, 100, 3)
+	if err != nil {
+		t.Fatalf("res7 error: %v", err)
+	}
+	if res7.BagKey != bagItemGUID || res7.ClientBag != 19 || res7.Slot != 1 || !res7.IsStack || res7.NewCount != 7 {
+		t.Fatalf("expected item 100 to stack in bag 5000 slot 1, got %+v", res7)
+	}
+
+	// 11. Fill remaining 2 slots in bag 5000 (slots 2 and 3)
+	res8, err := sess.storeOrStackItem(ctx, 1, 200, 1)
+	if err != nil || res8.Slot != 2 {
+		t.Fatalf("res8 failed: %+v err=%v", res8, err)
+	}
+	res9, err := sess.storeOrStackItem(ctx, 1, 200, 1)
+	if err != nil || res9.Slot != 3 {
+		t.Fatalf("res9 failed: %+v err=%v", res9, err)
+	}
+
+	// 12. Both backpack and equipped bag 5000 are now completely full.
+	// Storing another non-stackable item 200 MUST fail with errInventoryFull!
+	_, err = sess.storeOrStackItem(ctx, 1, 200, 1)
+	if !errors.Is(err, errInventoryFull) {
+		t.Fatalf("expected errInventoryFull, got %v", err)
+	}
+}
+
+func TestStoreOrStackItem_PartialStackOverflow(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, stackable INTEGER, ContainerSlots INTEGER)",
+		"INSERT INTO characters VALUES (1, 1000, '')",
+		"INSERT INTO item_template VALUES (100, 1, 10, 5, 0, 1, 20, 0)", // stackable up to 20
+		// Put an existing stack with 18 items at slot 23
+		"INSERT INTO item_instance VALUES (10, 100, 1, 0, 18, 0, '', 0, '', 0, 0, 0, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 10)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{AuthStore: store, CharactersStore: store, WorldStore: store}
+	sess := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Money: 1000}}
+	ctx := context.Background()
+
+	// Store 5 items: 2 should fill slot 23 to 20, remainder 3 should go to slot 24!
+	res, err := sess.storeOrStackItem(ctx, 1, 100, 5)
+	if err != nil {
+		t.Fatalf("storeOrStackItem failed: %v", err)
+	}
+
+	// Verify existing stack at slot 23 was capped at 20
+	var count23 int
+	_ = db.QueryRow("SELECT count FROM item_instance WHERE guid = 10").Scan(&count23)
+	if count23 != 20 {
+		t.Fatalf("expected count 20 in slot 23, got %d", count23)
+	}
+
+	// Verify remainder 3 was stored in slot 24
+	if res.Slot != 24 || res.BagKey != 0 || res.NewCount != 3 || res.InventoryCount != 23 {
+		t.Fatalf("unexpected res for remainder: %+v", res)
+	}
+}
+
+
