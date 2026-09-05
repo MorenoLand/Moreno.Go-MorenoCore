@@ -118,9 +118,45 @@ func (s *session) loadTalentsForGroup(group uint8) map[uint32]uint8 {
 func (s *session) sendTalentsInfo(pet bool) error {
 	buf := protocol.NewBuffer(64)
 	if pet {
+		unspentPoints := uint32(0)
+		var learnedTalents []struct {
+			talentID uint32
+			rank     uint8
+		}
+		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			var petID, petType, level int64
+			err := s.server.CharactersStore.DB.QueryRow("SELECT id, PetType, level FROM character_pet WHERE owner = ? AND slot = 0", s.playerGUID).Scan(&petID, &petType, &level)
+			if err == nil && petType == 1 && level >= 20 { // Hunter pet
+				maxPoints := uint32((level - 16) / 4)
+				rows, qErr := s.server.CharactersStore.DB.Query("SELECT spell FROM pet_spell WHERE guid = ?", petID)
+				if qErr == nil {
+					defer rows.Close()
+					usedPoints := uint32(0)
+					for rows.Next() {
+						var spID int64
+						if rows.Scan(&spID) == nil && s.server.Data != nil {
+							if tID, rank, ok := s.server.Data.TalentBySpell(uint32(spID)); ok {
+								learnedTalents = append(learnedTalents, struct {
+									talentID uint32
+									rank     uint8
+								}{tID, rank})
+								usedPoints += uint32(rank + 1)
+							}
+						}
+					}
+					if maxPoints > usedPoints {
+						unspentPoints = maxPoints - usedPoints
+					}
+				}
+			}
+		}
 		buf.WriteU8(1)
-		buf.WriteU32(0) // unspentTalentPoints
-		buf.WriteU8(0)  // talentCount
+		buf.WriteU32(unspentPoints)
+		buf.WriteU8(uint8(len(learnedTalents)))
+		for _, t := range learnedTalents {
+			buf.WriteU32(t.talentID)
+			buf.WriteU8(t.rank)
+		}
 		return s.write(uint16(protocol.OpcodeSMSG_TALENTS_INFO), buf.Bytes(), true)
 	}
 

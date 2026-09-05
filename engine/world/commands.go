@@ -40,6 +40,8 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldPlayerFieldBytes:  s.player.PlayerFieldBytes,
 		unitFieldPlayerBytes2:      uint32(s.player.FacialStyle) | uint32(s.player.SheathState)<<8 | uint32(s.player.BankBagSlots)<<16,
 		unitFieldChosenTitle:       s.player.ChosenTitle,
+		unitFieldSummon:            uint32(s.player.PetGUID),
+		unitFieldSummon + 1:        uint32(s.player.PetGUID >> 32),
 		playerFieldDuelArbiter:     uint32(s.player.DuelArbiter),
 		playerFieldDuelArbiter + 1: uint32(s.player.DuelArbiter >> 32),
 		playerFieldDuelTeam:        s.player.DuelTeam,

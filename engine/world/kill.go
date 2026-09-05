@@ -273,6 +273,7 @@ func (s *session) grantXPWithVictim(ctx context.Context, amount uint32, victimGU
 		if s.player.Level >= 10 {
 			_ = s.sendTalentsInfo(false)
 		}
+		s.updatePetOnLevelUp(ctx)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ?, xp = ?, health = ? WHERE guid = ?", s.player.Level, s.player.XP, s.player.Health, s.playerGUID)
 			for _, sk := range s.player.Skills {

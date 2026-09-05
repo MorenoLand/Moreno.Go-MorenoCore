@@ -311,9 +311,31 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case 74: // SPELL_EFFECT_APPLY_GLYPH
 				glyphPropID := uint16(eff.MiscValue)
 				s.applyGlyph(effCtx, s.targetGlyphSlot, glyphPropID)
+			case 56: // SPELL_EFFECT_SUMMON_PET
+				s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue))
+			case 28: // SPELL_EFFECT_SUMMON
+				s.handleSummonPet(effCtx, spellID, uint32(eff.MiscValue))
+			case 101: // SPELL_EFFECT_FEED_PET
+				s.handleFeedPet(effCtx, spellID)
+			case 102: // SPELL_EFFECT_DISMISS_PET
+				s.handleDismissPet(effCtx)
+			case 109: // SPELL_EFFECT_RESURRECT_PET
+				s.handleResurrectPet(effCtx, spellID)
+			case 54: // SPELL_EFFECT_TAMECREATURE
+				s.handleTameCreature(effCtx, spellID, targetGUID)
+			case 135: // SPELL_EFFECT_CALL_PET
+				s.handleSummonPet(effCtx, spellID, 0)
 			}
 		}
-		if spellID == 63645 {
+		if spellID == 2641 { // Dismiss Pet
+			s.handleDismissPet(effCtx)
+		} else if spellID == 883 { // Call Pet
+			s.handleSummonPet(effCtx, spellID, 0)
+		} else if spellID == 31687 { // Summon Water Elemental
+			s.handleSummonPet(effCtx, spellID, 510)
+		} else if spellID == 46584 { // Raise Dead
+			s.handleSummonPet(effCtx, spellID, 26125)
+		} else if spellID == 63645 {
 			s.activateSpec(effCtx, 0)
 		} else if spellID == 63644 {
 			s.activateSpec(effCtx, 1)
