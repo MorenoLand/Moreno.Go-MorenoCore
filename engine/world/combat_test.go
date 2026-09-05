@@ -1125,5 +1125,99 @@ func TestCreatureClassLevelStatsAndArmorScaling(t *testing.T) {
 	}
 }
 
+func TestRollMeleeOutcome_Formulas(t *testing.T) {
+	// 1. High level player vs level 1 mob: miss chance is 0
+	for i := 0; i < 200; i++ {
+		outcome, hitInfo, targetState := rollMeleeOutcome(80, 1, true, false, false, false)
+		if outcome == protocol.MeleeHitMiss {
+			t.Fatalf("expected 0%% miss chance for level 80 vs 1 mob, got miss")
+		}
+		if hitInfo&protocol.HitInfoMiss != 0 || targetState == protocol.VictimStateIntact {
+			t.Fatalf("unexpected miss hitInfo/targetState for level 80 vs 1 mob")
+		}
+	}
+
+	// 2. Glancing blow: player vs higher level mob (e.g. 70 vs 73)
+	glancingFound := false
+	for i := 0; i < 1000; i++ {
+		outcome, hitInfo, _ := rollMeleeOutcome(70, 73, true, false, false, false)
+		if outcome == protocol.MeleeHitGlancing {
+			glancingFound = true
+			if hitInfo&protocol.HitInfoGlancing == 0 {
+				t.Fatalf("expected HitInfoGlancing flag on glancing blow")
+			}
+			break
+		}
+	}
+	if !glancingFound {
+		t.Fatalf("expected at least one glancing blow for level 70 vs 73 mob")
+	}
+
+	// 3. Crushing blow: mob 4+ levels higher attacking player (e.g. 74 vs 70)
+	crushingFound := false
+	for i := 0; i < 1000; i++ {
+		outcome, hitInfo, _ := rollMeleeOutcome(74, 70, false, true, false, false)
+		if outcome == protocol.MeleeHitCrushing {
+			crushingFound = true
+			if hitInfo&protocol.HitInfoCrushing == 0 {
+				t.Fatalf("expected HitInfoCrushing flag on crushing blow")
+			}
+			break
+		}
+	}
+	if !crushingFound {
+		t.Fatalf("expected at least one crushing blow for level 74 mob vs 70 player")
+	}
+
+	// 4. Block: target can block
+	blockFound := false
+	for i := 0; i < 1000; i++ {
+		outcome, hitInfo, _ := rollMeleeOutcome(70, 70, true, true, true, false)
+		if outcome == protocol.MeleeHitBlock {
+			blockFound = true
+			if hitInfo&protocol.HitInfoBlock == 0 {
+				t.Fatalf("expected HitInfoBlock flag on block outcome")
+			}
+			break
+		}
+	}
+	if !blockFound {
+		t.Fatalf("expected at least one block outcome when canBlock is true")
+	}
+
+	// 5. Parry: target can parry
+	parryFound := false
+	for i := 0; i < 1000; i++ {
+		outcome, _, targetState := rollMeleeOutcome(70, 70, true, true, false, true)
+		if outcome == protocol.MeleeHitParry {
+			parryFound = true
+			if targetState != protocol.VictimStateParry {
+				t.Fatalf("expected VictimStateParry on parry outcome, got %d", targetState)
+			}
+			break
+		}
+	}
+	if !parryFound {
+		t.Fatalf("expected at least one parry outcome when canParry is true")
+	}
+
+	// 6. Crit: crit outcome
+	critFound := false
+	for i := 0; i < 1000; i++ {
+		outcome, hitInfo, _ := rollMeleeOutcome(70, 70, true, true, false, false)
+		if outcome == protocol.MeleeHitCrit {
+			critFound = true
+			if hitInfo&protocol.HitInfoCriticalHit == 0 {
+				t.Fatalf("expected HitInfoCriticalHit flag on crit outcome")
+			}
+			break
+		}
+	}
+	if !critFound {
+		t.Fatalf("expected at least one crit outcome in 1000 rolls")
+	}
+}
+
+
 
 

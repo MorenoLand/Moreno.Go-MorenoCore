@@ -587,25 +587,51 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if damage < 1 {
 				damage = 1
 			}
-			overkill := uint32(0)
-			if damage >= target.Sess.player.Health {
-				overkill = damage - target.Sess.player.Health
-				target.Sess.player.Health = 0
-				target.Sess.killPlayer(ctx)
-				if motion.BossAI != nil {
-					motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
+
+			isPlayerVictim := target.Sess != nil && target.Sess.player != nil
+			targetLevel := uint8(1)
+			if isPlayerVictim && target.Sess.player.Level > 0 {
+				targetLevel = target.Sess.player.Level
+			}
+			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, false)
+			blocked := uint32(0)
+
+			switch outcome {
+			case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade:
+				damage = 0
+			case protocol.MeleeHitBlock:
+				blocked = damage / 4
+				if blocked < 1 {
+					blocked = 1
 				}
-			} else {
-				target.Sess.player.Health -= damage
-				// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
-				target.Sess.delayCurrentCast()
-				target.Sess.delayCurrentChannel()
+				damage -= blocked
+			case protocol.MeleeHitCrit:
+				damage *= 2
+			case protocol.MeleeHitCrushing:
+				damage = uint32(float64(damage) * 1.5)
 			}
-			target.Sess.lastCombatTime = now
-			if target.Sess.player != nil && target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
-				target.Sess.player.UnitFlags |= unitFlagInCombat
+
+			overkill := uint32(0)
+			if damage > 0 {
+				if damage >= target.Sess.player.Health {
+					overkill = damage - target.Sess.player.Health
+					target.Sess.player.Health = 0
+					target.Sess.killPlayer(ctx)
+					if motion.BossAI != nil {
+						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
+					}
+				} else {
+					target.Sess.player.Health -= damage
+					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
+					target.Sess.delayCurrentCast()
+					target.Sess.delayCurrentChannel()
+				}
+				target.Sess.lastCombatTime = now
+				if target.Sess.player != nil && target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
+					target.Sess.player.UnitFlags |= unitFlagInCombat
+				}
 			}
-			asuPkt := buildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill)
+			asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
 			_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, true)
 			if s != nil {
 				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, target.Sess)
