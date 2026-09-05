@@ -111,6 +111,7 @@ func (s *session) killPlayer(ctx context.Context) {
 	}
 	s.deathTimer = time.Now().Add(autoRepopDelay)
 	s.clearActiveAuras()
+	s.clearDiminishings()
 	s.stopMirrorTimers()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT))
 	s.sendPlayerUpdate()
