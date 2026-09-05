@@ -166,14 +166,48 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 	if damage < 1 {
 		damage = 1
 	}
+
+	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
+	outcome := protocol.MeleeHitNormal
+	hitInfo := protocol.HitInfoAffectsVictim
+	targetState := protocol.VictimStateHit
+	if s.player.Level > 0 {
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, false)
+	}
+	blocked := uint32(0)
+
+	switch outcome {
+	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade:
+		damage = 0
+	case protocol.MeleeHitBlock:
+		blocked = damage / 4
+		if blocked < 1 {
+			blocked = 1
+		}
+		damage -= blocked
+	case protocol.MeleeHitCrit:
+		damage *= 2
+	case protocol.MeleeHitGlancing:
+		damage = uint32(float64(damage) * 0.75)
+		if damage < 1 {
+			damage = 1
+		}
+	case protocol.MeleeHitCrushing:
+		damage = uint32(float64(damage) * 1.5)
+	}
+
 	overkill := uint32(0)
-	if damage >= target.Health {
+	if damage >= target.Health && target.Health > 0 {
 		overkill = damage - target.Health
 	}
-	asuPayload := buildAttackerStateUpdate(s.playerGUID, target.GUID, damage, overkill)
+	asuPayload := protocol.BuildAttackerStateUpdate(s.playerGUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPayload, true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPayload, s)
+	}
+
+	if damage == 0 {
+		return
 	}
 
 	// If target is an online player (e.g. duel opponent or PvP)
@@ -597,21 +631,156 @@ func distance3D(x1, y1, z1, x2, y2, z2 float32) float64 {
 	return math.Sqrt(dx*dx + dy*dy + dz*dz)
 }
 
+// rollMeleeOutcome implements TrinityCore's single-roll melee attack table:
+// MISS > DODGE > PARRY > GLANCING > BLOCK > CRIT > CRUSHING > HIT
+// Reference: Unit::RollMeleeOutcomeAgainst (Unit.cpp:2189-2320).
+func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, canBlock, canParry bool) (protocol.MeleeHitOutcome, uint32, uint8) {
+	if attackerLevel == 0 {
+		attackerLevel = 1
+	}
+	if victimLevel == 0 {
+		victimLevel = 1
+	}
+
+	leveldif := int32(victimLevel) - int32(attackerLevel)
+
+	// 1. Miss chance
+	var missChance int32
+	if isPlayerVictim {
+		missChance = 500
+		if leveldif > 0 {
+			missChance += leveldif * 40
+		} else {
+			missChance += leveldif * 20
+		}
+	} else {
+		// PvE against creatures
+		if leveldif > 10 {
+			missChance = 100 + (leveldif-10)*400
+		} else if leveldif > 0 {
+			missChance = 500 + leveldif*100
+		} else {
+			missChance = 500 + leveldif*100
+		}
+		// Low level mob scaling matching TC: if victimLevel < 10, missChance *= victimLevel / 10
+		if victimLevel < 10 {
+			missChance = int32(float64(missChance) * (float64(victimLevel) / 10.0))
+		}
+	}
+	if missChance < 0 {
+		missChance = 0
+	}
+
+	// 2. Dodge chance: base 5% (500/10000)
+	dodgeChance := int32(0)
+	if isPlayerVictim || victimLevel >= 10 {
+		dodgeChance = 500
+		if leveldif > 0 {
+			dodgeChance += leveldif * 10
+		}
+	}
+
+	// 3. Parry chance: base 5% (500/10000) if victim can parry
+	parryChance := int32(0)
+	if canParry && (isPlayerVictim || victimLevel >= 10) {
+		parryChance = 500
+		if leveldif > 0 {
+			parryChance += leveldif * 10
+		}
+	}
+
+	// 4. Glancing blow: players/pets against higher level mobs
+	glancingChance := int32(0)
+	if isPlayerAttacker && !isPlayerVictim && victimLevel > attackerLevel {
+		glancingChance = 600 + (int32(victimLevel)-int32(attackerLevel))*600
+		if glancingChance > 4000 {
+			glancingChance = 4000
+		}
+	}
+
+	// 5. Block chance: base 5% (500/10000) if victim can block
+	blockChance := int32(0)
+	if canBlock {
+		blockChance = 500
+	}
+
+	// 6. Crit chance: base 5% (500/10000)
+	critChance := int32(500)
+	if leveldif > 2 {
+		critChance -= (leveldif - 2) * 100
+	} else if leveldif > 0 {
+		critChance -= leveldif * 20
+	}
+	if critChance < 0 {
+		critChance = 0
+	}
+
+	// 7. Crushing blow: mob attacking player 4+ levels below mob
+	crushingChance := int32(0)
+	if !isPlayerAttacker && isPlayerVictim && attackerLevel >= victimLevel+4 {
+		crushingChance = (int32(attackerLevel) - int32(victimLevel) - 4)*200 + 1500
+	}
+
+	roll := rand.IntN(10000)
+	sum := int32(0)
+
+	// 1. MISS
+	sum += missChance
+	if roll < int(sum) {
+		return protocol.MeleeHitMiss, protocol.HitInfoMiss, protocol.VictimStateIntact
+	}
+
+	// 2. DODGE
+	sum += dodgeChance
+	if roll < int(sum) {
+		return protocol.MeleeHitDodge, protocol.HitInfoNormalSwing, protocol.VictimStateDodge
+	}
+
+	// 3. PARRY
+	if parryChance > 0 {
+		sum += parryChance
+		if roll < int(sum) {
+			return protocol.MeleeHitParry, protocol.HitInfoNormalSwing, protocol.VictimStateParry
+		}
+	}
+
+	// 4. GLANCING
+	if glancingChance > 0 {
+		sum += glancingChance
+		if roll < int(sum) {
+			return protocol.MeleeHitGlancing, protocol.HitInfoAffectsVictim | protocol.HitInfoGlancing, protocol.VictimStateHit
+		}
+	}
+
+	// 5. BLOCK
+	if blockChance > 0 {
+		sum += blockChance
+		if roll < int(sum) {
+			return protocol.MeleeHitBlock, protocol.HitInfoAffectsVictim | protocol.HitInfoBlock, protocol.VictimStateHit
+		}
+	}
+
+	// 6. CRIT
+	if critChance > 0 {
+		sum += critChance
+		if roll < int(sum) {
+			return protocol.MeleeHitCrit, protocol.HitInfoAffectsVictim | protocol.HitInfoCriticalHit, protocol.VictimStateHit
+		}
+	}
+
+	// 7. CRUSHING
+	if crushingChance > 0 {
+		sum += crushingChance
+		if roll < int(sum) {
+			return protocol.MeleeHitCrushing, protocol.HitInfoAffectsVictim | protocol.HitInfoCrushing, protocol.VictimStateHit
+		}
+	}
+
+	return protocol.MeleeHitNormal, protocol.HitInfoAffectsVictim, protocol.VictimStateHit
+}
+
 func buildAttackerStateUpdate(attacker, victim uint64, damage, overkill uint32) []byte {
-	packet := protocol.NewBuffer(64)
-	packet.WriteU32(0x00000002) // HitInfo: HITINFO_NORMALSWING2
-	packet.WritePackedGUID(attacker)
-	packet.WritePackedGUID(victim)
-	packet.WriteU32(damage)          // Full damage
-	packet.WriteU32(overkill)        // Overkill
-	packet.WriteU8(1)                // Sub damage count
-	packet.WriteU32(1)               // Damage school: Physical (1)
-	packet.WriteF32(float32(damage)) // float sub damage
-	packet.WriteU32(damage)          // uint32 sub damage
-	packet.WriteU8(1)                // TargetState: VICTIMSTATE_HIT
-	packet.WriteU32(0)               // Unknown
-	packet.WriteU32(0)               // Melee spell ID
-	return packet.Bytes()
+	return protocol.BuildAttackerStateUpdate(attacker, victim, damage, overkill, protocol.HitInfoAffectsVictim, protocol.VictimStateHit, 0)
 }
 
 // handleDuelAccepted processes CMSG_DUEL_ACCEPTED (0x16C).
