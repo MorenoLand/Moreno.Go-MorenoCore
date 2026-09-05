@@ -47,7 +47,8 @@ type creatureMotion struct {
 	Level      uint32
 	UnitFlags  uint32
 	FlagsExtra uint32
-	AttackTime uint32
+	AttackTime  uint32
+	CombatReach float32
 
 	Armor       uint32
 	Resistances [7]uint32
@@ -536,12 +537,31 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				target.Sess.sendPlayerUpdate()
 			}
 			motion.LastSpell = now
-			if dist > 3.0 {
+			victimReach := float32(1.5)
+			if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
+				victimReach = target.Sess.player.CombatReach
+			}
+			cReach := motion.CombatReach
+			if cReach <= 0 {
+				cReach = 1.5
+			}
+			contactDist := cReach + victimReach
+			if dist > contactDist {
 				return
 			}
 		}
 
-		if dist > 3.0 {
+		victimReach := float32(1.5)
+		if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
+			victimReach = target.Sess.player.CombatReach
+		}
+		cReach := motion.CombatReach
+		if cReach <= 0 {
+			cReach = 1.5
+		}
+		contactDist := cReach + victimReach
+
+		if dist > contactDist {
 			// Pursue player: move towards target at run speed
 			if !motion.Moving || now.After(motion.MoveEnds) {
 				duration := uint32((dist / motion.RunSpeed) * 1000)
@@ -555,7 +575,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			return
 		}
-		// In melee range (<= 3.0 yards): attack player
+		// In melee range: attack player
 		motion.Moving = false
 		attackTime := time.Duration(motion.AttackTime) * time.Millisecond
 		if attackTime <= 0 {

@@ -49,20 +49,38 @@ func calcParryHastedRemaining(remaining, attackTime time.Duration) time.Duration
 }
 
 type combatTarget struct {
-	GUID       uint64
-	Map        uint32
-	X          float32
-	Y          float32
-	Z          float32
+	GUID        uint64
+	Map         uint32
+	X           float32
+	Y           float32
+	Z           float32
 	Health      uint32
 	MaxHealth   uint32
 	Armor       uint32
 	Resistances [7]uint32
 	MinDamage   float32
-	MaxDamage  float32
-	Level      uint8
-	UnitFlags  uint32
-	FlagsExtra uint32
+	MaxDamage   float32
+	Level       uint8
+	UnitFlags   uint32
+	FlagsExtra  uint32
+	CombatReach float32
+}
+
+// calcMeleeRange computes maximum melee attack distance between attacker and target,
+// matching TrinityCore Unit::GetMeleeRange (Unit.cpp:614-618):
+// max(attacker.CombatReach + target.CombatReach + 4.0/3.0, NOMINAL_MELEE_RANGE)
+func calcMeleeRange(attackerReach, victimReach float32) float64 {
+	if attackerReach <= 0 {
+		attackerReach = 1.5
+	}
+	if victimReach <= 0 {
+		victimReach = 1.5
+	}
+	rangeVal := float64(attackerReach + victimReach + 4.0/3.0)
+	if rangeVal < 5.0 {
+		return 5.0
+	}
+	return rangeVal
 }
 
 func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarget, bool) {
@@ -72,12 +90,16 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 	// Check if target is an online player (e.g. duel opponent or PvP target)
 	if s.server != nil {
 		if playerSess := s.server.findSessionByGUID(guid); playerSess != nil && playerSess.player != nil {
+			reach := playerSess.player.CombatReach
+			if reach <= 0 {
+				reach = 1.5
+			}
 			return combatTarget{
-				GUID:       guid,
-				Map:        playerSess.player.Map,
-				X:          playerSess.player.X,
-				Y:          playerSess.player.Y,
-				Z:          playerSess.player.Z,
+				GUID:        guid,
+				Map:         playerSess.player.Map,
+				X:           playerSess.player.X,
+				Y:           playerSess.player.Y,
+				Z:           playerSess.player.Z,
 				Health:      playerSess.player.Health,
 				MaxHealth:   playerSess.player.MaxHealth,
 				Armor:       playerSess.player.Armor,
@@ -87,6 +109,7 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 				Level:       playerSess.player.Level,
 				UnitFlags:   playerSess.player.UnitFlags,
 				FlagsExtra:  0,
+				CombatReach: reach,
 			}, true
 		}
 	}
@@ -100,6 +123,10 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 			motion = s.server.creatureMotion[stdKey]
 		}
 		if motion != nil {
+			reach := motion.CombatReach
+			if reach <= 0 {
+				reach = 1.5
+			}
 			target := combatTarget{
 				GUID:        guid,
 				Map:         motion.Map,
@@ -115,6 +142,7 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 				Level:       uint8(motion.Level),
 				UnitFlags:   motion.UnitFlags,
 				FlagsExtra:  motion.FlagsExtra,
+				CombatReach: reach,
 			}
 			s.server.motionMu.Unlock()
 			return target, true
@@ -173,7 +201,12 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s)
 	}
-	if distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) <= meleeAttackRange+2.0 {
+	reach := float32(1.5)
+	if s.player.CombatReach > 0 {
+		reach = s.player.CombatReach
+	}
+	allowedRange := calcMeleeRange(reach, target.CombatReach) + 2.0
+	if distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) <= allowedRange {
 		s.executeMeleeSwing(ctx, target, protocol.BaseAttack)
 	}
 	// If dual wielding, delay offhand swing by 50% of base attack time (TrinityCore Unit.cpp:5745)
@@ -527,22 +560,24 @@ type creatureStats struct {
 	Armor       uint32
 	Resistances [7]uint32
 	MinDamage   float32
-	MaxDamage  float32
-	AttackTime uint32
-	UnitFlags  uint32
-	FlagsExtra uint32
+	MaxDamage   float32
+	AttackTime  uint32
+	CombatReach float32
+	UnitFlags   uint32
+	FlagsExtra  uint32
 }
 
 func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureStats {
 	if s == nil {
 		return creatureStats{
-			Level:      1,
-			Health:     100,
-			MaxHealth:  100,
-			Armor:      10,
-			MinDamage:  1.0,
-			MaxDamage:  2.0,
-			AttackTime: 2000,
+			Level:       1,
+			Health:      100,
+			MaxHealth:   100,
+			Armor:       10,
+			MinDamage:   1.0,
+			MaxDamage:   2.0,
+			AttackTime:  2000,
+			CombatReach: 1.5,
 		}
 	}
 	s.statsMu.RLock()
@@ -555,13 +590,14 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	s.statsMu.RUnlock()
 
 	stats := creatureStats{
-		Level:      1,
-		Health:     100,
-		MaxHealth:  100,
-		Armor:      10,
-		MinDamage:  1.0,
-		MaxDamage:  2.0,
-		AttackTime: 2000,
+		Level:       1,
+		Health:      100,
+		MaxHealth:   100,
+		Armor:       10,
+		MinDamage:   1.0,
+		MaxDamage:   2.0,
+		AttackTime:  2000,
+		CombatReach: 1.5,
 	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return stats
@@ -668,6 +704,13 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		stats.MaxDamage = stats.MinDamage + 1.0
 	}
 
+	stats.CombatReach = 1.5
+	var modelCombatReach sql.NullFloat64
+	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT cmi.CombatReach FROM creature_template ct JOIN creature_model_info cmi ON ct.modelid1 = cmi.DisplayID WHERE ct.entry = ?", entry).Scan(&modelCombatReach)
+	if modelCombatReach.Valid && modelCombatReach.Float64 > 0 {
+		stats.CombatReach = float32(modelCombatReach.Float64)
+	}
+
 	s.statsMu.Lock()
 	if s.creatureStatsCache == nil {
 		s.creatureStatsCache = make(map[uint32]creatureStats)
@@ -698,6 +741,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	target.MaxDamage = st.MaxDamage
 	target.Level = uint8(st.Level)
 	target.MaxHealth = st.MaxHealth
+	target.CombatReach = st.CombatReach
 	if curHealth.Valid {
 		target.Health = uint32(curHealth.Int64)
 	} else {
@@ -724,6 +768,11 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 			target.MinDamage = motion.MinDamage
 			target.MaxDamage = motion.MaxDamage
 		}
+		if motion.CombatReach > 0 {
+			target.CombatReach = motion.CombatReach
+		} else {
+			motion.CombatReach = target.CombatReach
+		}
 	} else {
 		motion := &creatureMotion{
 			GUID:        target.GUID,
@@ -747,6 +796,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 			MaxDamage:   target.MaxDamage,
 			Level:       uint32(target.Level),
 			AttackTime:  st.AttackTime,
+			CombatReach: target.CombatReach,
 			Refreshed:   time.Now(),
 		}
 		s.server.creatureMotion[target.GUID] = motion
