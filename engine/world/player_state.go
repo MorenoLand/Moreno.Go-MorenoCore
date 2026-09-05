@@ -1457,6 +1457,25 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			slotItems[int(slot)] = fullGUID
 		}
 	}
+
+	// TrinityCore: Buyback items and prices/timestamps (slots 74..85)
+	for eslot := 0; eslot < 12; eslot++ {
+		sl := 74 + eslot
+		priceField := 1201 + eslot
+		timeField := 1213 + eslot
+		if bb := s.buyback[eslot]; bb != nil {
+			slotItems[sl] = bb.ItemGUID
+			fields[priceField] = bb.Price
+			fields[timeField] = bb.Timestamp
+			cSlots, maxD := itemTemplateInfo(int64(bb.ItemEntry))
+			block := buildItemCreateBlockForLocationWithDurability(bb.ItemGUID, bb.ItemEntry, bb.Count, s.playerGUID, s.playerGUID, cSlots, nil, maxD, maxD)
+			updates.AddUpdateBlock(block)
+		} else {
+			fields[priceField] = 0
+			fields[timeField] = 0
+		}
+	}
+
 	// TrinityCore: populate slots 0..149 so unequipped/empty slots are cleared to 0 (equipment, backpack, bank, bank bags, buyback, keyring, currency)
 	for sl := 0; sl < 150; sl++ {
 		invField := 324 + sl*2

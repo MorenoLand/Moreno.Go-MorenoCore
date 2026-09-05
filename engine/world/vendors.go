@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -204,26 +205,64 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	earned := uint32(sellPrice) * uint32(count)
 	s.player.Money += earned
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+
+	bbItemGUID := uint64(itemGUID)
 	if currentCount <= int64(count) {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
-		s.despawnItem(uint64(itemGUID))
 	} else {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
+		var newGUID int64
+		if err := cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&newGUID); err == nil && newGUID > 0 {
+			bbItemGUID = uint64(newGUID)
+		} else {
+			bbItemGUID = uint64(time.Now().UnixNano() & 0x7FFFFFFF)
+		}
 	}
-	s.buyback = append(s.buyback, buybackEntry{
+
+	// TrinityCore: Player::AddItemToBuyBackSlot (Player.cpp:13495)
+	// Assign buyback slot (0..11 corresponding to BUYBACK_SLOT_START 74 .. BUYBACK_SLOT_END 86)
+	slot := int(s.currentBuybackSlot)
+	if slot >= 12 || s.buyback[slot] != nil {
+		oldestSlot := 0
+		oldestTime := uint32(0xFFFFFFFF)
+		for i := 0; i < 12; i++ {
+			if s.buyback[i] == nil {
+				oldestSlot = i
+				break
+			}
+			if s.buyback[i].Timestamp < oldestTime {
+				oldestTime = s.buyback[i].Timestamp
+				oldestSlot = i
+			}
+		}
+		slot = oldestSlot
+	}
+
+	// If overwriting an existing buyback item, despawn the evicted item
+	if s.buyback[slot] != nil {
+		evictedGUID := s.buyback[slot].ItemGUID
+		s.sendDestroyObject(evictedGUID, false)
+		s.despawnItem(evictedGUID)
+	}
+
+	fullBBGUID := bbItemGUID | (uint64(0x4000) << 48)
+	s.buyback[slot] = &buybackSlot{
+		ItemGUID:  fullBBGUID,
 		ItemEntry: uint32(itemEntry),
 		Count:     uint32(count),
 		Price:     earned,
-	})
-	if len(s.buyback) > 12 {
-		s.buyback = s.buyback[len(s.buyback)-12:]
+		Timestamp: uint32(time.Now().Unix()),
 	}
+	if s.currentBuybackSlot < 11 {
+		s.currentBuybackSlot++
+	}
+
 	s.syncEquipmentCache(ctx)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SELL_ITEM), buildSellResult(vendorGUID, rawItemGUID, 0), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
-	s.debug("item sold to vendor", "account", s.accountName, "item", itemEntry, "guid", itemGUID, "count", count, "earned", earned)
+	s.debug("item sold to vendor", "account", s.accountName, "item", itemEntry, "guid", itemGUID, "count", count, "earned", earned, "buybackSlot", slot)
 	return true
 }
 
@@ -243,28 +282,39 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 		return false
 	}
 
-	idx := int(slot)
-	if idx >= len(s.buyback) && idx > 0 {
-		idx--
+	eslot := int(slot)
+	if eslot >= 74 && eslot <= 85 {
+		eslot -= 74
 	}
-	if idx < 0 || idx >= len(s.buyback) {
+	if eslot < 0 || eslot >= 12 || s.buyback[eslot] == nil {
 		return true
 	}
 
-	entry := s.buyback[idx]
+	entry := s.buyback[eslot]
 	if s.player.Money < entry.Price {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, entry.ItemEntry, 2), true) // BUY_ERR_NOT_ENOUGHT_MONEY
 		return true
 	}
 
 	res, err := s.storeOrStackItem(ctx, s.playerGUID, entry.ItemEntry, entry.Count)
 	if err != nil {
+		s.sendEquipError(equipErrInvFull, entry.ItemGUID)
 		return true // Inventory full
 	}
 
-	s.buyback = append(s.buyback[:idx], s.buyback[idx+1:]...)
+	oldItemGUID := entry.ItemGUID
+	s.buyback[eslot] = nil
+	s.currentBuybackSlot = uint8(eslot)
 	s.player.Money -= entry.Price
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+	}
+
+	// Destroy temporary buyback item if stored GUID is different
+	newFullGUID := uint64(res.ItemGUID) | (uint64(0x4000) << 48)
+	if oldItemGUID != newFullGUID {
+		s.sendDestroyObject(oldItemGUID, false)
+		s.despawnItem(oldItemGUID)
 	}
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, entry.ItemEntry, entry.Count, entry.Count), true)

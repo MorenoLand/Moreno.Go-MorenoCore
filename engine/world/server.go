@@ -139,7 +139,8 @@ type session struct {
 	deathTimer         time.Time
 	resurrection       *resurrectionData
 	inFlight           bool
-	buyback            []buybackEntry
+	buyback            [12]*buybackSlot
+	currentBuybackSlot uint8
 	arenaTeamInvited   uint32
 	bgQueues           [2]bgQueueEntry
 	afkReporters       map[uint64]struct{}
@@ -177,11 +178,15 @@ type bgQueueEntry struct {
 	Status     uint32
 }
 
-type buybackEntry struct {
+type buybackSlot struct {
+	ItemGUID  uint64
 	ItemEntry uint32
 	Count     uint32
 	Price     uint32
+	Timestamp uint32
 }
+
+type buybackEntry = buybackSlot
 
 type account struct {
 	ID          uint32

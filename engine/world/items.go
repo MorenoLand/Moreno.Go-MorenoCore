@@ -253,7 +253,7 @@ func (s *session) isSlotValidForItem(invType uint8, slot uint8) bool {
 		return invType == 15 || invType == 25 || invType == 26
 	case equipSlotTabard:
 		return invType == 19
-	case 19, 20, 21, 22:
+	case 19, 20, 21, 22, 67, 68, 69, 70, 71, 72, 73:
 		return invType == 18
 	default:
 		return true
@@ -410,21 +410,25 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
-	// Check equipped bag moves: un-equipping or moving an equipped bag requires it to be empty
-	if srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd && srcItemGUID != 0 {
+	// Check bag moves: un-equipping or moving an equipped bag (19..22) or bank bag (67..73) requires it to be empty
+	isBagSlot := func(sl uint8) bool {
+		return (sl >= invSlotBagStart && sl < invSlotBagEnd) || (sl >= 67 && sl <= 73)
+	}
+
+	if isBagSlot(srcSlot) && srcItemGUID != 0 {
 		if !s.isBagEmpty(ctx, srcItemGUID) {
 			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(srcItemGUID))
 			return true
 		}
 	}
-	if dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd && dstItemGUID != 0 {
+	if isBagSlot(dstSlot) && dstItemGUID != 0 {
 		if !s.isBagEmpty(ctx, dstItemGUID) {
 			s.sendEquipError(equipErrCanOnlyDoWithEmptyBags, uint64(dstItemGUID))
 			return true
 		}
 	}
-	// If putting item into an equipped bag slot (19..22), ensure it is a bag container
-	if dstSlot >= invSlotBagStart && dstSlot < invSlotBagEnd && srcItemGUID != 0 {
+	// If putting item into a bag slot (19..22 or 67..73), ensure it is a bag container and bank slot is purchased
+	if isBagSlot(dstSlot) && srcItemGUID != 0 {
 		var itemEntry int64
 		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", srcItemGUID).Scan(&itemEntry)
 		var invType int64
@@ -435,8 +439,12 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(srcItemGUID))
 			return true
 		}
+		if dstSlot >= 67 && dstSlot <= 73 && int(dstSlot-67) >= int(s.player.BankBagSlots) {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(srcItemGUID))
+			return true
+		}
 	}
-	if srcSlot >= invSlotBagStart && srcSlot < invSlotBagEnd && dstItemGUID != 0 {
+	if isBagSlot(srcSlot) && dstItemGUID != 0 {
 		var itemEntry int64
 		_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ?", dstItemGUID).Scan(&itemEntry)
 		var invType int64
@@ -444,6 +452,10 @@ func (s *session) handleSwapInvItem(ctx context.Context, payload []byte) bool {
 			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT InventoryType FROM item_template WHERE entry = ?", itemEntry).Scan(&invType)
 		}
 		if invType != 18 {
+			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(dstItemGUID))
+			return true
+		}
+		if srcSlot >= 67 && srcSlot <= 73 && int(srcSlot-67) >= int(s.player.BankBagSlots) {
 			s.sendEquipError(equipErrItemDoesntGoToSlot, uint64(dstItemGUID))
 			return true
 		}
