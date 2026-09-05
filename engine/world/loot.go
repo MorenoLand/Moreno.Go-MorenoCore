@@ -15,14 +15,42 @@ type lootItem struct {
 	ItemEntry     uint32
 	Count         uint32
 	DisplayInfoID uint32
+	Quality       uint32
+	IsBlocked     bool
+	RollWinner    uint64
 }
 
 type activeLootState struct {
-	TargetGUID uint64
-	MapID      uint32
-	LootType   uint8
-	Money      uint32
-	Items      map[uint8]lootItem
+	TargetGUID       uint64
+	MapID            uint32
+	LootType         uint8
+	Money            uint32
+	Items            map[uint8]lootItem
+	RoundRobinPlayer uint64
+	Viewers          map[uint64]*session
+}
+
+func (l *activeLootState) addViewer(s *session) {
+	if l.Viewers == nil {
+		l.Viewers = make(map[uint64]*session)
+	}
+	l.Viewers[s.playerGUID] = s
+}
+
+func (l *activeLootState) removeViewer(guid uint64) {
+	if l.Viewers != nil {
+		delete(l.Viewers, guid)
+	}
+}
+
+func (l *activeLootState) broadcastRemoved(slot uint8) {
+	buf := protocol.NewBuffer(1)
+	buf.WriteU8(slot)
+	for _, sess := range l.Viewers {
+		if sess != nil {
+			_ = sess.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
+		}
+	}
 }
 
 type activeGroupRoll struct {
@@ -99,22 +127,29 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		s.server.lootMu.Unlock()
 
 		if !newLoot {
+			loot.addViewer(s)
 			s.activeLoot = loot
 			return s.sendLootResponse(loot) == nil
 		}
 
-		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0)
+		rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0)
 			FROM gameobject_loot_template AS l
 			LEFT JOIN item_template AS t ON t.entry = l.Item
 			WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, lootID)
+		if err != nil && isMissingColumn(err) {
+			rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0
+				FROM gameobject_loot_template AS l
+				LEFT JOIN item_template AS t ON t.entry = l.Item
+				WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, lootID)
+		}
 		if err == nil {
 			defer rows.Close()
 			var slot uint8 = 0
 			for rows.Next() {
 				var itemID int64
 				var chance float64
-				var minCount, maxCount, displayID int64
-				if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID); err != nil {
+				var minCount, maxCount, displayID, quality int64
+				if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality); err != nil {
 					continue
 				}
 				roll := rand.Float64() * 100.0
@@ -133,6 +168,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 					ItemEntry:     uint32(itemID),
 					Count:         count,
 					DisplayInfoID: uint32(displayID),
+					Quality:       uint32(quality),
 				}
 				slot++
 				if slot >= 16 {
@@ -140,6 +176,16 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 				}
 			}
 		}
+		if s.server != nil && s.groupID != 0 {
+			s.server.groupsMu.Lock()
+			grp := s.server.groups[s.groupID]
+			if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
+				grp.updateLooter(s.server, goMap, goX, goY, goZ)
+				loot.RoundRobinPlayer = grp.LooterGUID
+			}
+			s.server.groupsMu.Unlock()
+		}
+		loot.addViewer(s)
 		s.activeLoot = loot
 		return s.sendLootResponse(loot) == nil
 	}
@@ -171,6 +217,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	}
 	s.server.lootMu.Unlock()
 	if !newLoot {
+		loot.addViewer(s)
 		s.activeLoot = loot
 		return s.sendLootResponse(loot) == nil
 	}
@@ -187,18 +234,24 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		loot.Money = uint32(minGold)
 	}
 	// Query creature_loot_template
-	rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0)
+	rows, err := wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0)
 		FROM creature_loot_template AS l
 		LEFT JOIN item_template AS t ON t.entry = l.Item
 		WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, lootID)
+	if err != nil && isMissingColumn(err) {
+		rows, err = wdb.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), 0
+			FROM creature_loot_template AS l
+			LEFT JOIN item_template AS t ON t.entry = l.Item
+			WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, lootID)
+	}
 	if err == nil {
 		defer rows.Close()
 		var slot uint8 = 0
 		for rows.Next() {
 			var itemID int64
 			var chance float64
-			var minCount, maxCount, displayID int64
-			if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID); err != nil {
+			var minCount, maxCount, displayID, quality int64
+			if err := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality); err != nil {
 				continue
 			}
 			// Roll chance (0-100%)
@@ -218,6 +271,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 				ItemEntry:     uint32(itemID),
 				Count:         count,
 				DisplayInfoID: uint32(displayID),
+				Quality:       uint32(quality),
 			}
 			slot++
 			if slot >= 16 {
@@ -225,39 +279,97 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 			}
 		}
 	}
+	if s.server != nil && s.groupID != 0 {
+		s.server.groupsMu.Lock()
+		grp := s.server.groups[s.groupID]
+		if grp != nil && loot.RoundRobinPlayer == 0 && grp.LootMethod != 0 {
+			grp.updateLooter(s.server, target.Map, target.X, target.Y, target.Z)
+			loot.RoundRobinPlayer = grp.LooterGUID
+		}
+		s.server.groupsMu.Unlock()
+	}
+	loot.addViewer(s)
 	s.activeLoot = loot
 	return s.sendLootResponse(loot) == nil
 }
 
 func (s *session) sendLootResponse(loot *activeLootState) error {
+	var grp *groupState
+	if s.server != nil && s.groupID != 0 {
+		s.server.groupsMu.Lock()
+		grp = s.server.groups[s.groupID]
+		s.server.groupsMu.Unlock()
+	}
+
 	packet := protocol.NewBuffer(8 + 1 + 4 + 1 + len(loot.Items)*22)
 	packet.WriteU64(loot.TargetGUID)
 	packet.WriteU8(loot.LootType)
 	packet.WriteU32(loot.Money)
 	packet.WriteU8(uint8(len(loot.Items)))
 	for _, it := range loot.Items {
+		var slotType uint8 = 0 // LOOT_SLOT_TYPE_ALLOW_LOOT
+		if grp != nil {
+			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
+			switch grp.LootMethod {
+			case 0: // Free for all
+				slotType = 0
+			case 1: // Round Robin
+				if loot.RoundRobinPlayer != 0 && s.playerGUID != loot.RoundRobinPlayer {
+					slotType = 3 // LOOT_SLOT_TYPE_LOCKED
+				}
+			case 2: // Master Loot
+				if isOverThreshold {
+					if s.playerGUID == grp.MasterLooter {
+						slotType = 2 // LOOT_SLOT_TYPE_MASTER
+					} else {
+						slotType = 3 // LOOT_SLOT_TYPE_LOCKED
+					}
+				} else {
+					if loot.RoundRobinPlayer != 0 && s.playerGUID != loot.RoundRobinPlayer {
+						slotType = 3 // LOOT_SLOT_TYPE_LOCKED
+					}
+				}
+			case 3, 4: // Group Loot / Need Before Greed
+				if isOverThreshold {
+					rollKey := fmt.Sprintf("%d:%d", loot.TargetGUID, it.Slot)
+					s.server.lootMu.Lock()
+					activeRoll := s.server.groupRolls[rollKey]
+					s.server.lootMu.Unlock()
+					if activeRoll != nil || it.IsBlocked {
+						slotType = 1 // LOOT_SLOT_TYPE_ROLL_ONGOING
+					} else if it.RollWinner != 0 {
+						if it.RollWinner == s.playerGUID {
+							slotType = 4 // LOOT_SLOT_TYPE_OWNER
+						} else {
+							slotType = 3 // LOOT_SLOT_TYPE_LOCKED
+						}
+					}
+				} else {
+					if loot.RoundRobinPlayer != 0 && s.playerGUID != loot.RoundRobinPlayer {
+						slotType = 3 // LOOT_SLOT_TYPE_LOCKED
+					}
+				}
+			}
+		}
 		packet.WriteU8(it.Slot)
 		packet.WriteU32(it.ItemEntry)
 		packet.WriteU32(it.Count)
 		packet.WriteU32(it.DisplayInfoID)
 		packet.WriteU32(0) // RandomPropertyId
 		packet.WriteU32(0) // RandomSuffix
-		packet.WriteU8(0)  // LootSlotType (Normal)
+		packet.WriteU8(slotType)
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOOT_RESPONSE), packet.Bytes(), true); err != nil {
 		return err
 	}
 	s.debug("loot response sent", "account", s.accountName, "target", loot.TargetGUID, "money", loot.Money, "items", len(loot.Items))
 
-	if s.server != nil && s.groupID != 0 {
-		s.server.groupsMu.Lock()
-		grp := s.server.groups[s.groupID]
-		s.server.groupsMu.Unlock()
-		if grp != nil {
-			if grp.LootMethod == 2 { // Master Loot
-				s.sendLootMasterList(loot)
-			} else if grp.LootMethod == 3 || grp.LootMethod == 4 { // Group Loot / Need Before Greed
-				for _, it := range loot.Items {
+	if grp != nil {
+		if grp.LootMethod == 2 { // Master Loot
+			s.sendLootMasterList(loot)
+		} else if grp.LootMethod == 3 || grp.LootMethod == 4 { // Group Loot / Need Before Greed
+			for _, it := range loot.Items {
+				if it.Quality >= uint32(grp.LootThreshold) {
 					s.server.startGroupLootRoll(loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, s.groupID)
 				}
 			}
@@ -277,12 +389,20 @@ func (s *session) sendLootMasterList(loot *activeLootState) {
 		return
 	}
 	members := s.server.getGroupSessions(s.groupID)
-	buf := protocol.NewBuffer(1 + len(members)*8)
-	buf.WriteU8(uint8(len(members)))
+	var nearMembers []*session
 	for _, m := range members {
+		if m.player != nil && m.player.Map == s.player.Map && distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= 100.0 {
+			nearMembers = append(nearMembers, m)
+		}
+	}
+	buf := protocol.NewBuffer(1 + len(nearMembers)*8)
+	buf.WriteU8(uint8(len(nearMembers)))
+	for _, m := range nearMembers {
 		buf.WriteU64(m.playerGUID)
 	}
-	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_MASTER_LIST), buf.Bytes(), true)
+	for _, m := range nearMembers {
+		_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_MASTER_LIST), buf.Bytes(), true)
+	}
 }
 
 func (s *session) sendLootError(guid uint64, code uint8) error {
@@ -322,16 +442,43 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 	}
 	copper := s.activeLoot.Money
 	s.activeLoot.Money = 0
-	s.player.Money += copper
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+
+	var nearMembers []*session
+	if s.groupID != 0 && s.server != nil {
+		allGroupSess := s.server.getGroupSessions(s.groupID)
+		for _, m := range allGroupSess {
+			if m.player != nil && m.player.Map == s.player.Map && distance3D(s.player.X, s.player.Y, s.player.Z, m.player.X, m.player.Y, m.player.Z) <= 100.0 {
+				nearMembers = append(nearMembers, m)
+			}
+		}
 	}
-	notify := protocol.NewBuffer(5)
-	notify.WriteU32(copper)
-	notify.WriteU8(1) // Alone
-	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_MONEY_NOTIFY), notify.Bytes(), true)
+
+	if len(nearMembers) > 1 {
+		copperPerPlayer := copper / uint32(len(nearMembers))
+		for _, m := range nearMembers {
+			m.player.Money += copperPerPlayer
+			if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", m.player.Money, m.playerGUID)
+			}
+			notify := protocol.NewBuffer(5)
+			notify.WriteU32(copperPerPlayer)
+			notify.WriteU8(0) // 0 = "Your share is..."
+			_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_MONEY_NOTIFY), notify.Bytes(), true)
+			m.sendPlayerUpdate()
+		}
+	} else {
+		s.player.Money += copper
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+		}
+		notify := protocol.NewBuffer(5)
+		notify.WriteU32(copper)
+		notify.WriteU8(1) // 1 = "You loot..."
+		_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_MONEY_NOTIFY), notify.Bytes(), true)
+		s.sendPlayerUpdate()
+	}
+
 	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_CLEAR_MONEY), nil, true)
-	s.sendPlayerUpdate()
 	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 {
 		s.clearCreatureLoot(s.activeLoot)
 	}
@@ -359,6 +506,37 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
 		}
 	}
+
+	if s.server != nil && s.groupID != 0 {
+		s.server.groupsMu.Lock()
+		grp := s.server.groups[s.groupID]
+		s.server.groupsMu.Unlock()
+		if grp != nil {
+			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
+			if grp.LootMethod == 2 && isOverThreshold {
+				// Master loot item must be given by master looter
+				return true
+			}
+			if (grp.LootMethod == 3 || grp.LootMethod == 4) && isOverThreshold {
+				rollKey := fmt.Sprintf("%d:%d", s.activeLoot.TargetGUID, it.Slot)
+				s.server.lootMu.Lock()
+				activeRoll := s.server.groupRolls[rollKey]
+				s.server.lootMu.Unlock()
+				if activeRoll != nil || it.IsBlocked {
+					return true
+				}
+				if it.RollWinner != 0 && it.RollWinner != s.playerGUID {
+					return true
+				}
+			} else if grp.LootMethod != 0 {
+				// Under threshold or round robin
+				if s.activeLoot.RoundRobinPlayer != 0 && s.activeLoot.RoundRobinPlayer != s.playerGUID {
+					return true
+				}
+			}
+		}
+	}
+
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
 		return true
@@ -371,9 +549,7 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		return true
 	}
 	delete(s.activeLoot.Items, lootSlot)
-	removed := protocol.NewBuffer(1)
-	removed.WriteU8(lootSlot)
-	_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), removed.Bytes(), true)
+	s.activeLoot.broadcastRemoved(lootSlot)
 	_ = s.sendInventoryItems(ctx)
 
 	slotForPush := uint32(res.Slot)
@@ -418,6 +594,10 @@ func (s *session) handleLootRelease(payload []byte) bool {
 		return true
 	}
 	loot := s.activeLoot
+	if loot.RoundRobinPlayer == s.playerGUID {
+		loot.RoundRobinPlayer = 0
+	}
+	loot.removeViewer(s.playerGUID)
 	s.activeLoot = nil
 	if loot.Money == 0 && len(loot.Items) == 0 {
 		s.clearCreatureLoot(loot)
@@ -441,41 +621,53 @@ func (s *session) handleLootMasterGive(ctx context.Context, payload []byte) bool
 	slotID, _ := r.ReadU8()
 	targetGUID, _ := r.ReadU64()
 
-	var targetSess *session
-	if s.server != nil {
-		targetSess = s.server.findSessionByGUID(targetGUID)
+	if s.server == nil || s.groupID == 0 {
+		_ = s.sendLootError(lootGUID, 0) // LOOT_ERROR_DIDNT_KILL
+		return true
 	}
-	if targetSess == nil || targetSess.player == nil {
-		buf := protocol.NewBuffer(9)
-		buf.WriteU64(lootGUID)
-		buf.WriteU8(3) // LOOT_ERROR_PLAYER_NOT_FOUND
-		_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
+	s.server.groupsMu.Lock()
+	grp := s.server.groups[s.groupID]
+	s.server.groupsMu.Unlock()
+	if grp == nil || grp.LootMethod != 2 || grp.MasterLooter != s.playerGUID {
+		_ = s.sendLootError(lootGUID, 0) // LOOT_ERROR_DIDNT_KILL
 		return true
 	}
 
-	if s.activeLoot != nil {
-		if it, ok := s.activeLoot.Items[slotID]; ok {
-			if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-				res, err := targetSess.storeOrStackItem(ctx, targetGUID, it.ItemEntry, it.Count)
-				if err != nil {
-					buf := protocol.NewBuffer(9)
-					buf.WriteU64(lootGUID)
-					buf.WriteU8(4) // LOOT_ERROR_INVENTORY_FULL
-					_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
-					return true
-				}
-				_ = res
-				delete(s.activeLoot.Items, slotID)
-				_ = targetSess.sendInventoryItems(ctx)
-				targetSess.sendPlayerUpdate()
-			} else {
-				delete(s.activeLoot.Items, slotID)
-			}
-			buf := protocol.NewBuffer(9)
-			buf.WriteU64(lootGUID)
-			buf.WriteU8(slotID)
-			_ = s.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
-		}
+	targetSess := s.server.findSessionByGUID(targetGUID)
+	if targetSess == nil || targetSess.player == nil {
+		_ = s.sendLootError(lootGUID, 10) // LOOT_ERROR_PLAYER_NOT_FOUND
+		return true
+	}
+	if targetSess.player.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, targetSess.player.X, targetSess.player.Y, targetSess.player.Z) > 100.0 {
+		_ = s.sendLootError(lootGUID, 14) // LOOT_ERROR_MASTER_OTHER
+		return true
+	}
+	if s.activeLoot == nil || s.activeLoot.TargetGUID != lootGUID {
+		_ = s.sendLootError(lootGUID, 0)
+		return true
+	}
+	it, ok := s.activeLoot.Items[slotID]
+	if !ok {
+		return true
+	}
+
+	res, err := targetSess.storeOrStackItem(ctx, targetGUID, it.ItemEntry, it.Count)
+	if err != nil {
+		_ = s.sendLootError(lootGUID, 12) // LOOT_ERROR_MASTER_INV_FULL
+		return true
+	}
+	delete(s.activeLoot.Items, slotID)
+	_ = targetSess.sendInventoryItems(ctx)
+	targetSess.sendPlayerUpdate()
+	slotForPush := uint32(res.Slot)
+	if res.IsStack {
+		slotForPush = 0xFFFFFFFF
+	}
+	_ = targetSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(targetGUID, res.ClientBag, slotForPush, it.ItemEntry, it.Count, res.InventoryCount), true)
+
+	s.activeLoot.broadcastRemoved(slotID)
+	if s.activeLoot.Money == 0 && len(s.activeLoot.Items) == 0 {
+		s.clearCreatureLoot(s.activeLoot)
 	}
 	return true
 }
@@ -494,6 +686,15 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	}
 	members := s.getGroupSessions(groupID)
 	if len(members) == 0 {
+		return
+	}
+	var eligible []*session
+	for _, m := range members {
+		if m.player != nil && m.player.Map == mapID {
+			eligible = append(eligible, m)
+		}
+	}
+	if len(eligible) == 0 {
 		return
 	}
 
@@ -517,9 +718,15 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		MapID:               mapID,
 		StartedAt:           time.Now(),
 		Duration:            60 * time.Second,
-		TotalPlayersRolling: len(members),
+		TotalPlayersRolling: len(eligible),
 		Votes:               make(map[uint64]uint8),
 		Rolls:               make(map[uint64]uint8),
+	}
+	if cLoot := s.creatureLoot[sourceGUID]; cLoot != nil {
+		if li, ok := cLoot.Items[uint8(slot)]; ok {
+			li.IsBlocked = true
+			cLoot.Items[uint8(slot)] = li
+		}
 	}
 	s.groupRolls[rollKey] = roll
 	s.lootMu.Unlock()
@@ -539,7 +746,7 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	s.broadcastToGroup(groupID, uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf.Bytes())
 
 	// Auto-pass check for players with PassOnGroupLoot
-	for _, m := range members {
+	for _, m := range eligible {
 		if m.player != nil && m.player.PassOnGroupLoot {
 			m.handleLootRoll(context.Background(), buildLootRollPayload(sourceGUID, slot, 0))
 		}
@@ -572,6 +779,21 @@ func (s *Server) resolveGroupLootRoll(rollKey string) {
 		for guid, vote := range roll.Votes {
 			if vote == 1 { // NEED
 				rNum := roll.Rolls[guid]
+				if rNum == 0 {
+					rNum = uint8(rand.Intn(100) + 1)
+					roll.Rolls[guid] = rNum
+					rBuf := protocol.NewBuffer(35)
+					rBuf.WriteU64(roll.SourceGUID)
+					rBuf.WriteU32(roll.Slot)
+					rBuf.WriteU64(guid)
+					rBuf.WriteU32(roll.ItemEntry)
+					rBuf.WriteU32(roll.RandomSuffix)
+					rBuf.WriteU32(roll.RandomPropID)
+					rBuf.WriteU8(rNum)
+					rBuf.WriteU8(1) // NEED
+					rBuf.WriteU8(0)
+					s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), rBuf.Bytes())
+				}
 				if rNum > maxRoll || winnerGUID == 0 {
 					maxRoll = rNum
 					winnerGUID = guid
@@ -583,6 +805,21 @@ func (s *Server) resolveGroupLootRoll(rollKey string) {
 		for guid, vote := range roll.Votes {
 			if vote == 2 || vote == 3 { // GREED or DISENCHANT
 				rNum := roll.Rolls[guid]
+				if rNum == 0 {
+					rNum = uint8(rand.Intn(100) + 1)
+					roll.Rolls[guid] = rNum
+					rBuf := protocol.NewBuffer(35)
+					rBuf.WriteU64(roll.SourceGUID)
+					rBuf.WriteU32(roll.Slot)
+					rBuf.WriteU64(guid)
+					rBuf.WriteU32(roll.ItemEntry)
+					rBuf.WriteU32(roll.RandomSuffix)
+					rBuf.WriteU32(roll.RandomPropID)
+					rBuf.WriteU8(rNum)
+					rBuf.WriteU8(vote)
+					rBuf.WriteU8(0)
+					s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), rBuf.Bytes())
+				}
 				if rNum > maxRoll || winnerGUID == 0 {
 					maxRoll = rNum
 					winnerGUID = guid
@@ -593,8 +830,7 @@ func (s *Server) resolveGroupLootRoll(rollKey string) {
 	}
 
 	if winnerGUID != 0 {
-		// Broadcast SMSG_LOOT_ROLL_WON (0x29F)
-		wonBuf := protocol.NewBuffer(35)
+		wonBuf := protocol.NewBuffer(34)
 		wonBuf.WriteU64(roll.SourceGUID)
 		wonBuf.WriteU32(roll.Slot)
 		wonBuf.WriteU32(roll.ItemEntry)
@@ -607,7 +843,6 @@ func (s *Server) resolveGroupLootRoll(rollKey string) {
 
 		s.deliverGroupLootItem(roll, winnerGUID)
 	} else {
-		// Broadcast SMSG_LOOT_ALL_PASSED (0x29E)
 		passBuf := protocol.NewBuffer(24)
 		passBuf.WriteU64(roll.SourceGUID)
 		passBuf.WriteU32(roll.Slot)
@@ -615,37 +850,69 @@ func (s *Server) resolveGroupLootRoll(rollKey string) {
 		passBuf.WriteU32(roll.RandomPropID)
 		passBuf.WriteU32(roll.RandomSuffix)
 		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ALL_PASSED), passBuf.Bytes())
+
+		s.lootMu.Lock()
+		if cLoot := s.creatureLoot[roll.SourceGUID]; cLoot != nil {
+			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
+				li.IsBlocked = false
+				cLoot.Items[uint8(roll.Slot)] = li
+			}
+		}
+		s.lootMu.Unlock()
 	}
 }
 
 func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64) {
 	winnerSess := s.findSessionByGUID(winnerGUID)
 	if winnerSess == nil || winnerSess.player == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		s.lootMu.Lock()
+		if cLoot := s.creatureLoot[roll.SourceGUID]; cLoot != nil {
+			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
+				li.IsBlocked = false
+				li.RollWinner = winnerGUID
+				cLoot.Items[uint8(roll.Slot)] = li
+			}
+		}
+		s.lootMu.Unlock()
 		return
 	}
 	ctx := context.Background()
 	res, err := winnerSess.storeOrStackItem(ctx, winnerGUID, roll.ItemEntry, roll.ItemCount)
 	if err != nil {
-		buf := protocol.NewBuffer(9)
-		buf.WriteU64(roll.SourceGUID)
-		buf.WriteU8(4) // LOOT_ERROR_INVENTORY_FULL
-		_ = winnerSess.write(uint16(protocol.OpcodeSMSG_LOOT_REMOVED), buf.Bytes(), true)
+		winnerSess.sendEquipError(equipErrInvFull, 0)
+		s.lootMu.Lock()
+		if cLoot := s.creatureLoot[roll.SourceGUID]; cLoot != nil {
+			if li, ok := cLoot.Items[uint8(roll.Slot)]; ok {
+				li.IsBlocked = false
+				li.RollWinner = winnerGUID
+				cLoot.Items[uint8(roll.Slot)] = li
+			}
+		}
+		s.lootMu.Unlock()
 		return
 	}
-	_ = res
 	_ = winnerSess.sendInventoryItems(ctx)
 	winnerSess.sendPlayerUpdate()
+	slotForPush := uint32(res.Slot)
+	if res.IsStack {
+		slotForPush = 0xFFFFFFFF
+	}
+	_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, roll.ItemEntry, roll.ItemCount, res.InventoryCount), true)
 
 	s.lootMu.Lock()
-	if cLoot := s.creatureLoot[roll.SourceGUID]; cLoot != nil {
+	cLoot := s.creatureLoot[roll.SourceGUID]
+	if cLoot != nil {
 		delete(cLoot.Items, uint8(roll.Slot))
 	}
 	s.lootMu.Unlock()
 
-	remBuf := protocol.NewBuffer(9)
-	remBuf.WriteU64(roll.SourceGUID)
-	remBuf.WriteU8(uint8(roll.Slot))
-	s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_REMOVED), remBuf.Bytes())
+	if cLoot != nil {
+		cLoot.broadcastRemoved(uint8(roll.Slot))
+	} else {
+		remBuf := protocol.NewBuffer(1)
+		remBuf.WriteU8(uint8(roll.Slot))
+		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_REMOVED), remBuf.Bytes())
+	}
 }
 
 // handleLootRoll processes CMSG_LOOT_ROLL (0x2A0).
@@ -700,13 +967,7 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	rollNumber := uint8(128) // pass
-	if rollType > 0 {
-		rollNumber = uint8(rand.Intn(100) + 1) // 1..100
-	}
-
 	roll.Votes[s.playerGUID] = rollType
-	roll.Rolls[s.playerGUID] = rollNumber
 
 	switch rollType {
 	case 0:
@@ -723,6 +984,16 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	totalDone := (roll.TotalPass + roll.TotalNeed + roll.TotalGreed) >= roll.TotalPlayersRolling
 	s.server.lootMu.Unlock()
 
+	voteRollNumber := uint8(128)
+	voteRollType := rollType
+	if rollType == 1 { // NEED
+		voteRollNumber = 0
+		voteRollType = 0
+	} else if rollType == 0 { // PASS
+		voteRollNumber = 128
+		voteRollType = 0
+	}
+
 	buf := protocol.NewBuffer(35)
 	buf.WriteU64(itemGUID)
 	buf.WriteU32(itemSlot)
@@ -730,8 +1001,8 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	buf.WriteU32(itemEntry)
 	buf.WriteU32(randomSuffix)
 	buf.WriteU32(randomPropID)
-	buf.WriteU8(rollNumber)
-	buf.WriteU8(rollType)
+	buf.WriteU8(voteRollNumber)
+	buf.WriteU8(voteRollType)
 	buf.WriteU8(0) // autoPass
 	s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL), buf.Bytes())
 
