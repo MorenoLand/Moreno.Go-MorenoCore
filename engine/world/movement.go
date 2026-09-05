@@ -313,6 +313,9 @@ func (s *Server) broadcastMovement(opcode uint16, payload []byte, info movementI
 		if target == source || !target.authed || !target.playerLoaded || target.player == nil || target.player.Map != source.player.Map {
 			continue
 		}
+		if source != nil && source.isStealthed() && !target.canDetectStealthOf(source) {
+			continue
+		}
 		targets = append(targets, target)
 	}
 	s.sessionsMu.RUnlock()
