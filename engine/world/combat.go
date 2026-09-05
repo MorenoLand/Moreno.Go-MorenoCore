@@ -1398,3 +1398,12 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 		partner.duelOutOfBounds = time.Time{}
 	}
 }
+
+// isInCombat mirrors Unit::IsInCombat.
+func (s *session) isInCombat() bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	return s.attackTarget != 0 || (s.player.UnitFlags&unitFlagInCombat != 0)
+}
+

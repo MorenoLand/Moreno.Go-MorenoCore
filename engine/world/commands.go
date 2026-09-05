@@ -113,6 +113,8 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 	s.player.Y = y
 	s.player.Z = z
 	s.player.Orientation = orientation
+	s.isFalling = false
+	s.isMoving = false
 
 	if sameMap {
 		packet := protocol.NewBuffer(48)

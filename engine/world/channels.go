@@ -961,6 +961,12 @@ func (s *session) handleChannelVoiceOn(ctx context.Context, payload []byte) bool
 	return true
 }
 
+// handleChannelModerate processes CMSG_CHANNEL_MODERATE (0x0A8).
+// Reference: TrinityCore Opcodes.cpp CMSG_CHANNEL_MODERATE -> WorldSession::Handle_NULL.
+func (s *session) handleChannelModerate(ctx context.Context, payload []byte) bool {
+	return true
+}
+
 // handleGetChannelMemberCount processes CMSG_GET_CHANNEL_MEMBER_COUNT (0x3D3).
 // Reference: HandleGetChannelMemberCount only answers channels the player is
 // on: name, channel flags, member count.

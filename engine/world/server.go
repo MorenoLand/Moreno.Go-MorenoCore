@@ -122,6 +122,7 @@ type session struct {
 	autoRepeatSpell    uint32
 	autoRepeatTarget   uint64
 	isMoving           bool
+	isFalling          bool
 	lastFallZ          float32
 	lastFallTime       uint32
 	isSwimming         bool
@@ -1527,6 +1528,10 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_CHANNEL_VOICE_ON):
 			if !state.authed || !state.handleChannelVoiceOn(ctx, payload) {
+				return
+			}
+		case uint32(protocol.OpcodeCMSG_CHANNEL_MODERATE):
+			if !state.authed || !state.handleChannelModerate(ctx, payload) {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_DECLINE_CHANNEL_INVITE):

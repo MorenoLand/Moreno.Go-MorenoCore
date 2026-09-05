@@ -548,3 +548,122 @@ func TestLFG_Teleport(t *testing.T) {
 		t.Fatalf("expected teleport out to -8949.95, 512.28, got X=%f Y=%f", sess.player.X, sess.player.Y)
 	}
 }
+
+func TestLFGTeleport_Denials(t *testing.T) {
+	srv, charDB, worldDB := setupTestLFGServer(t)
+	defer charDB.Close()
+	defer worldDB.Close()
+
+	_, _ = worldDB.Exec("INSERT INTO lfg_dungeon_template (dungeonId, name, position_x, position_y, position_z, orientation) VALUES (18, 'Scarlet Monastery', 1688.0, 1053.0, 18.0, 0.5)")
+
+	cConn, sConn := net.Pipe()
+	defer cConn.Close()
+	defer sConn.Close()
+
+	sess := &session{
+		server:       srv,
+		conn:         sConn,
+		playerGUID:   1,
+		playerLoaded: true,
+		groupID:      10,
+		breathTimer:  -1,
+		fatigueTimer: -1,
+		auras:        make(map[uint32]struct{}),
+		player: &playerState{
+			GUID:      1,
+			Name:      "DenialTester",
+			Health:    100,
+			MaxHealth: 100,
+			Map:       0,
+			X:         100.0,
+			Y:         200.0,
+			Z:         30.0,
+		},
+	}
+	srv.sessions[sess] = struct{}{}
+	srv.groups[10] = &groupState{
+		ID:           10,
+		LeaderGUID:   1,
+		IsLFG:        true,
+		LFGDungeonID: 18,
+		Members:      []groupMember{{GUID: 1, Name: "DenialTester"}},
+	}
+
+	checkDenied := func(expectedErr uint32, desc string) {
+		done := make(chan struct{})
+		go func() {
+			sess.handleLfgTeleport(context.Background(), []byte{0}) // in
+			close(done)
+		}()
+		_ = cConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		op, data, err := readServerFrame(cConn, nil)
+		if err != nil {
+			t.Fatalf("%s: failed to read frame: %v", desc, err)
+		}
+		<-done
+		if op != uint16(protocol.OpcodeSMSG_LFG_TELEPORT_DENIED) {
+			t.Fatalf("%s: expected SMSG_LFG_TELEPORT_DENIED, got 0x%04X", desc, op)
+		}
+		code, _ := protocol.NewReader(data).ReadU32()
+		if code != expectedErr {
+			t.Fatalf("%s: expected error %d, got %d", desc, expectedErr, code)
+		}
+	}
+
+	// 1. Ghost denial
+	sess.player.Health = 1
+	sess.player.PlayerFlags |= playerFlagGhost
+	checkDenied(LFGTeleportErrorPlayerDead, "ghost")
+
+	// Restore
+	sess.player.PlayerFlags &^= playerFlagGhost
+	sess.player.Health = 100
+
+	// 2. Falling denial
+	sess.isFalling = true
+	checkDenied(LFGTeleportErrorFalling, "falling")
+	sess.isFalling = false
+
+	// 3. Fatigue denial (in dark water)
+	sess.inDarkWater = true
+	checkDenied(LFGTeleportErrorFatigue, "dark water")
+	sess.inDarkWater = false
+
+	// 4. Fatigue denial (outside dark water, regenerating timer)
+	sess.fatigueTimer = 30000
+	checkDenied(LFGTeleportErrorFatigue, "fatigue regenerating")
+	sess.fatigueTimer = -1
+
+	// 5. In vehicle denial
+	sess.player.VehicleGUID = 12345
+	checkDenied(LFGTeleportErrorInVehicle, "vehicle")
+	sess.player.VehicleGUID = 0
+
+	// 6. Freeze debuff denial (spell 9454)
+	sess.auras[9454] = struct{}{}
+	checkDenied(LFGTeleportErrorInvalidLocation, "freeze aura")
+	delete(sess.auras, 9454)
+
+	// 7. Taxi flight cancelled upon successful teleport in
+	sess.inFlight = true
+	sess.player.MountDisplayID = 200
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := cConn.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+	sess.handleLfgTeleport(context.Background(), []byte{0})
+	if sess.inFlight {
+		t.Fatal("expected inFlight to be false after teleport in")
+	}
+	if sess.player.MountDisplayID != 0 {
+		t.Fatalf("expected MountDisplayID to be reset to 0, got %d", sess.player.MountDisplayID)
+	}
+	if sess.player.X != 1688.0 || sess.player.Y != 1053.0 {
+		t.Fatalf("expected teleport in to 1688, 1053, got %f, %f", sess.player.X, sess.player.Y)
+	}
+}
+

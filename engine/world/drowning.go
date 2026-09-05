@@ -313,6 +313,24 @@ func (s *session) stopMirrorTimers() {
 	}
 }
 
+// isFatigueActive returns true if the player is in dark water or currently regenerating fatigue.
+// Mirrors Player::IsMirrorTimerActive(FATIGUE_TIMER).
+func (s *session) isFatigueActive() bool {
+	if s == nil {
+		return false
+	}
+	return s.inDarkWater || (s.fatigueTimer > 0 && s.fatigueTimer < maxFatigueTimerMs)
+}
+
+// isBreathActive returns true if the player is underwater or currently regenerating breath.
+// Mirrors Player::IsMirrorTimerActive(BREATH_TIMER).
+func (s *session) isBreathActive() bool {
+	if s == nil {
+		return false
+	}
+	return s.isSwimming || (s.breathTimer > 0 && s.breathTimer < maxBreathTimerMs)
+}
+
 // updatePlayerUnderwater iterates over active sessions and processes drowning/breath and fatigue ticks.
 func (s *Server) updatePlayerUnderwater(ctx context.Context, now time.Time) {
 	s.sessionsMu.RLock()
