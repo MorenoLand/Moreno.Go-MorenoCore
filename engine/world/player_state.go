@@ -18,6 +18,7 @@ const (
 	objectFieldType                             = 2
 	objectFieldEntry                            = 3
 	objectFieldScale                            = 4
+	unitFieldSummon                             = 8
 	unitFieldBytes0                             = 23 // UNIT_FIELD_BYTES_0: Race, Class, Gender, PowerType
 	unitFieldHealth                             = 24
 	unitFieldPower1                             = 25
@@ -130,6 +131,7 @@ type playerSkill struct {
 
 type playerState struct {
 	GUID             uint64
+	PetGUID          uint64
 	Name             string
 	Race             uint8
 	Class            uint8
@@ -959,6 +961,10 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	if state.DuelTeam != 0 {
 		values[playerFieldDuelTeam] = state.DuelTeam
 	}
+	if state.PetGUID != 0 {
+		values[unitFieldSummon] = uint32(state.PetGUID)
+		values[unitFieldSummon+1] = uint32(state.PetGUID >> 32)
+	}
 	for slot := 0; slot < playerQuestLogSlots; slot++ {
 		entry := state.QuestLog[slot]
 		base := playerQuestLogStart + slot*5
@@ -1633,6 +1639,7 @@ func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bo
 		}
 	}
 
+	s.updatePetOnLevelUp(ctx)
 	s.sendPlayerUpdate()
 	s.debug("level granted", "account", s.accountName, "level", s.player.Level, "granter", granterGUID)
 	return true
