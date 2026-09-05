@@ -18,10 +18,11 @@ type combatTarget struct {
 	X          float32
 	Y          float32
 	Z          float32
-	Health     uint32
-	MaxHealth  uint32
-	Armor      uint32
-	MinDamage  float32
+	Health      uint32
+	MaxHealth   uint32
+	Armor       uint32
+	Resistances [7]uint32
+	MinDamage   float32
 	MaxDamage  float32
 	Level      uint8
 	UnitFlags  uint32
@@ -41,14 +42,15 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 				X:          playerSess.player.X,
 				Y:          playerSess.player.Y,
 				Z:          playerSess.player.Z,
-				Health:     playerSess.player.Health,
-				MaxHealth:  playerSess.player.MaxHealth,
-				Armor:      playerSess.player.Armor,
-				MinDamage:  playerSess.player.MinDamage,
-				MaxDamage:  playerSess.player.MaxDamage,
-				Level:      playerSess.player.Level,
-				UnitFlags:  playerSess.player.UnitFlags,
-				FlagsExtra: 0,
+				Health:      playerSess.player.Health,
+				MaxHealth:   playerSess.player.MaxHealth,
+				Armor:       playerSess.player.Armor,
+				Resistances: playerSess.player.Resistances,
+				MinDamage:   playerSess.player.MinDamage,
+				MaxDamage:   playerSess.player.MaxDamage,
+				Level:       playerSess.player.Level,
+				UnitFlags:   playerSess.player.UnitFlags,
+				FlagsExtra:  0,
 			}, true
 		}
 	}
@@ -63,19 +65,20 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 		}
 		if motion != nil {
 			target := combatTarget{
-				GUID:       guid,
-				Map:        motion.Map,
-				X:          motion.X,
-				Y:          motion.Y,
-				Z:          motion.Z,
-				Health:     motion.Health,
-				MaxHealth:  motion.MaxHealth,
-				Armor:      motion.Armor,
-				MinDamage:  motion.MinDamage,
-				MaxDamage:  motion.MaxDamage,
-				Level:      uint8(motion.Level),
-				UnitFlags:  motion.UnitFlags,
-				FlagsExtra: motion.FlagsExtra,
+				GUID:        guid,
+				Map:         motion.Map,
+				X:           motion.X,
+				Y:           motion.Y,
+				Z:           motion.Z,
+				Health:      motion.Health,
+				MaxHealth:   motion.MaxHealth,
+				Armor:       motion.Armor,
+				Resistances: motion.Resistances,
+				MinDamage:   motion.MinDamage,
+				MaxDamage:   motion.MaxDamage,
+				Level:       uint8(motion.Level),
+				UnitFlags:   motion.UnitFlags,
+				FlagsExtra:  motion.FlagsExtra,
 			}
 			s.server.motionMu.Unlock()
 			return target, true
@@ -206,9 +209,11 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPayload, s)
 	}
 
-	if damage == 0 {
-		return
+	// Attacker enters combat on swing
+	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
+		s.player.UnitFlags |= unitFlagInCombat
 	}
+	s.lastCombatTime = time.Now()
 
 	// If target is an online player (e.g. duel opponent or PvP)
 	if s.server != nil {
@@ -217,25 +222,34 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
 			playerSess.lastCombatTime = time.Now()
-			if damage >= playerSess.player.Health {
-				if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
-					// Duel defeat: loser drops to 1 HP and kneels (TC: Player::DuelComplete)
-					playerSess.player.Health = 1
-					playerSess.sendPlayerUpdate()
-					s.endDuel(true, s.playerGUID, false)
+			if damage > 0 {
+				if damage >= playerSess.player.Health {
+					if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
+						// Duel defeat: loser drops to 1 HP and kneels (TC: Player::DuelComplete)
+						playerSess.player.Health = 1
+						playerSess.sendPlayerUpdate()
+						s.endDuel(true, s.playerGUID, false)
+					} else {
+						playerSess.player.Health = 0
+						playerSess.sendPlayerUpdate()
+						playerSess.killPlayer(ctx)
+					}
+					_ = s.sendAttackStop(target.GUID, true)
+					s.attackTarget = 0
 				} else {
-					playerSess.player.Health = 0
+					playerSess.player.Health -= damage
 					playerSess.sendPlayerUpdate()
-					playerSess.killPlayer(ctx)
 				}
-				_ = s.sendAttackStop(target.GUID, true)
-				s.attackTarget = 0
-			} else {
-				playerSess.player.Health -= damage
-				playerSess.sendPlayerUpdate()
 			}
 			return
 		}
+	}
+
+	if damage == 0 {
+		if s.server != nil {
+			s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+		}
+		return
 	}
 
 	low := uint32(target.GUID & 0x00FFFFFF)
@@ -394,8 +408,9 @@ type creatureStats struct {
 	Level      uint32
 	Health     uint32
 	MaxHealth  uint32
-	Armor      uint32
-	MinDamage  float32
+	Armor       uint32
+	Resistances [7]uint32
+	MinDamage   float32
 	MaxDamage  float32
 	AttackTime uint32
 	UnitFlags  uint32
@@ -562,6 +577,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	target.UnitFlags = st.UnitFlags
 	target.FlagsExtra = st.FlagsExtra
 	target.Armor = st.Armor
+	target.Resistances = st.Resistances
 	target.MinDamage = st.MinDamage
 	target.MaxDamage = st.MaxDamage
 	target.Level = uint8(st.Level)
@@ -587,33 +603,35 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 		if motion.Armor > 0 {
 			target.Armor = motion.Armor
 		}
+		target.Resistances = motion.Resistances
 		if motion.MinDamage > 0 {
 			target.MinDamage = motion.MinDamage
 			target.MaxDamage = motion.MaxDamage
 		}
 	} else {
 		motion := &creatureMotion{
-			GUID:       target.GUID,
-			Entry:      uint32(entry),
-			Map:        target.Map,
-			HomeX:      target.X,
-			HomeY:      target.Y,
-			HomeZ:      target.Z,
-			X:          target.X,
-			Y:          target.Y,
-			Z:          target.Z,
-			Speed:      2.5,
-			RunSpeed:   7.0,
-			UnitFlags:  target.UnitFlags,
-			FlagsExtra: target.FlagsExtra,
-			Health:     target.Health,
-			MaxHealth:  target.MaxHealth,
-			Armor:      target.Armor,
-			MinDamage:  target.MinDamage,
-			MaxDamage:  target.MaxDamage,
-			Level:      uint32(target.Level),
-			AttackTime: st.AttackTime,
-			Refreshed:  time.Now(),
+			GUID:        target.GUID,
+			Entry:       uint32(entry),
+			Map:         target.Map,
+			HomeX:       target.X,
+			HomeY:       target.Y,
+			HomeZ:       target.Z,
+			X:           target.X,
+			Y:           target.Y,
+			Z:           target.Z,
+			Speed:       2.5,
+			RunSpeed:    7.0,
+			UnitFlags:   target.UnitFlags,
+			FlagsExtra:  target.FlagsExtra,
+			Health:      target.Health,
+			MaxHealth:   target.MaxHealth,
+			Armor:       target.Armor,
+			Resistances: target.Resistances,
+			MinDamage:   target.MinDamage,
+			MaxDamage:   target.MaxDamage,
+			Level:       uint32(target.Level),
+			AttackTime:  st.AttackTime,
+			Refreshed:   time.Now(),
 		}
 		s.server.creatureMotion[target.GUID] = motion
 		if guid != target.GUID {
