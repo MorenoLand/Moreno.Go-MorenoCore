@@ -1836,7 +1836,7 @@ func TestAutoShot_ExecutionAndAmmoConsumption(t *testing.T) {
 		Health:      1000,
 		MaxHealth:   1000,
 		CombatReach: 1.5,
-		Level:       80,
+		Level:       1,
 	}
 	srv.creatureMotion[targetGUID] = targetMotion
 
@@ -1849,7 +1849,7 @@ func TestAutoShot_ExecutionAndAmmoConsumption(t *testing.T) {
 	}()
 
 	// Execute ranged attack
-	target := combatTarget{GUID: targetGUID, Health: 1000, MaxHealth: 1000, Level: 80, CombatReach: 1.5}
+	target := combatTarget{GUID: targetGUID, Health: 1000, MaxHealth: 1000, Level: 1, CombatReach: 1.5}
 	sess.executeRangedAttack(context.Background(), target, 75)
 
 	// Verify target took damage

@@ -35,10 +35,11 @@ type creatureMotion struct {
 	HomeX    float32
 	HomeY    float32
 	HomeZ    float32
-	X        float32
-	Y        float32
-	Z        float32
-	Speed    float32 // yd/s walk speed used for wander
+	X           float32
+	Y           float32
+	Z           float32
+	Orientation float32
+	Speed       float32 // yd/s walk speed used for wander
 	RunSpeed float32 // yd/s run speed used for pursuit
 	MoveType uint32  // 1 random, 2 waypoint
 	Wander   float64
@@ -692,6 +693,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			continue
 		}
 		dist := float32(math.Hypot(float64(p.X-motion.X), float64(p.Y-motion.Y)))
+		if !canCreatureDetectStealthOfPlayer(motion, p.Sess, dist) {
+			continue
+		}
 		aggroDist := float32(15.0)
 		if s.isHostileFaction(motion.Faction, p) && dist <= aggroDist {
 			motion.InCombat = true
