@@ -17,6 +17,10 @@ type Store struct {
 	taxiOnce sync.Once
 	taxi     *taxiNetwork
 	taxiErr  error
+
+	slaOnce sync.Once
+	slaMap  map[uint32][]SkillLineAbilityEntry
+	slaErr  error
 }
 
 const MountedFlightSpeedAura uint32 = 207
@@ -804,3 +808,69 @@ func (s *Store) GemProperties(id uint32) (GemPropertiesEntry, bool, error) {
 		Type:      gemType,
 	}, true, nil
 }
+
+// SkillLineAbilityEntry represents a record from SkillLineAbility.dbc.
+type SkillLineAbilityEntry struct {
+	ID        uint32
+	SkillLine uint32
+	Spell     uint32
+	RaceMask  uint32
+	ClassMask uint32
+}
+
+func (s *Store) loadSkillLineAbilities() {
+	file, err := s.File("SkillLineAbility")
+	if err != nil {
+		s.slaErr = err
+		return
+	}
+	m := make(map[uint32][]SkillLineAbilityEntry, file.Records())
+	for i := 0; i < file.Records(); i++ {
+		rec, err := file.Record(i)
+		if err != nil {
+			continue
+		}
+		id, _ := rec.Uint32(0)
+		skillLine, _ := rec.Uint32(1)
+		spell, _ := rec.Uint32(2)
+		raceMask, _ := rec.Uint32(3)
+		classMask, _ := rec.Uint32(4)
+		if spell > 0 {
+			m[spell] = append(m[spell], SkillLineAbilityEntry{
+				ID:        id,
+				SkillLine: skillLine,
+				Spell:     spell,
+				RaceMask:  raceMask,
+				ClassMask: classMask,
+			})
+		}
+	}
+	s.slaMap = m
+}
+
+// SkillLineAbilities returns all SkillLineAbility records for the given spell.
+func (s *Store) SkillLineAbilities(spellID uint32) ([]SkillLineAbilityEntry, bool, error) {
+	s.slaOnce.Do(s.loadSkillLineAbilities)
+	if s.slaErr != nil {
+		return nil, false, s.slaErr
+	}
+	abilities, ok := s.slaMap[spellID]
+	return abilities, ok, nil
+}
+
+// SpellName returns the name and subtext/rank for a spell from Spell.dbc.
+func (s *Store) SpellName(id uint32) (string, string, bool, error) {
+	file, err := s.File("Spell")
+	if err != nil {
+		return "", "", false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return "", "", false, nil
+	}
+	name, _ := record.String(136)
+	rank, _ := record.String(153)
+	return name, rank, true, nil
+}
+
+
