@@ -76,6 +76,9 @@ type Server struct {
 	spiritReviveQueue map[uint64]uint64 // playerGUID -> spiritGuideGUID
 	creatureTextMgr   *creatureTextMgr
 	wardenCheckMgr    *wardenCheckMgr
+	spellChainMu      sync.RWMutex
+	spellChainLoaded  bool
+	prevSpellInChain  map[uint32]uint32
 }
 
 type session struct {

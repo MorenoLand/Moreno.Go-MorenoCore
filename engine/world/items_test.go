@@ -1240,3 +1240,247 @@ func TestPlayerVisibleEquipmentUpdateParity(t *testing.T) {
 		t.Fatalf("expected player GUID 1, got %d", guid)
 	}
 }
+
+func TestItemCreateBlockTypeMaskAndContainerEnd(t *testing.T) {
+	itemGUID := uint64(8) | (uint64(0x4000) << 48)
+	// Regular item (Hearthstone entry 6948)
+	itemBlock := buildItemCreateBlockForLocationWithDurability(itemGUID, 6948, 1, 1, 1, 0, nil, 0, 0)
+	r := protocol.NewReader(itemBlock)
+	upType, _ := r.ReadU8()
+	if upType != protocol.UpdateCreateObject2 {
+		t.Fatalf("expected UpdateCreateObject2 (3), got %d", upType)
+	}
+	guid, _ := r.ReadPackedGUID()
+	if guid != itemGUID {
+		t.Fatalf("expected guid %x, got %x", itemGUID, guid)
+	}
+	typeID, _ := r.ReadU8()
+	if typeID != 1 { // TYPEID_ITEM
+		t.Fatalf("expected TYPEID_ITEM (1), got %d", typeID)
+	}
+	flags, _ := r.ReadU16()
+	if flags != 0x0010 { // UPDATEFLAG_LOWGUID
+		t.Fatalf("expected UPDATEFLAG_LOWGUID (0x0010), got %x", flags)
+	}
+	lowGUID, _ := r.ReadU32()
+	if lowGUID != 8 {
+		t.Fatalf("expected lowGUID 8, got %d", lowGUID)
+	}
+	maskBlocks, _ := r.ReadU8()
+	if maskBlocks != 2 { // 64 fields = 2 blocks of 32 bits
+		t.Fatalf("expected 2 mask blocks for item (64 fields), got %d", maskBlocks)
+	}
+	mask := make([]uint32, maskBlocks)
+	for i := range mask {
+		mask[i], _ = r.ReadU32()
+	}
+	// Verify OBJECT_FIELD_TYPE (index 2) is set in mask
+	if mask[0]&(1<<2) == 0 {
+		t.Fatal("expected OBJECT_FIELD_TYPE (index 2) set in mask")
+	}
+	// Read values until index 2
+	var objectType uint32
+	for i := 0; i <= 2; i++ {
+		if mask[i/32]&(1<<uint(i%32)) != 0 {
+			val, _ := r.ReadU32()
+			if i == 2 {
+				objectType = val
+			}
+		}
+	}
+	// TrinityCore: TYPEMASK_OBJECT (1) | TYPEMASK_ITEM (2) = 3
+	if objectType != 0x03 {
+		t.Fatalf("expected OBJECT_FIELD_TYPE = 0x03 (TYPEMASK_OBJECT | TYPEMASK_ITEM), got 0x%02X", objectType)
+	}
+	if (objectType & 0x02) == 0 {
+		t.Fatal("TYPEMASK_ITEM bit (0x02) NOT SET! Client will reject item!")
+	}
+
+	// Container item (4 slots)
+	bagGUID := uint64(9) | (uint64(0x4000) << 48)
+	bagBlock := buildItemCreateBlockForLocationWithDurability(bagGUID, 4500, 1, 1, 1, 4, map[uint32]uint64{0: itemGUID}, 0, 0)
+	br := protocol.NewReader(bagBlock)
+	bUpType, _ := br.ReadU8()
+	if bUpType != protocol.UpdateCreateObject2 {
+		t.Fatalf("expected UpdateCreateObject2 (3), got %d", bUpType)
+	}
+	bGuid, _ := br.ReadPackedGUID()
+	if bGuid != bagGUID {
+		t.Fatalf("expected bagGUID %x, got %x", bagGUID, bGuid)
+	}
+	bTypeID, _ := br.ReadU8()
+	if bTypeID != 2 { // TYPEID_CONTAINER
+		t.Fatalf("expected TYPEID_CONTAINER (2), got %d", bTypeID)
+	}
+	_, _ = br.ReadU16()
+	_, _ = br.ReadU32()
+	bMaskBlocks, _ := br.ReadU8()
+	if bMaskBlocks != 5 { // 138 fields = 5 blocks of 32 bits (CONTAINER_END)
+		t.Fatalf("expected 5 mask blocks for container (138 fields = CONTAINER_END), got %d", bMaskBlocks)
+	}
+	bMask := make([]uint32, bMaskBlocks)
+	for i := range bMask {
+		bMask[i], _ = br.ReadU32()
+	}
+	var bObjectType uint32
+	for i := 0; i <= 2; i++ {
+		if bMask[i/32]&(1<<uint(i%32)) != 0 {
+			val, _ := br.ReadU32()
+			if i == 2 {
+				bObjectType = val
+			}
+		}
+	}
+	// TrinityCore: TYPEMASK_OBJECT (1) | TYPEMASK_ITEM (2) | TYPEMASK_CONTAINER (4) = 7
+	if bObjectType != 0x07 {
+		t.Fatalf("expected container OBJECT_FIELD_TYPE = 0x07, got 0x%02X", bObjectType)
+	}
+}
+
+func TestSendInventoryItemsAtomicDelivery(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, stmt := range []string{
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER)",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"CREATE TABLE characters (guid INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, ContainerSlots INTEGER, MaxDurability INTEGER)",
+		"INSERT INTO item_template VALUES (6948, 0, 0)", // Hearthstone
+		"INSERT INTO item_instance VALUES (8, 6948, 1, 0, 1, 0, '', 0, '', 0, 0, 0, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 8)", // Hearthstone in backpack slot 23
+		"INSERT INTO characters VALUES (1, '')",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("setup failed on %s: %v", stmt, err)
+		}
+	}
+
+	c, s := net.Pipe()
+	defer c.Close()
+	defer s.Close()
+
+	srv := &Server{
+		CharactersStore: &database.Store{DB: db},
+		WorldStore:      &database.Store{DB: db},
+	}
+	sess := &session{
+		server:       srv,
+		conn:         s,
+		playerGUID:   1,
+		playerLoaded: true,
+		player: &playerState{
+			GUID: 1,
+		},
+	}
+
+	pktChan := make(chan []byte, 1)
+	go func() {
+		op, data, rErr := readServerFrame(c, nil)
+		if rErr != nil {
+			return
+		}
+		if op == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+			decompressed, dErr := protocol.DecompressUpdatePayload(data)
+			if dErr == nil {
+				data = decompressed
+			}
+		}
+		pktChan <- data
+	}()
+
+	if err := sess.sendInventoryItems(context.Background()); err != nil {
+		t.Fatalf("sendInventoryItems failed: %v", err)
+	}
+
+	var data []byte
+	select {
+	case data = <-pktChan:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for inventory update packet")
+	}
+
+	r := protocol.NewReader(data)
+	blockCount, err := r.ReadU32()
+	if err != nil || blockCount < 2 {
+		t.Fatalf("expected at least 2 blocks (item create + player values), got count=%d, err=%v", blockCount, err)
+	}
+
+	// First block: CreateObject2 for Hearthstone
+	upType1, _ := r.ReadU8()
+	if upType1 != protocol.UpdateCreateObject2 {
+		t.Fatalf("expected first block to be UpdateCreateObject2 (3), got %d", upType1)
+	}
+	guid1, _ := r.ReadPackedGUID()
+	expectedHearthstoneGUID := uint64(8) | (uint64(0x4000) << 48)
+	if guid1 != expectedHearthstoneGUID {
+		t.Fatalf("expected item GUID %x, got %x", expectedHearthstoneGUID, guid1)
+	}
+}
+
+func TestHandleSellItemMasksHighGuid(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, stmt := range []string{
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER)",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, count INTEGER)",
+		"CREATE TABLE characters (guid INTEGER, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, SellPrice INTEGER)",
+		"INSERT INTO item_template VALUES (1001, 50)",
+		"INSERT INTO item_instance VALUES (16, 1001, 1)",
+		"INSERT INTO character_inventory VALUES (1, 0, 24, 16)",
+		"INSERT INTO characters VALUES (1, 100, '')",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("setup failed on %s: %v", stmt, err)
+		}
+	}
+
+	c, s := net.Pipe()
+	defer c.Close()
+	defer s.Close()
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			if _, err := c.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	srv := &Server{
+		CharactersStore: &database.Store{DB: db},
+		WorldStore:      &database.Store{DB: db},
+	}
+	sess := &session{
+		server:       srv,
+		conn:         s,
+		playerGUID:   1,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:  1,
+			Money: 100,
+		},
+	}
+
+	// Client sends itemGUID with high GUID (0x4000000000000010)
+	sellBuf := protocol.NewBuffer(17)
+	sellBuf.WriteU64(100)                                   // vendorGUID
+	sellBuf.WriteU64(uint64(16) | (uint64(0x4000) << 48)) // itemGUID with high GUID
+	sellBuf.WriteU8(1)                                     // count
+
+	if !sess.handleSellItem(context.Background(), sellBuf.Bytes()) {
+		t.Fatal("handleSellItem failed")
+	}
+
+	if sess.player.Money != 150 { // 100 + 50
+		t.Fatalf("expected 150 money after sell, got %d", sess.player.Money)
+	}
+}
