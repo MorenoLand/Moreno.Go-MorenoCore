@@ -895,6 +895,7 @@ type activeAura struct {
 	Positive           bool
 	CasterLevel        uint8
 	AuraInterruptFlags uint32
+	DRGroup            DiminishingGroup
 	Timer              *time.Timer
 	TickTimer          *time.Timer
 	Stopped            bool
@@ -1106,6 +1107,10 @@ func (s *session) clearActiveAuras() {
 				if aura.TickTimer != nil {
 					aura.TickTimer.Stop()
 				}
+				if aura.DRGroup != DiminishingNone {
+					s.applyDiminishingAura(aura.DRGroup, false)
+					aura.DRGroup = DiminishingNone
+				}
 			}
 		}
 		s.activeAuras = make(map[uint32]*activeAura)
@@ -1214,6 +1219,10 @@ func (s *session) removeAura(spellID uint32) {
 			if aura.TickTimer != nil {
 				aura.TickTimer.Stop()
 			}
+			if aura.DRGroup != DiminishingNone {
+				s.applyDiminishingAura(aura.DRGroup, false)
+				aura.DRGroup = DiminishingNone
+			}
 			delete(s.activeAuras, spellID)
 		}
 	}
@@ -1262,6 +1271,20 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		if targetSess.player.Health == 0 {
 			return
 		}
+
+		var drGroup DiminishingGroup
+		if !positive && durationMs > 0 {
+			var ok bool
+			drGroup, durationMs, ok = targetSess.applyDiminishingToDuration(spell.ID, spell.Mechanic, durationMs, true)
+			if !ok {
+				// Target is immune to crowd control due to DR
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(1, spell.ID, 38), true) // SPELL_FAILED_IMMUNE = 38
+				return
+			}
+			targetSess.incrDiminishing(drGroup)
+			targetSess.applyDiminishingAura(drGroup, true)
+		}
+
 		targetSess.castMu.Lock()
 		if targetSess.auras == nil {
 			targetSess.auras = make(map[uint32]struct{})
@@ -1280,6 +1303,10 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			}
 			if existing.TickTimer != nil {
 				existing.TickTimer.Stop()
+			}
+			if existing.DRGroup != DiminishingNone {
+				targetSess.applyDiminishingAura(existing.DRGroup, false)
+				existing.DRGroup = DiminishingNone
 			}
 		}
 
@@ -1317,6 +1344,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			Positive:           positive,
 			CasterLevel:        s.player.Level,
 			AuraInterruptFlags: spell.AuraInterruptFlags,
+			DRGroup:            drGroup,
 		}
 		targetSess.activeAuras[spell.ID] = aura
 		targetSess.castMu.Unlock()
