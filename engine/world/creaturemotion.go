@@ -49,8 +49,9 @@ type creatureMotion struct {
 	FlagsExtra uint32
 	AttackTime uint32
 
-	Armor     uint32
-	MinDamage float32
+	Armor       uint32
+	Resistances [7]uint32
+	MinDamage   float32
 	MaxDamage float32
 
 	Health    uint32
@@ -136,8 +137,9 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 			Wander:     wander,
 			Health:     st.Health,
 			MaxHealth:  st.MaxHealth,
-			Armor:      st.Armor,
-			MinDamage:  st.MinDamage,
+			Armor:       st.Armor,
+			Resistances: st.Resistances,
+			MinDamage:   st.MinDamage,
 			MaxDamage:  st.MaxDamage,
 			Level:      st.Level,
 			AttackTime: st.AttackTime,
@@ -415,9 +417,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			motion.Health = motion.MaxHealth
-			s.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{
-				unitFieldHealth: motion.MaxHealth,
-			})
+			if s != nil {
+				s.clearCreatureAuras(motion.GUID)
+				s.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{
+					unitFieldHealth: motion.MaxHealth,
+				})
+			}
 			motion.Moving = false
 			return
 		}
@@ -448,9 +453,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			motion.Health = motion.MaxHealth
-			s.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{
-				unitFieldHealth: motion.MaxHealth,
-			})
+			if s != nil {
+				s.clearCreatureAuras(motion.GUID)
+				s.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{
+					unitFieldHealth: motion.MaxHealth,
+				})
+			}
 			homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
 			duration := uint32((homeDist / motion.RunSpeed) * 1000)
 			if duration < 500 {

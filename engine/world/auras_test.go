@@ -2,7 +2,10 @@ package world
 
 import (
 	"context"
+	"encoding/binary"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -585,4 +588,200 @@ func TestFinishSpellCast_SpellMiss(t *testing.T) {
 
 	t.Fatalf("expected at least one spell miss in 20 attempts for level 1 vs 80")
 }
+
+func TestCalcMagicSpellResistance(t *testing.T) {
+	// 1. Physical (1) and Holy (2) cannot be resisted
+	res, rem := calcMagicSpellResistance(100, 1, 500, 80, 80)
+	if res != 0 || rem != 100 {
+		t.Fatalf("expected 0 physical resistance, got %d", res)
+	}
+	res, rem = calcMagicSpellResistance(100, 2, 500, 80, 80)
+	if res != 0 || rem != 100 {
+		t.Fatalf("expected 0 holy resistance, got %d", res)
+	}
+
+	// 2. Equal level with 0 resistance has 0 resist
+	res, rem = calcMagicSpellResistance(100, 4, 0, 80, 80)
+	if res != 0 || rem != 100 {
+		t.Fatalf("expected 0 fire resistance for 0 rating, got %d", res)
+	}
+
+	// 3. Fire against 200 resistance at level 80 (avg resist ~33%)
+	resistedTotal := uint32(0)
+	for i := 0; i < 50; i++ {
+		r, _ := calcMagicSpellResistance(100, 4, 200, 80, 80)
+		resistedTotal += r
+	}
+	if resistedTotal == 0 {
+		t.Fatalf("expected magic resistance to mitigate damage against 200 resistance")
+	}
+}
+
+func writeSpellWithSchoolDBC(t *testing.T, dir string, id, schoolMask uint32) {
+	t.Helper()
+	const fieldCount = 234
+	record := make([]uint32, fieldCount)
+	record[0] = id
+	record[225] = schoolMask
+	recordBytes := make([]byte, fieldCount*4)
+	for i, val := range record {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:(i+1)*4], val)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dir, "Spell.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecuteSpellDamage_ResistanceMitigation(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	creatureGUID := uint64(888) | (uint64(500) << 24) | (uint64(0xF130) << 48)
+
+	var resArray [7]uint32
+	resArray[5] = 250 // Shadow resistance = 250
+
+	dbcDir := t.TempDir()
+	writeSpellWithSchoolDBC(t, dbcDir, 686, 32)
+
+	srv := &Server{
+		Data: wotlk.NewStore(dbcDir),
+		creatureMotion: map[uint64]*creatureMotion{
+			creatureGUID: {
+				GUID:        creatureGUID,
+				Health:      5000,
+				MaxHealth:   5000,
+				Level:       80,
+				Resistances: resArray,
+			},
+		},
+		activeCreatureAuras: make(map[uint64]map[uint32]*activeAura),
+		creatureAuras:       make(map[uint64]map[uint32]struct{}),
+		sessions:            make(map[*session]struct{}),
+	}
+
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   5001,
+		player: &playerState{
+			GUID:      5001,
+			Level:     80,
+			Health:    1000,
+			MaxHealth: 1000,
+		},
+	}
+	srv.sessions[sess] = struct{}{}
+
+	pktChan := make(chan capturedPacket, 100)
+	stopDrain := make(chan struct{})
+	defer close(stopDrain)
+	go drainPackets(clientConn, pktChan, stopDrain)
+
+	// Cast Shadow damage spell (schoolMask = 32)
+	sawResist := false
+	for i := 0; i < 20; i++ {
+		sess.executeSpellDamage(context.Background(), creatureGUID, 686, 200)
+		time.Sleep(10 * time.Millisecond)
+
+		for len(pktChan) > 0 {
+			p := <-pktChan
+			if p.opcode == uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG) {
+				r := protocol.NewReader(p.data)
+				_, _ = r.ReadPackedGUID() // target
+				_, _ = r.ReadPackedGUID() // attacker
+				_, _ = r.ReadU32()        // spellID
+				_, _ = r.ReadU32()        // damage
+				_, _ = r.ReadU32()        // overkill
+				_, _ = r.ReadU8()         // schoolMask
+				_, _ = r.ReadU32()        // absorb
+				resist, _ := r.ReadU32()  // resist
+				if resist > 0 {
+					sawResist = true
+				}
+			}
+		}
+		if sawResist {
+			break
+		}
+	}
+
+	if !sawResist {
+		t.Fatalf("expected at least one spell resist against 250 shadow resistance")
+	}
+}
+
+func TestCreatureEvade_ClearsAuras(t *testing.T) {
+	creatureGUID := uint64(991) | (uint64(500) << 24) | (uint64(0xF130) << 48)
+	now := time.Now()
+
+	srv := &Server{
+		creatureMotion: map[uint64]*creatureMotion{
+			creatureGUID: {
+				GUID:       creatureGUID,
+				HomeX:      0,
+				HomeY:      0,
+				HomeZ:      0,
+				X:          10,
+				Y:          0,
+				Z:          0,
+				Health:     50,
+				MaxHealth:  100,
+				InCombat:   true,
+				TargetGUID: 7001,
+				RunSpeed:   7.0,
+			},
+		},
+		activeCreatureAuras: map[uint64]map[uint32]*activeAura{
+			creatureGUID: {
+				12345: {SpellID: 12345, Stopped: false},
+			},
+		},
+		creatureAuras: map[uint64]map[uint32]struct{}{
+			creatureGUID: {
+				12345: {},
+			},
+		},
+		sessions: make(map[*session]struct{}),
+	}
+
+	// Player is far away (60 yards > 45.0 max leash)
+	players := []playerPos{
+		{
+			GUID: 7001,
+			Map:  0,
+			X:    60,
+			Y:    0,
+			Z:    0,
+		},
+	}
+
+	motion := srv.creatureMotion[creatureGUID]
+	srv.stepCreatureMotion(context.Background(), motion, players, now)
+
+	// Creature must be in evade: health restored to 100, InCombat = false, auras cleared
+	if motion.Health != 100 {
+		t.Fatalf("expected creature health restored to 100 on evade, got %d", motion.Health)
+	}
+	if motion.InCombat {
+		t.Fatalf("expected creature InCombat false on evade")
+	}
+
+	srv.auraMu.Lock()
+	auraCount := len(srv.activeCreatureAuras[creatureGUID])
+	srv.auraMu.Unlock()
+
+	if auraCount != 0 {
+		t.Fatalf("expected 0 active auras after creature evade, got %d", auraCount)
+	}
+}
+
 

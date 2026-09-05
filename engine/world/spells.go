@@ -463,11 +463,6 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
 	}
 
-	overkill := uint32(0)
-	if damage >= target.Health {
-		overkill = damage - target.Health
-	}
-
 	// Use the school mask from the Spell DBC (field 17). Fallback to physical (1).
 	schoolMask := uint8(1)
 	if s.server.Data != nil {
@@ -476,7 +471,19 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		}
 	}
 
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, 0, 0, hitInfo), true)
+	resisted := uint32(0)
+	if schoolMask > 1 && s.player != nil && s.player.Level > 0 {
+		resIdx := schoolMaskToResistanceIndex(schoolMask)
+		victimRes := target.Resistances[resIdx]
+		resisted, damage = calcMagicSpellResistance(damage, schoolMask, victimRes, s.player.Level, target.Level)
+	}
+
+	overkill := uint32(0)
+	if damage >= target.Health && target.Health > 0 {
+		overkill = damage - target.Health
+	}
+
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, 0, resisted, hitInfo), true)
 
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
@@ -491,7 +498,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
-			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, 0, 0, hitInfo), true)
+			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, 0, resisted, hitInfo), true)
 			if damage >= playerSess.player.Health {
 				if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
 					// Duel defeat: loser drops to 1 HP and duel completes
@@ -838,6 +845,98 @@ func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool) ui
 		return protocol.SpellMissMiss
 	}
 	return protocol.SpellMissNone
+}
+
+// schoolMaskToResistanceIndex converts SpellSchoolMask to resistance index:
+// 0: Physical (Armor), 1: Holy, 2: Fire, 3: Nature, 4: Frost, 5: Shadow, 6: Arcane.
+func schoolMaskToResistanceIndex(schoolMask uint8) uint8 {
+	switch {
+	case schoolMask&1 != 0:
+		return 0
+	case schoolMask&2 != 0:
+		return 1
+	case schoolMask&4 != 0:
+		return 2
+	case schoolMask&8 != 0:
+		return 3
+	case schoolMask&16 != 0:
+		return 4
+	case schoolMask&32 != 0:
+		return 5
+	case schoolMask&64 != 0:
+		return 6
+	default:
+		return 0
+	}
+}
+
+// calcMagicSpellResistance computes magic damage resisted based on target resistance and caster/victim levels,
+// matching TrinityCore Unit::CalculateAverageResistReduction and Unit::CalcSpellResistance (Unit.cpp:1721-1775).
+func calcMagicSpellResistance(damage uint32, schoolMask uint8, victimResistance uint32, casterLevel, victimLevel uint8) (resisted uint32, remainingDamage uint32) {
+	if damage == 0 || schoolMask == 0 || schoolMask&1 != 0 {
+		return 0, damage
+	}
+	if schoolMask&2 != 0 {
+		// Holy damage cannot be resisted in WotLK
+		return 0, damage
+	}
+
+	res := float64(victimResistance)
+	// Level-based resistance: 5 resistance per level difference if victim is higher level
+	if victimLevel > casterLevel {
+		res += float64(victimLevel-casterLevel) * 5.0
+	}
+
+	const bossLevel = 83
+	const bossResistanceConstant = 510.0
+	resConstant := float64(victimLevel) * 5.0
+	if victimLevel >= bossLevel {
+		resConstant = bossResistanceConstant
+	}
+	if resConstant < 5.0 {
+		resConstant = 5.0
+	}
+
+	averageResist := res / (res + resConstant)
+	if averageResist <= 0.0 {
+		return 0, damage
+	}
+	if averageResist > 1.0 {
+		averageResist = 1.0
+	}
+
+	var discreteProb [11]float64
+	if averageResist <= 0.1 {
+		discreteProb[0] = 1.0 - 7.5*averageResist
+		discreteProb[1] = 5.0 * averageResist
+		discreteProb[2] = 2.5 * averageResist
+	} else {
+		for i := 0; i < 11; i++ {
+			p := 0.5 - 2.5*math.Abs(0.1*float64(i)-averageResist)
+			if p > 0 {
+				discreteProb[i] = p
+			}
+		}
+	}
+
+	roll := rand.Float64()
+	probSum := 0.0
+	step := 0
+	for i := 0; i < 11; i++ {
+		probSum += discreteProb[i]
+		if roll < probSum {
+			step = i
+			break
+		}
+	}
+
+	resPercent := float64(step) * 0.1
+	resisted = uint32(math.Round(float64(damage) * resPercent))
+	if resisted > damage {
+		resisted = damage
+	}
+	remainingDamage = damage - resisted
+	return resisted, remainingDamage
 }
 
 func (s *Server) clearCreatureAuras(guid uint64) {
@@ -1195,19 +1294,24 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
 		dmg := aura.Amount
+		resisted := uint32(0)
 		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(ts.player.Armor), aura.CasterLevel, dmg)
+		} else if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+			resIdx := schoolMaskToResistanceIndex(uint8(aura.SchoolMask))
+			vRes := ts.player.Resistances[resIdx]
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), vRes, aura.CasterLevel, ts.player.Level)
 		}
-		if dmg < 1 {
+		if dmg < 1 && resisted == 0 {
 			dmg = 1
 		}
 		targetHealth := ts.player.Health
 		overkill := uint32(0)
-		if dmg >= targetHealth {
+		if dmg >= targetHealth && targetHealth > 0 {
 			overkill = dmg - targetHealth
 		}
 
-		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, 0, 0, false)
+		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, 0, resisted, false)
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
 			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
@@ -1332,19 +1436,24 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	switch aura.AuraType {
 	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
 		dmg := aura.Amount
+		resisted := uint32(0)
 		if aura.SchoolMask&1 != 0 && target.Armor > 0 {
 			dmg = calcArmorReducedDamage(float64(target.Armor), aura.CasterLevel, dmg)
+		} else if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
+			resIdx := schoolMaskToResistanceIndex(uint8(aura.SchoolMask))
+			vRes := target.Resistances[resIdx]
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), vRes, aura.CasterLevel, target.Level)
 		}
-		if dmg < 1 {
+		if dmg < 1 && resisted == 0 {
 			dmg = 1
 		}
 		targetHealth := target.Health
 		overkill := uint32(0)
-		if dmg >= targetHealth {
+		if dmg >= targetHealth && targetHealth > 0 {
 			overkill = dmg - targetHealth
 		}
 
-		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, 0, 0, false)
+		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, 0, resisted, false)
 		_ = s.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if s.server != nil {
 			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, s)

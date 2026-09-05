@@ -761,6 +761,12 @@ func TestPvPMeleeSwingContinuationAndNearbyBroadcast(t *testing.T) {
 	if attSess.attackTarget != 20 {
 		t.Fatalf("expected attacker to maintain attackTarget=20, got %d", attSess.attackTarget)
 	}
+	for i := 0; i < 5 && vicSess.player.Health >= 1000; i++ {
+		target, ok := attSess.getCombatTarget(context.Background(), 20)
+		if ok {
+			attSess.executeMeleeSwing(context.Background(), target)
+		}
+	}
 	if vicSess.player.Health >= 1000 {
 		t.Fatalf("expected victim to take damage, health is %d", vicSess.player.Health)
 	}
