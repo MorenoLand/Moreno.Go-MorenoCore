@@ -336,6 +336,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						amount = uint32(15 + int(s.player.Level)*3)
 					}
 				}
+				// Spell power bonus for periodic effects (TrinityCore Unit::SpellDamageBonusDone / SpellHealingBonusDone)
+				if s.player != nil && s.player.SpellPower > 0 && periodMs > 0 {
+					if eff.Aura == 3 || eff.Aura == 89 || eff.Aura == 8 || eff.Aura == 20 {
+						tickBonus := uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
+						amount += tickBonus
+					}
+				}
 				schoolMask := spell.SchoolMask
 				if schoolMask == 0 {
 					schoolMask = 1
@@ -455,6 +462,27 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 	if target.Health == 0 {
 		target.Health = 100
 	}
+
+	// Apply Spell Power bonus (TrinityCore Unit::SpellDamageBonusDone)
+	if s.player != nil && s.player.SpellPower > 0 {
+		coeff := 0.857 // standard 3.0s cast (~85.7%)
+		if s.server.Data != nil {
+			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				if spell.CastingTimeIndex > 0 {
+					if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
+						coeff = float64(ct) / 3500.0
+						if coeff > 1.0 {
+							coeff = 1.0
+						}
+					}
+				} else {
+					coeff = 1.5 / 3.5 // instant cast coefficient ~0.4286
+				}
+			}
+		}
+		damage += uint32(math.Round(float64(s.player.SpellPower) * coeff))
+	}
+
 	// Spell crit roll (5% base crit)
 	crit := rand.Float64() < 0.05
 	hitInfo := uint32(0)
@@ -600,6 +628,26 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 		if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
 			targetSess = other
 		}
+	}
+
+	// Apply Spell Power bonus to healing (TrinityCore Unit::SpellHealingBonusDone)
+	if s.player != nil && s.player.SpellPower > 0 {
+		coeff := 0.857
+		if s.server.Data != nil {
+			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				if spell.CastingTimeIndex > 0 {
+					if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
+						coeff = float64(ct) / 3500.0
+						if coeff > 1.0 {
+							coeff = 1.0
+						}
+					}
+				} else {
+					coeff = 1.5 / 3.5
+				}
+			}
+		}
+		heal += uint32(math.Round(float64(s.player.SpellPower) * coeff))
 	}
 
 	effectiveHeal := heal
