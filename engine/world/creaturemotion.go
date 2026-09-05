@@ -49,6 +49,10 @@ type creatureMotion struct {
 	FlagsExtra uint32
 	AttackTime uint32
 
+	Armor     uint32
+	MinDamage float32
+	MaxDamage float32
+
 	Health    uint32
 	MaxHealth uint32
 
@@ -115,18 +119,30 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 	key := creatureWorldGUID(guid, entry)
 	motion := s.creatureMotion[key]
 	if motion == nil || motion.Entry != entry {
+		st := s.loadCreatureStats(ctx, entry)
 		motion = &creatureMotion{
-			GUID:  key,
-			Entry: entry,
-			Map:   mapID,
-			HomeX: x, HomeY: y, HomeZ: z,
-			X: x, Y: y, Z: z,
-			Speed:     walkSpeed,
-			RunSpeed:  creatureBaseRunSpeed,
-			MoveType:  moveType,
-			Wander:    wander,
-			Health:    100,
-			MaxHealth: 100,
+			GUID:       key,
+			Entry:      entry,
+			Map:        mapID,
+			HomeX:      x,
+			HomeY:      y,
+			HomeZ:      z,
+			X:          x,
+			Y:          y,
+			Z:          z,
+			Speed:      walkSpeed,
+			RunSpeed:   creatureBaseRunSpeed,
+			MoveType:   moveType,
+			Wander:     wander,
+			Health:     st.Health,
+			MaxHealth:  st.MaxHealth,
+			Armor:      st.Armor,
+			MinDamage:  st.MinDamage,
+			MaxDamage:  st.MaxDamage,
+			Level:      st.Level,
+			AttackTime: st.AttackTime,
+			UnitFlags:  st.UnitFlags,
+			FlagsExtra: st.FlagsExtra,
 		}
 		if walkSpeed <= 0 {
 			motion.Speed = creatureBaseWalkSpeed
@@ -162,25 +178,36 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 	}
 	if motion == nil && s.WorldStore != nil && s.WorldStore.DB != nil {
 		var x, y, z float64
-		var mapID, faction, level int64
+		var mapID, faction int64
 		var name, scriptName string
 		if err := s.WorldStore.DB.QueryRowContext(ctx, `SELECT c.map, c.position_x, c.position_y, c.position_z,
-			COALESCE(t.faction, 0), COALESCE(t.maxlevel, 1), COALESCE(t.name, ''), COALESCE(t.ScriptName, '')
+			COALESCE(t.faction, 0), COALESCE(t.name, ''), COALESCE(t.ScriptName, '')
 			FROM creature AS c
 			JOIN creature_template AS t ON t.entry = c.id
-			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &faction, &level, &name, &scriptName); err == nil {
+			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &faction, &name, &scriptName); err == nil {
+			st := s.loadCreatureStats(ctx, entry)
 			motion = &creatureMotion{
-				GUID:  creatureGUID,
-				Entry: entry,
-				Map:   uint32(mapID),
-				HomeX: float32(x), HomeY: float32(y), HomeZ: float32(z),
-				X: float32(x), Y: float32(y), Z: float32(z),
+				GUID:       creatureGUID,
+				Entry:      entry,
+				Map:        uint32(mapID),
+				HomeX:      float32(x),
+				HomeY:      float32(y),
+				HomeZ:      float32(z),
+				X:          float32(x),
+				Y:          float32(y),
+				Z:          float32(z),
 				Speed:      creatureBaseWalkSpeed,
 				RunSpeed:   creatureBaseRunSpeed,
 				Faction:    uint32(faction),
-				Level:      uint32(level),
-				Health:     uint32(math.Max(float64(level)*30, 42)),
-				MaxHealth:  uint32(math.Max(float64(level)*30, 42)),
+				Level:      st.Level,
+				Health:     st.Health,
+				MaxHealth:  st.MaxHealth,
+				Armor:      st.Armor,
+				MinDamage:  st.MinDamage,
+				MaxDamage:  st.MaxDamage,
+				AttackTime: st.AttackTime,
+				UnitFlags:  st.UnitFlags,
+				FlagsExtra: st.FlagsExtra,
 				Name:       name,
 				ScriptName: scriptName,
 			}
@@ -527,31 +554,35 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			attackTime = 2 * time.Second
 		}
 		if motion.LastAttack.IsZero() || now.Sub(motion.LastAttack) >= attackTime {
-			lvl := float64(motion.Level)
-			if lvl < 1 {
-				lvl = 1
-			}
-			attSpeed := float64(motion.AttackTime) / 1000.0
-			if attSpeed <= 0 {
-				attSpeed = 2.0
-			}
-			// TrinityCore StatSystem.cpp:1122: lvl * 0.75 * att_speed to lvl * 1.25 * att_speed
-			minDmg := lvl * 0.75 * attSpeed
-			maxDmg := lvl * 1.25 * attSpeed
-			if minDmg < 1 {
-				minDmg = 1
-			}
-			if maxDmg < minDmg {
-				maxDmg = minDmg + 1
-			}
-			damage := uint32(minDmg + rand.Float64()*(maxDmg-minDmg))
-			if target.Sess.player.Armor > 0 {
-				armor := float64(target.Sess.player.Armor)
-				reduction := armor / (armor + 400.0 + 85.0*lvl)
-				if reduction > 0.75 {
-					reduction = 0.75
+			var damage uint32
+			if motion.MinDamage > 0 && motion.MaxDamage >= motion.MinDamage {
+				variance := float64(motion.MaxDamage - motion.MinDamage)
+				baseDmg := float64(motion.MinDamage)
+				if variance > 0 {
+					baseDmg += rand.Float64() * variance
 				}
-				damage = uint32(float64(damage) * (1.0 - reduction))
+				damage = uint32(baseDmg)
+			} else {
+				lvl := float64(motion.Level)
+				if lvl < 1 {
+					lvl = 1
+				}
+				attSpeed := float64(motion.AttackTime) / 1000.0
+				if attSpeed <= 0 {
+					attSpeed = 2.0
+				}
+				minDmg := lvl * 0.75 * attSpeed
+				maxDmg := lvl * 1.25 * attSpeed
+				if minDmg < 1 {
+					minDmg = 1
+				}
+				if maxDmg < minDmg {
+					maxDmg = minDmg + 1
+				}
+				damage = uint32(minDmg + rand.Float64()*(maxDmg-minDmg))
+			}
+			if target.Sess.player.Armor > 0 {
+				damage = calcArmorReducedDamage(float64(target.Sess.player.Armor), uint8(motion.Level), damage)
 			}
 			if damage < 1 {
 				damage = 1
