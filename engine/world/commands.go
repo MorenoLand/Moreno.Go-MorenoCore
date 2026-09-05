@@ -562,9 +562,9 @@ func (s *session) handleCmdLearn(ctx context.Context, args []string) {
 			"INSERT INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)",
 			s.playerGUID, spellID)
 	}
-	pkt := protocol.NewBuffer(8)
+	pkt := protocol.NewBuffer(6)
 	pkt.WriteU32(uint32(spellID))
-	pkt.WriteU32(0)
+	pkt.WriteU16(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_LEARNED_SPELL), pkt.Bytes(), true)
 	s.sendSysMessage(fmt.Sprintf("Learned spell %d.", spellID))
 }

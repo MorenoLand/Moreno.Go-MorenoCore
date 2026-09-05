@@ -1020,4 +1020,110 @@ func TestCreatureAggroAttackStartAndEvadeParity(t *testing.T) {
 	}
 }
 
+func TestCreatureClassLevelStatsAndArmorScaling(t *testing.T) {
+	// 1. Test calcArmorReducedDamage formula
+	// Zero armor = no reduction
+	if dmg := calcArmorReducedDamage(0, 80, 1000); dmg != 1000 {
+		t.Fatalf("expected 1000 dmg against 0 armor, got %d", dmg)
+	}
+	// Level 80 attacker against 10673 armor (The Lich King / Onyxia)
+	// Reduction is ~41.2%, so 1000 dmg becomes ~588
+	dmg80 := calcArmorReducedDamage(10673, 80, 1000)
+	if dmg80 < 580 || dmg80 > 595 {
+		t.Fatalf("expected ~588 dmg against 10673 armor at lvl 80, got %d", dmg80)
+	}
+	// Extreme armor should cap at 75% reduction (1000 -> 250)
+	dmgCapped := calcArmorReducedDamage(500000, 80, 1000)
+	if dmgCapped != 250 {
+		t.Fatalf("expected capped 250 dmg against extreme armor, got %d", dmgCapped)
+	}
+
+	// 2. Test loadCreatureStats with creature_template and creature_classlevelstats
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		`CREATE TABLE creature_template (
+			entry INTEGER PRIMARY KEY,
+			maxlevel INTEGER NOT NULL DEFAULT 1,
+			unit_class INTEGER NOT NULL DEFAULT 1,
+			exp INTEGER NOT NULL DEFAULT 0,
+			BaseAttackTime INTEGER NOT NULL DEFAULT 2000,
+			HealthModifier REAL NOT NULL DEFAULT 1.0,
+			ArmorModifier REAL NOT NULL DEFAULT 1.0,
+			DamageModifier REAL NOT NULL DEFAULT 1.0,
+			unit_flags INTEGER NOT NULL DEFAULT 0,
+			flags_extra INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE creature_classlevelstats (
+			level INTEGER NOT NULL,
+			class INTEGER NOT NULL,
+			basehp0 INTEGER NOT NULL,
+			basehp1 INTEGER NOT NULL,
+			basehp2 INTEGER NOT NULL,
+			basearmor INTEGER NOT NULL,
+			damage_base REAL NOT NULL,
+			damage_exp1 REAL NOT NULL,
+			damage_exp2 REAL NOT NULL,
+			PRIMARY KEY (level, class)
+		)`,
+		// Insert Hogger (entry 448, lvl 11, class 1, exp 0, 2x HP, 2x Armor, 1.5x Dmg)
+		`INSERT INTO creature_template VALUES (448, 11, 1, 0, 2000, 2.0, 2.0, 1.5, 0, 0)`,
+		`INSERT INTO creature_classlevelstats VALUES (11, 1, 333, 500, 700, 264, 8.0, 15.0, 25.0)`,
+		// Insert Lich King (entry 36597, lvl 83, class 1, exp 2, 1250x HP, 1x Armor, 139x Dmg)
+		`INSERT INTO creature_template VALUES (36597, 83, 1, 2, 1500, 1250.0, 1.0, 139.0, 0, 0)`,
+		`INSERT INTO creature_classlevelstats VALUES (83, 1, 5808, 10019, 13945, 10673, 49.2375, 136.562, 177.074)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	worldStore := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{WorldStore: worldStore, creatureStatsCache: make(map[uint32]creatureStats)}
+	ctx := context.Background()
+
+	// Hogger stats
+	hogger := srv.loadCreatureStats(ctx, 448)
+	if hogger.Level != 11 {
+		t.Fatalf("expected Hogger level 11, got %d", hogger.Level)
+	}
+	if hogger.Health != 666 { // 333 * 2.0
+		t.Fatalf("expected Hogger HP 666, got %d", hogger.Health)
+	}
+	if hogger.Armor != 528 { // 264 * 2.0
+		t.Fatalf("expected Hogger Armor 528, got %d", hogger.Armor)
+	}
+	if hogger.MinDamage != 12.0 { // 8.0 * 1.5
+		t.Fatalf("expected Hogger MinDamage 12.0, got %f", hogger.MinDamage)
+	}
+	if hogger.MaxDamage != 18.0 { // 12.0 * 1.5
+		t.Fatalf("expected Hogger MaxDamage 18.0, got %f", hogger.MaxDamage)
+	}
+
+	// Lich King stats (17.43M HP, 10673 Armor)
+	lk := srv.loadCreatureStats(ctx, 36597)
+	if lk.Health != 17431250 { // 13945 * 1250
+		t.Fatalf("expected Lich King HP 17431250, got %d", lk.Health)
+	}
+	if lk.Armor != 10673 {
+		t.Fatalf("expected Lich King Armor 10673, got %d", lk.Armor)
+	}
+	expectedLKDmg := float32(177.074 * 139.0)
+	if lk.MinDamage != expectedLKDmg {
+		t.Fatalf("expected Lich King MinDamage %f, got %f", expectedLKDmg, lk.MinDamage)
+	}
+
+	// Cache verification
+	hoggerCached := srv.loadCreatureStats(ctx, 448)
+	if hoggerCached.Health != 666 {
+		t.Fatalf("expected cached Hogger HP 666, got %d", hoggerCached.Health)
+	}
+}
+
+
 

@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -203,6 +204,96 @@ func TestLogoutSitRootStunAndCancel(t *testing.T) {
 	}
 	if sess.player.UnitFlags&unitFlagStunned != 0 {
 		t.Fatalf("expected player UnitFlags to clear UNIT_FLAG_STUNNED, got %x", sess.player.UnitFlags)
+	}
+}
+
+func TestPlayerStartAllSpellsConfigGating(t *testing.T) {
+	cdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cdb.Close()
+	wdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wdb.Close()
+
+	if _, err := cdb.Exec(`CREATE TABLE character_spell (
+		guid INTEGER NOT NULL,
+		spell INTEGER NOT NULL,
+		active INTEGER NOT NULL DEFAULT 1,
+		disabled INTEGER NOT NULL DEFAULT 0,
+		PRIMARY KEY (guid, spell)
+	)`); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, stmt := range []string{
+		`CREATE TABLE playercreateinfo_spell_custom (racemask INTEGER NOT NULL, classmask INTEGER NOT NULL, Spell INTEGER NOT NULL, Note TEXT)`,
+		`CREATE TABLE playercreateinfo_action (race INTEGER NOT NULL, class INTEGER NOT NULL, button INTEGER NOT NULL, action INTEGER NOT NULL, type INTEGER NOT NULL)`,
+		`CREATE TABLE playercreateinfo_cast_spell (raceMask INTEGER NOT NULL, classMask INTEGER NOT NULL, spell INTEGER NOT NULL, note TEXT)`,
+		`INSERT INTO playercreateinfo_spell_custom VALUES (1, 1, 12294, 'Mortal Strike Rank 1')`,
+	} {
+		if _, err := wdb.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: cdb}
+	wStore := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: wdb}
+
+	ctx := context.Background()
+
+	// 1. When PlayerStartAllSpells = false (default TrinityCore parity)
+	srvDefault := &Server{
+		CharactersStore: cStore,
+		WorldStore:      wStore,
+		Config:          config.Config{PlayerStartAllSpells: false},
+	}
+	sessDefault := &session{server: srvDefault, playerGUID: 100}
+	sessDefault.createStarterSpells(ctx, 100, 1, 1)
+	var count int
+	_ = cdb.QueryRow("SELECT COUNT(*) FROM character_spell WHERE guid = 100 AND spell = 12294").Scan(&count)
+	if count != 0 {
+		t.Fatalf("expected custom trainer spell 12294 NOT to be learned by default, got count=%d", count)
+	}
+	spells, err := sessDefault.loadLearnedSpells(ctx, 100, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sp := range spells {
+		if sp.ID == 12294 {
+			t.Fatalf("expected custom trainer spell 12294 NOT in loaded spells with PlayerStartAllSpells=false")
+		}
+	}
+
+	// 2. When PlayerStartAllSpells = true (optional full spell learning mode)
+	srvAll := &Server{
+		CharactersStore: cStore,
+		WorldStore:      wStore,
+		Config:          config.Config{PlayerStartAllSpells: true},
+	}
+	sessAll := &session{server: srvAll, playerGUID: 200}
+	sessAll.createStarterSpells(ctx, 200, 1, 1)
+	countAll := 0
+	_ = cdb.QueryRow("SELECT COUNT(*) FROM character_spell WHERE guid = 200 AND spell = 12294").Scan(&countAll)
+	if countAll != 1 {
+		t.Fatalf("expected custom trainer spell 12294 to be learned when PlayerStartAllSpells=true, got count=%d", countAll)
+	}
+	spellsAll, err := sessAll.loadLearnedSpells(ctx, 200, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, sp := range spellsAll {
+		if sp.ID == 12294 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected custom trainer spell 12294 in loaded spells with PlayerStartAllSpells=true")
 	}
 }
 
