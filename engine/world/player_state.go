@@ -1347,13 +1347,15 @@ func (s *session) sendItemCreate(itemGUID uint64, itemEntry, count uint32, bag, 
 	block := buildItemCreateBlock(fullGUID, itemEntry, count, s.playerGUID)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(block)
-	fields := map[int]uint32{
-		324 + int(slot)*2:     uint32(fullGUID),
-		324 + int(slot)*2 + 1: uint32(fullGUID >> 32),
-	}
-	valBlock := buildPlayerValuesBlock(s.playerGUID, fields)
-	if valBlock != nil {
-		updates.AddUpdateBlock(valBlock)
+	if (bag == 0 || bag == 255) && slot < 150 {
+		fields := map[int]uint32{
+			324 + int(slot)*2:     uint32(fullGUID),
+			324 + int(slot)*2 + 1: uint32(fullGUID >> 32),
+		}
+		valBlock := buildPlayerValuesBlock(s.playerGUID, fields)
+		if valBlock != nil {
+			updates.AddUpdateBlock(valBlock)
+		}
 	}
 	packet, err := updates.BuildPacket(0)
 	if err != nil {

@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -1247,7 +1248,66 @@ func (s *session) handleAutoStoreBagItem(ctx context.Context, payload []byte) bo
 	return true
 }
 
-func (s *session) freeInventorySlot(ctx context.Context, bagKey int64) (uint8, bool) {
+// inventoryStoreResult contains the outcome of an item storage or stack operation.
+type inventoryStoreResult struct {
+	BagKey         int64
+	ClientBag      uint8
+	Slot           uint8
+	ItemGUID       uint64
+	IsStack        bool
+	NewCount       uint32
+	InventoryCount uint32
+}
+
+var errInventoryFull = errors.New("inventory is full")
+
+type equippedBagInfo struct {
+	slot  uint8
+	guid  int64
+	slots int64
+}
+
+func (s *session) getEquippedBags(ctx context.Context, playerGUID uint64) []equippedBagInfo {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil
+	}
+	cdb := s.server.CharactersStore.DB
+	wdb := s.server.WorldStore.DB
+	rows, err := cdb.QueryContext(ctx, "SELECT slot, item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot >= 19 AND slot <= 22 AND item != 0 ORDER BY slot", playerGUID)
+	if err != nil {
+		return nil
+	}
+	type rawBag struct {
+		slot uint8
+		guid int64
+	}
+	var rawBags []rawBag
+	for rows.Next() {
+		var sl uint8
+		var itemGUID int64
+		if err := rows.Scan(&sl, &itemGUID); err == nil && itemGUID > 0 {
+			rawBags = append(rawBags, rawBag{slot: sl, guid: itemGUID})
+		}
+	}
+	rows.Close()
+
+	var bags []equippedBagInfo
+	for _, rb := range rawBags {
+		var slots int64
+		if wdb != nil {
+			err := wdb.QueryRowContext(ctx, `SELECT COALESCE(ContainerSlots, 0) FROM item_template WHERE entry = (SELECT itemEntry FROM item_instance WHERE guid = ?)`, rb.guid).Scan(&slots)
+			if err != nil && (isMissingColumn(err) || missingTable(err)) {
+				slots = 0
+			}
+		}
+		if slots > 0 {
+			bags = append(bags, equippedBagInfo{slot: rb.slot, guid: rb.guid, slots: slots})
+		}
+	}
+	return bags
+}
+
+func (s *session) freeInventorySlotForPlayer(ctx context.Context, playerGUID uint64, bagKey int64) (uint8, bool) {
 	first, last := int64(invSlotItemStart), int64(invSlotItemEnd-1)
 	if bagKey != 0 {
 		first, last = 0, 35
@@ -1262,7 +1322,10 @@ func (s *session) freeInventorySlot(ctx context.Context, bagKey int64) (uint8, b
 			last = slots - 1
 		}
 	}
-	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = ?", s.playerGUID, bagKey)
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0, false
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = ?", playerGUID, bagKey)
 	if err != nil {
 		return 0, false
 	}
@@ -1280,6 +1343,205 @@ func (s *session) freeInventorySlot(ctx context.Context, bagKey int64) (uint8, b
 		}
 	}
 	return 0, false
+}
+
+func (s *session) freeInventorySlot(ctx context.Context, bagKey int64) (uint8, bool) {
+	return s.freeInventorySlotForPlayer(ctx, s.playerGUID, bagKey)
+}
+
+func (s *session) findFreeInventorySlot(ctx context.Context, playerGUID uint64) (bagKey int64, clientBag uint8, slot uint8, ok bool) {
+	// 1. Check backpack (bagKey = 0, clientBag = 255, slots 23..38)
+	if slot, ok := s.freeInventorySlotForPlayer(ctx, playerGUID, 0); ok {
+		return 0, 255, slot, true
+	}
+	// 2. Check equipped bags (slots 19..22)
+	bags := s.getEquippedBags(ctx, playerGUID)
+	for _, b := range bags {
+		if freeSlot, ok := s.freeInventorySlotForPlayer(ctx, playerGUID, b.guid); ok {
+			return b.guid, b.slot, freeSlot, true
+		}
+	}
+	return 0, 0, 0, false
+}
+
+func (s *session) findStackableInventorySlot(ctx context.Context, playerGUID uint64, itemEntry uint32) (bagKey int64, clientBag uint8, slot uint8, itemGUID uint64, curCount uint32, maxStack uint32, ok bool) {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	var stackable int64
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(stackable, 1) FROM item_template WHERE entry = ?", itemEntry).Scan(&stackable)
+	if err != nil || stackable <= 1 {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	cdb := s.server.CharactersStore.DB
+	// 1. Check backpack (bag = 0, slots 23..38)
+	var bpGUID, bpCount int64
+	var bpSlot uint8
+	err = cdb.QueryRowContext(ctx, `SELECT ci.slot, ci.item, ii.count
+		FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot >= 23 AND ci.slot <= 38 AND ii.itemEntry = ? AND ii.count < ?
+		ORDER BY ci.slot ASC LIMIT 1`, playerGUID, itemEntry, stackable).Scan(&bpSlot, &bpGUID, &bpCount)
+	if err == nil && bpGUID > 0 {
+		return 0, 255, bpSlot, uint64(bpGUID), uint32(bpCount), uint32(stackable), true
+	}
+	// 2. Check equipped bags (slots 19..22)
+	bags := s.getEquippedBags(ctx, playerGUID)
+	for _, b := range bags {
+		var bItemGUID, bCount int64
+		var bSlot uint8
+		bErr := cdb.QueryRowContext(ctx, `SELECT ci.slot, ci.item, ii.count
+			FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? AND ci.bag = ? AND ii.itemEntry = ? AND ii.count < ?
+			ORDER BY ci.slot ASC LIMIT 1`, playerGUID, b.guid, itemEntry, stackable).Scan(&bSlot, &bItemGUID, &bCount)
+		if bErr == nil && bItemGUID > 0 {
+			return b.guid, b.slot, bSlot, uint64(bItemGUID), uint32(bCount), uint32(stackable), true
+		}
+	}
+	return 0, 0, 0, 0, 0, 0, false
+}
+
+func (s *session) storeOrStackItem(ctx context.Context, playerGUID uint64, itemEntry, count uint32) (*inventoryStoreResult, error) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil, errors.New("characters database not available")
+	}
+	cdb := s.server.CharactersStore.DB
+	if count == 0 {
+		count = 1
+	}
+
+	// 1. Check if stackable and can stack onto an existing stack
+	bagKey, clientBag, slot, itemGUID, curCount, maxStack, canStack := s.findStackableInventorySlot(ctx, playerGUID, itemEntry)
+	if canStack && curCount < maxStack {
+		space := maxStack - curCount
+		if count <= space {
+			newCount := curCount + count
+			if _, err := cdb.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", newCount, itemGUID); err != nil {
+				return nil, err
+			}
+			var totalCount int64
+			_ = cdb.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+				JOIN item_instance AS ii ON ii.guid = ci.item
+				WHERE ci.guid = ? AND ii.itemEntry = ?`, playerGUID, itemEntry).Scan(&totalCount)
+
+			return &inventoryStoreResult{
+				BagKey:         bagKey,
+				ClientBag:      clientBag,
+				Slot:           slot,
+				ItemGUID:       itemGUID,
+				IsStack:        true,
+				NewCount:       newCount,
+				InventoryCount: uint32(totalCount),
+			}, nil
+		} else {
+			// Find free slot for remainder first to ensure everything fits before modifying
+			freeBagKey, freeClientBag, freeSlot, ok := s.findFreeInventorySlot(ctx, playerGUID)
+			if !ok {
+				return nil, errInventoryFull
+			}
+			if _, err := cdb.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", maxStack, itemGUID); err != nil {
+				return nil, err
+			}
+			remainder := count - space
+			var nextGUID int64
+			_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
+			if nextGUID <= 0 {
+				nextGUID = 1
+			}
+			tx, err := cdb.BeginTx(ctx, nil)
+			if err != nil {
+				return nil, err
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO item_instance
+				(guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text)
+				VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 100, 0, '')`,
+				nextGUID, itemEntry, playerGUID, remainder); err != nil {
+				_ = tx.Rollback()
+				return nil, err
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO character_inventory
+				(guid, bag, slot, item) VALUES (?, ?, ?, ?)`,
+				playerGUID, freeBagKey, freeSlot, nextGUID); err != nil {
+				_ = tx.Rollback()
+				return nil, err
+			}
+			if err = tx.Commit(); err != nil {
+				return nil, err
+			}
+			var totalCount int64
+			_ = cdb.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+				JOIN item_instance AS ii ON ii.guid = ci.item
+				WHERE ci.guid = ? AND ii.itemEntry = ?`, playerGUID, itemEntry).Scan(&totalCount)
+
+			return &inventoryStoreResult{
+				BagKey:         freeBagKey,
+				ClientBag:      freeClientBag,
+				Slot:           freeSlot,
+				ItemGUID:       uint64(nextGUID),
+				IsStack:        false,
+				NewCount:       remainder,
+				InventoryCount: uint32(totalCount),
+			}, nil
+		}
+	}
+
+	// 2. Find a free slot in backpack or equipped bags
+	freeBagKey, freeClientBag, freeSlot, ok := s.findFreeInventorySlot(ctx, playerGUID)
+	if !ok {
+		return nil, errInventoryFull
+	}
+
+	var nextGUID int64
+	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
+	if nextGUID <= 0 {
+		nextGUID = 1
+	}
+
+	var maxDurability int64 = 100
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var md int64
+		err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MaxDurability, 0) FROM item_template WHERE entry = ?", itemEntry).Scan(&md)
+		if err == nil && md > 0 {
+			maxDurability = md
+		}
+	}
+
+	tx, err := cdb.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO item_instance
+		(guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text)
+		VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, ?, 0, '')`,
+		nextGUID, itemEntry, playerGUID, count, maxDurability); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT INTO character_inventory
+		(guid, bag, slot, item) VALUES (?, ?, ?, ?)`,
+		playerGUID, freeBagKey, freeSlot, nextGUID); err != nil {
+		_ = tx.Rollback()
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	var totalCount int64
+	_ = cdb.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci
+		JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ii.itemEntry = ?`, playerGUID, itemEntry).Scan(&totalCount)
+
+	return &inventoryStoreResult{
+		BagKey:         freeBagKey,
+		ClientBag:      freeClientBag,
+		Slot:           freeSlot,
+		ItemGUID:       uint64(nextGUID),
+		IsStack:        false,
+		NewCount:       count,
+		InventoryCount: uint32(totalCount),
+	}, nil
 }
 
 // handleOpenItem processes CMSG_OPEN_ITEM (0x0AC).

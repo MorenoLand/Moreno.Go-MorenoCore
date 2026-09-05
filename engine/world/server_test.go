@@ -176,6 +176,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if instanceOpcode != uint16(protocol.OpcodeSMSG_INSTANCE_DIFFICULTY) || len(instancePayload) != 8 {
 		t.Fatalf("instance difficulty opcode=%x payload=%d", instanceOpcode, len(instancePayload))
 	}
+	bindOpcode, bindPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindOpcode != uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE) || len(bindPayload) != 20 {
+		t.Fatalf("bind point update opcode=%x payload=%d", bindOpcode, len(bindPayload))
+	}
 	initialSpellsOpcode, initialSpellsPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)

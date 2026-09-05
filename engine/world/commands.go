@@ -523,22 +523,18 @@ func (s *session) handleCmdAddItem(ctx context.Context, args []string) {
 		itemName = fmt.Sprintf("Item #%d", itemID)
 	}
 
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		var nextGUID uint32
-		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
-		if nextGUID == 0 {
-			nextGUID = 1
-		}
-		slot := uint8(23)
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
-			"INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, 0, ?, 0, '', 0, '', 0, 0, 0, NULL)",
-			nextGUID, itemID, s.playerGUID, count)
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
-			"INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)",
-			s.playerGUID, slot, nextGUID)
+	res, err := s.storeOrStackItem(ctx, s.playerGUID, uint32(itemID), count)
+	if err != nil {
+		s.sendSysMessage("Inventory is full.")
+		return
 	}
-
-	push := buildItemPushResult(s.playerGUID, 0, 23, uint32(itemID), count, count, false)
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
+	pushSlot := uint32(res.Slot)
+	if res.IsStack {
+		pushSlot = 0xFFFFFFFF
+	}
+	push := buildItemPushResult(s.playerGUID, res.ClientBag, pushSlot, uint32(itemID), count, res.InventoryCount, res.IsStack)
 	_ = s.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), push, true)
 	s.sendSysMessage(fmt.Sprintf("Added item %s [%d] x%d to inventory.", itemName, itemID, count))
 }

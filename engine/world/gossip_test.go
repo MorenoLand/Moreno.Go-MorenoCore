@@ -212,3 +212,98 @@ func TestGossipSpecialOptionsAndServices(t *testing.T) {
 	}
 }
 
+func TestBinderActivateParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, homebind_map INTEGER, homebind_zone INTEGER, homebind_x REAL, homebind_y REAL, homebind_z REAL)",
+		"INSERT INTO characters VALUES (1, 0, 0, 0.0, 0.0, 0.0)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{CharactersStore: store, WorldStore: store, Config: config.Default()}
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   1,
+		player: &playerState{
+			GUID: 1,
+			Map:  0,
+			Zone: 1519,
+			X:    -8867.0,
+			Y:    673.0,
+			Z:    97.0,
+		},
+	}
+
+	binderGUID := uint64(55555) | (uint64(0xF130) << 48)
+	bindBuf := protocol.NewBuffer(8)
+	bindBuf.WriteU64(binderGUID)
+
+	go func() {
+		sess.handleBinderActivate(context.Background(), bindBuf.Bytes())
+	}()
+
+	// 1. SMSG_SPELL_GO (spell 3286)
+	op1, _, err := readServerFrame(clientConn, nil)
+	if err != nil || op1 != uint16(protocol.OpcodeSMSG_SPELL_GO) {
+		t.Fatalf("expected SMSG_SPELL_GO (0x%x), got op=0x%x err=%v", protocol.OpcodeSMSG_SPELL_GO, op1, err)
+	}
+
+	// 2. SMSG_BIND_POINT_UPDATE (20 bytes: X, Y, Z, Map, Area)
+	op2, data2, err := readServerFrame(clientConn, nil)
+	if err != nil || op2 != uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE) || len(data2) != 20 {
+		t.Fatalf("expected SMSG_BIND_POINT_UPDATE (0x%x) len 20, got op=0x%x len=%d err=%v", protocol.OpcodeSMSG_BIND_POINT_UPDATE, op2, len(data2), err)
+	}
+
+	// 3. SMSG_PLAYER_BOUND (12 bytes: BinderGUID, AreaID)
+	op3, data3, err := readServerFrame(clientConn, nil)
+	if err != nil || op3 != uint16(protocol.OpcodeSMSG_PLAYER_BOUND) || len(data3) != 12 {
+		t.Fatalf("expected SMSG_PLAYER_BOUND (0x%x) len 12, got op=0x%x len=%d err=%v", protocol.OpcodeSMSG_PLAYER_BOUND, op3, len(data3), err)
+	}
+	r3 := protocol.NewReader(data3)
+	bg, _ := r3.ReadU64()
+	area, _ := r3.ReadU32()
+	if bg != binderGUID || area != 1519 {
+		t.Fatalf("expected binder %x area 1519, got binder %x area %d", binderGUID, bg, area)
+	}
+
+	// 4. SMSG_TRAINER_BUY_SUCCEEDED (12 bytes)
+	op4, data4, err := readServerFrame(clientConn, nil)
+	if err != nil || op4 != uint16(protocol.OpcodeSMSG_TRAINER_BUY_SUCCEEDED) || len(data4) != 12 {
+		t.Fatalf("expected SMSG_TRAINER_BUY_SUCCEEDED (0x%x), got op=0x%x err=%v", protocol.OpcodeSMSG_TRAINER_BUY_SUCCEEDED, op4, err)
+	}
+
+	// 5. SMSG_GOSSIP_COMPLETE
+	op5, _, err := readServerFrame(clientConn, nil)
+	if err != nil || op5 != uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE) {
+		t.Fatalf("expected SMSG_GOSSIP_COMPLETE (0x%x), got op=0x%x err=%v", protocol.OpcodeSMSG_GOSSIP_COMPLETE, op5, err)
+	}
+
+	// Verify DB state
+	var dbMap, dbZone int
+	var dbX, dbY, dbZ float64
+	err = db.QueryRow("SELECT homebind_map, homebind_zone, homebind_x, homebind_y, homebind_z FROM characters WHERE guid = 1").Scan(&dbMap, &dbZone, &dbX, &dbY, &dbZ)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dbMap != 0 || dbZone != 1519 || dbX != -8867.0 || dbY != 673.0 || dbZ != 97.0 {
+		t.Fatalf("homebind mismatch in db: map=%d zone=%d x=%f y=%f z=%f", dbMap, dbZone, dbX, dbY, dbZ)
+	}
+}
+
+

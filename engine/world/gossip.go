@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -551,7 +552,8 @@ func objectUint64Field(object *scripting.Object, name string) (uint64, bool) {
 }
 
 // handleBinderActivate processes CMSG_BINDER_ACTIVATE (0x1B5).
-// Reference: WorldSession::HandleBinderActivateOpcode (NPCHandler.cpp:247).
+// Reference: WorldSession::HandleBinderActivateOpcode (NPCHandler.cpp:247-286),
+// Spell::EffectBind (SpellEffects.cpp:5710-5725), Player::SendBindPointUpdate (Player.cpp:17359-17366).
 func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return false
@@ -574,7 +576,22 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 			s.player.HomebindMap, s.player.HomebindZone, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ, s.playerGUID)
 	}
 
-	// Send trainer buy succeeded with homebind spell 3286
+	// 1. Send visual cast of homebind spell 3286 from NPC to player (TC: npc->CastSpell(_player, 3286, true))
+	castTimeStamp := uint32(time.Now().UnixMilli())
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+	goPkt := protocol.BuildSpellGo(npcGUID, s.playerGUID, 1, 3286, spellCastFlagGo, castTimeStamp, []uint64{s.playerGUID}, nil, target)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+	}
+
+	// 2. SMSG_BIND_POINT_UPDATE (0x155, 20 bytes: X, Y, Z, Map, Area)
+	_ = s.write(uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE), buildBindPointUpdate(s.player), true)
+
+	// 3. SMSG_PLAYER_BOUND (0x158, 12 bytes: BinderGUID, AreaID) -> triggers client yellow message "You are now bound to..."
+	_ = s.write(uint16(protocol.OpcodeSMSG_PLAYER_BOUND), buildPlayerBound(npcGUID, s.player.HomebindZone), true)
+
+	// 4. Send trainer buy succeeded with homebind spell 3286
 	res := protocol.NewBuffer(12)
 	res.WriteU64(npcGUID)
 	res.WriteU32(3286)
@@ -583,4 +600,33 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 	s.sendPlayerUpdate()
 	s.debug("homebind set", "account", s.accountName, "npc", npcGUID, "map", s.player.HomebindMap, "zone", s.player.HomebindZone)
 	return true
+}
+
+// buildBindPointUpdate constructs SMSG_BIND_POINT_UPDATE (0x155, 20 bytes).
+// Reference: WorldPackets::Misc::BindPointUpdate (MiscPackets.cpp:20-27).
+func buildBindPointUpdate(state *playerState) []byte {
+	buf := protocol.NewBuffer(20)
+	if state != nil {
+		buf.WriteF32(state.HomebindX)
+		buf.WriteF32(state.HomebindY)
+		buf.WriteF32(state.HomebindZ)
+		buf.WriteU32(state.HomebindMap)
+		buf.WriteU32(state.HomebindZone)
+	} else {
+		buf.WriteF32(0)
+		buf.WriteF32(0)
+		buf.WriteF32(0)
+		buf.WriteU32(0)
+		buf.WriteU32(0)
+	}
+	return buf.Bytes()
+}
+
+// buildPlayerBound constructs SMSG_PLAYER_BOUND (0x158, 12 bytes).
+// Reference: WorldPackets::Misc::PlayerBound (MiscPackets.cpp:29-35).
+func buildPlayerBound(binderGUID uint64, areaID uint32) []byte {
+	buf := protocol.NewBuffer(12)
+	buf.WriteU64(binderGUID)
+	buf.WriteU32(areaID)
+	return buf.Bytes()
 }

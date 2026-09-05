@@ -294,8 +294,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.applyAura(spellID)
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
-			case 5: // SPELL_EFFECT_TELEPORT_UNITS (e.g. Hearthstone)
-				if spellID == 8690 && s.player != nil {
+			case 5: // SPELL_EFFECT_TELEPORT_UNITS (e.g. Hearthstone 8690, Astral Recall 556)
+				if (spellID == 8690 || spellID == 556) && s.player != nil {
 					hbMap, hbX, hbY, hbZ := s.player.HomebindMap, s.player.HomebindX, s.player.HomebindY, s.player.HomebindZ
 					if hbX == 0 && hbY == 0 && hbZ == 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 						_ = s.server.WorldStore.DB.QueryRowContext(effCtx, "SELECT map, position_x, position_y, position_z FROM playercreateinfo WHERE race = ? AND class = ? LIMIT 1", s.player.Race, s.player.Class).Scan(&hbMap, &hbX, &hbY, &hbZ)
