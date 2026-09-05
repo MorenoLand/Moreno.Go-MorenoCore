@@ -75,6 +75,7 @@ type Server struct {
 	lastSpiritWave    time.Time
 	spiritReviveQueue map[uint64]uint64 // playerGUID -> spiritGuideGUID
 	creatureTextMgr   *creatureTextMgr
+	wardenCheckMgr    *wardenCheckMgr
 }
 
 type session struct {
@@ -151,6 +152,7 @@ type session struct {
 	pendingBindTimer      uint32
 	sharingQuestID        uint32
 	sharingQuestSender    uint64
+	warden                *wardenSession
 }
 
 type activeCastState struct {
@@ -194,7 +196,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), creatureAuras: make(map[uint64]map[uint32]struct{}), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), creatureMotion: make(map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), creatureLoot: make(map[uint64]*activeLootState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[string]*activeGroupRoll)}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), creatureAuras: make(map[uint64]map[uint32]struct{}), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), creatureMotion: make(map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), creatureLoot: make(map[uint64]*activeLootState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[string]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr()}
 	server.Features.LFG.SetDungeonValidator(func(id uint32) bool {
 		dungeon, found, err := server.Data.LFGDungeon(id)
 		return err == nil && found && wotlk.IsSupportedLFGType(dungeon.TypeID)
@@ -207,8 +209,45 @@ func (s *Server) Initialize(ctx context.Context) error {
 	if err := s.Features.Initialize(ctx); err != nil {
 		return err
 	}
+	if s.Config.WardenEnabled {
+		s.loadWardenChecks(ctx)
+	}
 	go s.runWorldTick(ctx)
 	return nil
+}
+
+func (s *Server) loadWardenChecks(ctx context.Context) {
+	if s.wardenCheckMgr == nil {
+		s.wardenCheckMgr = newWardenCheckMgr()
+	}
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		if err := s.wardenCheckMgr.loadChecks(ctx, s.WorldStore.DB, s.Config.WardenClientCheckFailAction); err != nil {
+			s.Logger.Error("failed to load warden checks", "error", err)
+		}
+	}
+	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		if err := s.wardenCheckMgr.loadOverrides(ctx, s.CharactersStore.DB); err != nil {
+			s.Logger.Error("failed to load warden action overrides", "error", err)
+		}
+	}
+}
+
+func (s *Server) updateWardenSessions(ctx context.Context, diff time.Duration) {
+	if !s.Config.WardenEnabled {
+		return
+	}
+	s.sessionsMu.RLock()
+	var wardenSessions []*wardenSession
+	for sess := range s.sessions {
+		if sess.warden != nil {
+			wardenSessions = append(wardenSessions, sess.warden)
+		}
+	}
+	s.sessionsMu.RUnlock()
+
+	for _, w := range wardenSessions {
+		w.update(diff)
+	}
 }
 
 func (s *Server) runWorldTick(ctx context.Context) {
@@ -226,6 +265,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.processCreatureRespawns(ctx, now)
 			s.updatePlayerDeathTimers(ctx, now)
 			s.updateSpiritHealerResurrectWaves(ctx, now)
+			s.updateWardenSessions(ctx, 100*time.Millisecond)
 		}
 	}
 }
@@ -2227,7 +2267,19 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	authBuf.WriteU8(0)                  // BillingPlanFlags
 	authBuf.WriteU32(0)                 // BillingTimeRested
 	authBuf.WriteU8(s.accountExpansion) // 0 Vanilla, 1 TBC, 2 WotLK
-	return s.write(opcodeAuthResponse, authBuf.Bytes(), true) == nil
+	if err := s.write(opcodeAuthResponse, authBuf.Bytes(), true); err != nil {
+		return false
+	}
+
+	if s.server.Config.WardenEnabled && len(account.SessionKey) == crypto.SRP6SessionKeyLength {
+		w, err := newWardenSession(s, account.SessionKey)
+		if err != nil {
+			s.server.Logger.Error("failed to initialize warden for session", "account", accountName, "error", err)
+		} else {
+			s.warden = w
+		}
+	}
+	return true
 }
 
 func (s *session) loadTutorials(ctx context.Context) {
@@ -2831,5 +2883,8 @@ func compressAccountData(data []byte) ([]byte, error) {
 // handleWardenData processes CMSG_WARDEN_DATA (0x2E7).
 // Reference: WorldSession::HandleWardenDataOpcode (WardenHandler.cpp:25).
 func (s *session) handleWardenData(ctx context.Context, payload []byte) bool {
-	return true
+	if s.warden == nil {
+		return true
+	}
+	return s.warden.handleWardenData(ctx, payload)
 }
