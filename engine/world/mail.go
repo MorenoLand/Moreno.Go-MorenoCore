@@ -376,26 +376,9 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
-	// Find free backpack slot
-	usedSlots := make(map[uint8]bool)
-	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
-	if err == nil {
-		for rows.Next() {
-			var sl int64
-			if rows.Scan(&sl) == nil {
-				usedSlots[uint8(sl)] = true
-			}
-		}
-		rows.Close()
-	}
-	freeSlot := uint8(0xFF)
-	for sl := uint8(23); sl <= 38; sl++ {
-		if !usedSlots[sl] {
-			freeSlot = sl
-			break
-		}
-	}
-	if freeSlot == 0xFF {
+	// Find free inventory slot (backpack slots 23..38 or equipped bags 19..22)
+	freeBagKey, freeClientBag, freeSlot, ok := s.findFreeInventorySlot(ctx, s.playerGUID)
+	if !ok {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailErrEquipError, uint32(equipErrInvFull), 0, 0), true)
 		return true
 	}
@@ -420,7 +403,8 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		s.sendPlayerMoneyUpdate()
 	}
 
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, attachID)
+	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, ?, ?, ?)", s.playerGUID, freeBagKey, freeSlot, attachID)
+	_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, attachID)
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM mail_items WHERE mail_id = ? AND item_guid = ?", mailID, attachID)
 	// Check if any items left
 	var remainingCount int64
@@ -434,10 +418,9 @@ func (s *session) handleMailTakeItem(ctx context.Context, payload []byte) bool {
 		itemCount = 1
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(mailID, mailItemTaken, mailOk, 0, attachID, uint32(itemCount)), true)
-	_ = s.sendItemCreate(uint64(attachID), uint32(itemEntry), uint32(itemCount), 0, freeSlot)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
-	s.debug("mail item collected", "account", s.accountName, "mail_id", mailID, "item", itemEntry, "slot", freeSlot)
+	s.debug("mail item collected", "account", s.accountName, "mail_id", mailID, "item", itemEntry, "slot", freeSlot, "bag", freeClientBag)
 	return true
 }
 

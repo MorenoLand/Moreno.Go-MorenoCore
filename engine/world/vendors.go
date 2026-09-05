@@ -146,45 +146,20 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 2), true) // BUY_ERR_NOT_ENOUGHT_MONEY = 2
 		return true
 	}
-	// Find free inventory slot (23 to 38 in backpack)
-	cdb := s.server.CharactersStore.DB
-	usedSlots := make(map[uint8]bool)
-	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
-	if err == nil {
-		for rows.Next() {
-			var sl int64
-			if rows.Scan(&sl) == nil {
-				usedSlots[uint8(sl)] = true
-			}
-		}
-		rows.Close()
-	}
-	freeSlot := uint8(0xFF)
-	for sl := uint8(23); sl <= 38; sl++ {
-		if !usedSlots[sl] {
-			freeSlot = sl
-			break
-		}
-	}
-	if freeSlot == 0xFF {
+	res, err := s.storeOrStackItem(ctx, s.playerGUID, itemEntry, count)
+	if err != nil {
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 1), true) // BUY_ERR_CANT_CARRY_MORE = 1
 		return true
 	}
 	s.player.Money -= totalCost
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-	// Create item instance
-	var nextGUID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
-	if nextGUID <= 0 {
-		nextGUID = 1
+	cdb := s.server.CharactersStore.DB
+	if cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	}
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 100, 0, '')", nextGUID, itemEntry, s.playerGUID, count)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, slot, 0xFFFFFFFF, count), true)
-	_ = s.sendItemCreate(uint64(nextGUID), itemEntry, count, 0, freeSlot)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
-	s.debug("item bought from vendor", "account", s.accountName, "item", itemEntry, "count", count, "cost", totalCost, "slot", freeSlot)
+	s.debug("item bought from vendor", "account", s.accountName, "item", itemEntry, "count", count, "cost", totalCost, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
 	return true
 }
 
@@ -281,50 +256,21 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	cdb := s.server.CharactersStore.DB
-	if cdb == nil {
-		return true
-	}
-
-	usedSlots := make(map[uint8]bool)
-	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
-	if err == nil {
-		for rows.Next() {
-			var sl int64
-			if rows.Scan(&sl) == nil {
-				usedSlots[uint8(sl)] = true
-			}
-		}
-		rows.Close()
-	}
-	freeSlot := uint8(0xFF)
-	for sl := uint8(23); sl <= 38; sl++ {
-		if !usedSlots[sl] {
-			freeSlot = sl
-			break
-		}
-	}
-	if freeSlot == 0xFF {
-		return true // Backpack full
+	res, err := s.storeOrStackItem(ctx, s.playerGUID, entry.ItemEntry, entry.Count)
+	if err != nil {
+		return true // Inventory full
 	}
 
 	s.buyback = append(s.buyback[:idx], s.buyback[idx+1:]...)
 	s.player.Money -= entry.Price
-	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
-
-	var nextGUID int64
-	_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(MAX(guid), 0) + 1 FROM item_instance").Scan(&nextGUID)
-	if nextGUID <= 0 {
-		nextGUID = 1
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 	}
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, creatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, playedTime, text) VALUES (?, ?, ?, 0, ?, 0, '', 0, '', 0, 100, 0, '')", nextGUID, entry.ItemEntry, s.playerGUID, entry.Count)
-	_, _ = cdb.ExecContext(ctx, "INSERT INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, freeSlot, nextGUID)
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, entry.ItemEntry, entry.Count, entry.Count), true)
-	_ = s.sendItemCreate(uint64(nextGUID), entry.ItemEntry, entry.Count, 0, freeSlot)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
-	s.debug("buyback item purchased", "account", s.accountName, "item", entry.ItemEntry, "slot", freeSlot)
+	s.debug("buyback item purchased", "account", s.accountName, "item", entry.ItemEntry, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
 	return true
 }
 
