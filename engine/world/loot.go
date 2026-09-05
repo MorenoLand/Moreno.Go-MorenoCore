@@ -53,6 +53,19 @@ func (l *activeLootState) broadcastRemoved(slot uint8) {
 	}
 }
 
+const (
+	rollPass       uint8 = 0
+	rollNeed       uint8 = 1
+	rollGreed      uint8 = 2
+	rollDisenchant uint8 = 3
+
+	rollFlagTypePass       uint8 = 0x01
+	rollFlagTypeNeed       uint8 = 0x02
+	rollFlagTypeGreed      uint8 = 0x04
+	rollFlagTypeDisenchant uint8 = 0x08
+	rollAllTypeMask        uint8 = 0x0F
+)
+
 type activeGroupRoll struct {
 	SourceGUID          uint64
 	Slot                uint32
@@ -680,6 +693,20 @@ func buildLootRollPayload(itemGUID uint64, slot uint32, rollType uint8) []byte {
 	return buf.Bytes()
 }
 
+func buildLootStartRollPacket(sourceGUID uint64, mapID, slot, itemEntry, randomSuffix, randomPropID, itemCount, countdown uint32, rollVoteMask uint8) []byte {
+	buf := protocol.NewBuffer(8 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 1)
+	buf.WriteU64(sourceGUID)
+	buf.WriteU32(mapID)
+	buf.WriteU32(slot)
+	buf.WriteU32(itemEntry)
+	buf.WriteU32(randomSuffix)
+	buf.WriteU32(randomPropID)
+	buf.WriteU32(itemCount)
+	buf.WriteU32(countdown)
+	buf.WriteU8(rollVoteMask)
+	return buf.Bytes()
+}
+
 func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry uint32, itemCount uint32, mapID uint32, groupID uint64) {
 	if groupID == 0 {
 		return
@@ -708,12 +735,27 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 		return
 	}
 
+	s.groupsMu.Lock()
+	grp := s.groups[groupID]
+	s.groupsMu.Unlock()
+
+	var disenchantID uint32
+	var allowableClass uint32 = 0xFFFFFFFF
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		_ = s.WorldStore.DB.QueryRowContext(context.Background(), "SELECT DisenchantID, AllowableClass FROM item_template WHERE entry = ?", itemEntry).Scan(&disenchantID, &allowableClass)
+	}
+
+	baseMask := rollFlagTypePass | rollFlagTypeNeed | rollFlagTypeGreed
+	if disenchantID > 0 {
+		baseMask |= rollFlagTypeDisenchant
+	}
+
 	roll := &activeGroupRoll{
 		SourceGUID:          sourceGUID,
 		Slot:                slot,
 		ItemEntry:           itemEntry,
 		ItemCount:           itemCount,
-		RollVoteMask:        0x0F, // ROLL_ALL_TYPE_MASK
+		RollVoteMask:        baseMask,
 		GroupID:             groupID,
 		MapID:               mapID,
 		StartedAt:           time.Now(),
@@ -731,24 +773,24 @@ func (s *Server) startGroupLootRoll(sourceGUID uint64, slot uint32, itemEntry ui
 	s.groupRolls[rollKey] = roll
 	s.lootMu.Unlock()
 
-	// Build SMSG_LOOT_START_ROLL (0x2A1)
-	buf := protocol.NewBuffer(8 + 4 + 4 + 4 + 4 + 4 + 4 + 4 + 1)
-	buf.WriteU64(sourceGUID)
-	buf.WriteU32(mapID)
-	buf.WriteU32(slot)
-	buf.WriteU32(itemEntry)
-	buf.WriteU32(0) // randomSuffix
-	buf.WriteU32(0) // randomPropId
-	buf.WriteU32(itemCount)
-	buf.WriteU32(60000) // 60s countdown
-	buf.WriteU8(roll.RollVoteMask)
-
-	s.broadcastToGroup(groupID, uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf.Bytes())
-
-	// Auto-pass check for players with PassOnGroupLoot
+	// Send personalized SMSG_LOOT_START_ROLL to each eligible member (TC Group.cpp:971)
 	for _, m := range eligible {
+		memberMask := baseMask
+		if grp != nil && grp.LootMethod == 4 { // Need Before Greed
+			if allowableClass > 0 && allowableClass != 0xFFFFFFFF && m.player != nil && m.player.Class > 0 {
+				playerClassMask := uint32(1 << (m.player.Class - 1))
+				if (allowableClass & playerClassMask) == 0 {
+					memberMask &= ^rollFlagTypeNeed // Ineligible to roll Need
+				}
+			}
+		}
+
+		buf := buildLootStartRollPacket(sourceGUID, mapID, slot, itemEntry, 0, 0, itemCount, 60000, memberMask)
+		_ = m.write(uint16(protocol.OpcodeSMSG_LOOT_START_ROLL), buf, true)
+
+		// Auto-pass check for players with PassOnGroupLoot
 		if m.player != nil && m.player.PassOnGroupLoot {
-			m.handleLootRoll(context.Background(), buildLootRollPayload(sourceGUID, slot, 0))
+			m.handleLootRoll(context.Background(), buildLootRollPayload(sourceGUID, slot, rollPass))
 		}
 	}
 
@@ -841,7 +883,7 @@ func (s *Server) resolveGroupLootRoll(rollKey string) {
 		wonBuf.WriteU8(winningType)
 		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL_WON), wonBuf.Bytes())
 
-		s.deliverGroupLootItem(roll, winnerGUID)
+		s.deliverGroupLootItem(roll, winnerGUID, winningType)
 	} else {
 		passBuf := protocol.NewBuffer(24)
 		passBuf.WriteU64(roll.SourceGUID)
@@ -862,7 +904,7 @@ func (s *Server) resolveGroupLootRoll(rollKey string) {
 	}
 }
 
-func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64) {
+func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64, winningType uint8) {
 	winnerSess := s.findSessionByGUID(winnerGUID)
 	if winnerSess == nil || winnerSess.player == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
 		s.lootMu.Lock()
@@ -877,7 +919,31 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64) 
 		return
 	}
 	ctx := context.Background()
-	res, err := winnerSess.storeOrStackItem(ctx, winnerGUID, roll.ItemEntry, roll.ItemCount)
+
+	deliveredItem := roll.ItemEntry
+	deliveredCount := roll.ItemCount
+
+	// If won via Disenchant, deliver disenchanted material from disenchant_loot_template (TC Group.cpp:1655)
+	if winningType == rollDisenchant && s.WorldStore != nil && s.WorldStore.DB != nil {
+		var disenchantID uint32
+		_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT DisenchantID FROM item_template WHERE entry = ?", roll.ItemEntry).Scan(&disenchantID)
+		if disenchantID > 0 {
+			var matItem, minCount, maxCount uint32
+			err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT Item, MinCount, MaxCount FROM disenchant_loot_template WHERE Entry = ? ORDER BY Chance DESC LIMIT 1", disenchantID).Scan(&matItem, &minCount, &maxCount)
+			if err == nil && matItem > 0 {
+				deliveredItem = matItem
+				deliveredCount = minCount
+				if maxCount > minCount {
+					deliveredCount += uint32(rand.Intn(int(maxCount - minCount + 1)))
+				}
+				if deliveredCount == 0 {
+					deliveredCount = 1
+				}
+			}
+		}
+	}
+
+	res, err := winnerSess.storeOrStackItem(ctx, winnerGUID, deliveredItem, deliveredCount)
 	if err != nil {
 		winnerSess.sendEquipError(equipErrInvFull, 0)
 		s.lootMu.Lock()
@@ -897,7 +963,7 @@ func (s *Server) deliverGroupLootItem(roll *activeGroupRoll, winnerGUID uint64) 
 	if res.IsStack {
 		slotForPush = 0xFFFFFFFF
 	}
-	_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, roll.ItemEntry, roll.ItemCount, res.InventoryCount), true)
+	_ = winnerSess.write(uint16(protocol.OpcodeSMSG_ITEM_PUSH_RESULT), buildLootItemPushResult(winnerGUID, res.ClientBag, slotForPush, deliveredItem, deliveredCount, res.InventoryCount), true)
 
 	s.lootMu.Lock()
 	cLoot := s.creatureLoot[roll.SourceGUID]
@@ -965,6 +1031,23 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	if _, voted := roll.Votes[s.playerGUID]; voted {
 		s.server.lootMu.Unlock()
 		return true
+	}
+
+	// In Need Before Greed, verify that player can need if they chose NEED (TC GroupHandler.cpp:487)
+	if rollType == rollNeed && s.groupID != 0 {
+		s.server.groupsMu.Lock()
+		grp := s.server.groups[s.groupID]
+		s.server.groupsMu.Unlock()
+		if grp != nil && grp.LootMethod == 4 && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			var allowableClass uint32 = 0xFFFFFFFF
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT AllowableClass FROM item_template WHERE entry = ?", roll.ItemEntry).Scan(&allowableClass)
+			if allowableClass > 0 && allowableClass != 0xFFFFFFFF && s.player.Class > 0 {
+				playerClassMask := uint32(1 << (s.player.Class - 1))
+				if (allowableClass & playerClassMask) == 0 {
+					rollType = rollPass // Ineligible to roll Need
+				}
+			}
+		}
 	}
 
 	roll.Votes[s.playerGUID] = rollType
