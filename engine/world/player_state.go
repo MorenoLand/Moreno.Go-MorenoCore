@@ -219,6 +219,7 @@ type playerState struct {
 	CombatRatings     [25]uint32
 	SpellPower        uint32
 	CombatReach       float32
+	AmmoDPS           float32
 	DungeonDifficulty uint8
 	RaidDifficulty    uint8
 	VehicleGUID       uint64
@@ -559,6 +560,32 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		baseRAP = 0
 	}
 	state.RangedAttackPower += uint32(baseRAP)
+
+	// Apply Ammo DPS to ranged weapon damage (TC StatSystem.cpp:584-588, Player.cpp:8430-8450)
+	if state.AmmoID > 0 && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var ammoClass, ammoSubclass uint8
+		var ammoDmgMin, ammoDmgMax float64
+		err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT class, subclass, dmg_min1, dmg_max1 FROM item_template WHERE entry = ?", state.AmmoID).Scan(&ammoClass, &ammoSubclass, &ammoDmgMin, &ammoDmgMax)
+		if err == nil && ammoClass == 6 { // ITEM_CLASS_PROJECTILE
+			ammoDPS := float32(ammoDmgMin+ammoDmgMax) / 2.0
+			state.AmmoDPS = ammoDPS
+			speedMod := float32(state.RangedAttackTime) / 1000.0
+			if speedMod <= 0 {
+				speedMod = 2.0
+			}
+			state.MinRangedDamage += ammoDPS * speedMod
+			state.MaxRangedDamage += ammoDPS * speedMod
+		}
+	}
+
+	// Apply Ranged Attack Power bonus to ranged weapon damage (TC StatSystem.cpp:552, 590-591)
+	if state.RangedAttackPower > 0 && state.RangedAttackTime > 0 {
+		speedMod := float32(state.RangedAttackTime) / 1000.0
+		rapBonus := (float32(state.RangedAttackPower) / 14.0) * speedMod
+		state.MinRangedDamage += rapBonus
+		state.MaxRangedDamage += rapBonus
+	}
+
 	return nil
 }
 

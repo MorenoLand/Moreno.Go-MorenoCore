@@ -2157,6 +2157,7 @@ func (s *session) handleSetAmmo(ctx context.Context, payload []byte) bool {
 	r := protocol.NewReader(payload)
 	itemEntry, _ := r.ReadU32()
 	s.player.AmmoID = itemEntry
+	_ = s.calculatePlayerStats(ctx, s.player)
 	s.sendPlayerUpdate()
 	return true
 }

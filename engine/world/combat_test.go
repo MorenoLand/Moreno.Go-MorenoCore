@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -1570,6 +1571,304 @@ func TestCalcMeleeRange_FormulasAndLargeCreatureReach(t *testing.T) {
 	}
 	if sess.attackTarget != bossGUID {
 		t.Fatalf("expected attackTarget %d, got %d", bossGUID, sess.attackTarget)
+	}
+}
+
+func TestAmmoDPS_RangedStatsScaling(t *testing.T) {
+	wdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wdb.Close()
+	wdb.SetMaxOpenConns(1)
+
+	_, err = wdb.Exec(`CREATE TABLE item_template (
+		entry INTEGER PRIMARY KEY,
+		class INTEGER NOT NULL DEFAULT 0,
+		subclass INTEGER NOT NULL DEFAULT 0,
+		dmg_min1 REAL NOT NULL DEFAULT 0,
+		dmg_max1 REAL NOT NULL DEFAULT 0
+	)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ammo 2512: class 6 (projectile), subclass 2 (arrow), dmg 15..25 (avg 20.0 DPS)
+	_, err = wdb.Exec(`INSERT INTO item_template (entry, class, subclass, dmg_min1, dmg_max1) VALUES (2512, 6, 2, 15.0, 25.0)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cdb.Close()
+	cdb.SetMaxOpenConns(1)
+
+	_, err = cdb.Exec(`CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cdb.Exec(`CREATE TABLE item_instance (guid INTEGER, itemEntry INTEGER, count INTEGER)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := &Server{
+		WorldStore:      &database.Store{Name: "world", Backend: database.BackendSQLite, DB: wdb},
+		CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: cdb},
+	}
+	sess := &session{
+		server:       srv,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:             1,
+			Level:            80,
+			Class:            3, // Hunter
+			Stats:            [5]uint32{100, 100, 100, 100, 100},
+			RangedAttackTime: 2500, // 2.5s bow
+			AmmoID:           2512,
+		},
+	}
+
+	err = sess.calculatePlayerStats(context.Background(), sess.player)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ammo DPS = 20.0, speed = 2.5s -> bonus damage = 50.0
+	if sess.player.AmmoDPS != 20.0 {
+		t.Fatalf("expected AmmoDPS 20.0, got %f", sess.player.AmmoDPS)
+	}
+	if sess.player.MinRangedDamage < 50.0 || sess.player.MaxRangedDamage < 51.0 {
+		t.Fatalf("expected MinRangedDamage >= 50.0, MaxRangedDamage >= 51.0, got min=%f max=%f", sess.player.MinRangedDamage, sess.player.MaxRangedDamage)
+	}
+}
+
+func TestAutoShot_RangeAndAmmoValidation(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{
+		sessions:       make(map[*session]struct{}),
+		creatureMotion: make(map[uint64]*creatureMotion),
+		Data:           wotlk.NewStore("../../data/dbc"),
+	}
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   10,
+		player: &playerState{
+			GUID:             10,
+			X:                0,
+			Y:                0,
+			Z:                0,
+			CombatReach:      1.5,
+			Level:            80,
+			Health:           1000,
+			MaxHealth:        1000,
+			AmmoID:           0, // No ammo
+			RangedAttackTime: 2000,
+			Spells: []learnedSpell{
+				{ID: 75, Active: true},
+			},
+		},
+	}
+	srv.sessions[sess] = struct{}{}
+
+	targetGUID := uint64(50)
+	srv.creatureMotion[targetGUID] = &creatureMotion{
+		GUID:        targetGUID,
+		X:           3.0, // 3 yards away: within melee range (dead zone < 5.0 yards)
+		Y:           0,
+		Z:           0,
+		Health:      1000,
+		MaxHealth:   1000,
+		CombatReach: 1.5,
+		Level:       80,
+	}
+
+	receivedOpcodes := make(chan uint16, 8)
+	receivedPayloads := make(chan []byte, 8)
+	go func() {
+		for {
+			op, p, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+			receivedOpcodes <- op
+			receivedPayloads <- p
+		}
+	}()
+
+	// 1. Cast Auto Shot (75) while in melee range (3 yards) -> SPELL_FAILED_TOO_CLOSE (128)
+	payload := protocol.NewBuffer(32)
+	payload.WriteU8(1) // castID
+	payload.WriteU32(75) // spellID Auto Shot
+	payload.WriteU8(0) // castFlags
+	protocol.WriteSpellTargetData(payload, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID})
+
+	sess.player.AmmoID = 2512 // Has ammo
+	sess.handleCastSpell(context.Background(), payload.Bytes())
+
+	select {
+	case op := <-receivedOpcodes:
+		if op != uint16(protocol.OpcodeSMSG_CAST_FAILED) {
+			t.Fatalf("expected SMSG_CAST_FAILED, got 0x%04X", op)
+		}
+		p := <-receivedPayloads
+		r := protocol.NewReader(p)
+		_, _ = r.ReadU8() // castID
+		spID, _ := r.ReadU32()
+		reason, _ := r.ReadU8()
+		if spID != 75 || reason != 128 {
+			t.Fatalf("expected spell 75 failed with reason 128 (TOO_CLOSE), got spell=%d reason=%d", spID, reason)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for cast failed TOO_CLOSE")
+	}
+
+	// 2. Target moved to 45 yards away (> 35 yards) -> SPELL_FAILED_OUT_OF_RANGE (97)
+	srv.creatureMotion[targetGUID].X = 45.0
+	sess.handleCastSpell(context.Background(), payload.Bytes())
+
+	select {
+	case op := <-receivedOpcodes:
+		if op != uint16(protocol.OpcodeSMSG_CAST_FAILED) {
+			t.Fatalf("expected SMSG_CAST_FAILED, got 0x%04X", op)
+		}
+		p := <-receivedPayloads
+		r := protocol.NewReader(p)
+		_, _ = r.ReadU8()
+		spID, _ := r.ReadU32()
+		reason, _ := r.ReadU8()
+		if spID != 75 || reason != 97 {
+			t.Fatalf("expected spell 75 failed with reason 97 (OUT_OF_RANGE), got spell=%d reason=%d", spID, reason)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for cast failed OUT_OF_RANGE")
+	}
+
+	// 3. Target is at 20 yards (valid range), but player has NO ammo (AmmoID = 0) -> SPELL_FAILED_NO_AMMO (75)
+	srv.creatureMotion[targetGUID].X = 20.0
+	sess.player.AmmoID = 0
+	sess.handleCastSpell(context.Background(), payload.Bytes())
+
+	select {
+	case op := <-receivedOpcodes:
+		if op != uint16(protocol.OpcodeSMSG_CAST_FAILED) {
+			t.Fatalf("expected SMSG_CAST_FAILED, got 0x%04X", op)
+		}
+		p := <-receivedPayloads
+		r := protocol.NewReader(p)
+		_, _ = r.ReadU8()
+		spID, _ := r.ReadU32()
+		reason, _ := r.ReadU8()
+		if spID != 75 || reason != 75 {
+			t.Fatalf("expected spell 75 failed with reason 75 (NO_AMMO), got spell=%d reason=%d", spID, reason)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for cast failed NO_AMMO")
+	}
+}
+
+func TestAutoShot_ExecutionAndAmmoConsumption(t *testing.T) {
+	cdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cdb.Close()
+	cdb.SetMaxOpenConns(1)
+
+	_, err = cdb.Exec(`CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = cdb.Exec(`CREATE TABLE item_instance (guid INTEGER, itemEntry INTEGER, count INTEGER)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Player has 10 arrows (item 2512, item_instance guid 999)
+	_, _ = cdb.Exec(`INSERT INTO character_inventory (guid, bag, slot, item) VALUES (10, 0, 23, 999)`)
+	_, _ = cdb.Exec(`INSERT INTO item_instance (guid, itemEntry, count) VALUES (999, 2512, 10)`)
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{
+		CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: cdb},
+		sessions:        make(map[*session]struct{}),
+		creatureMotion:  make(map[uint64]*creatureMotion),
+	}
+	sess := &session{
+		server:          srv,
+		conn:            serverConn,
+		playerLoaded:    true,
+		playerGUID:      10,
+		autoRepeatSpell: 75,
+		player: &playerState{
+			GUID:             10,
+			X:                0,
+			Y:                0,
+			Z:                0,
+			CombatReach:      1.5,
+			Level:            80,
+			Health:           1000,
+			MaxHealth:        1000,
+			AmmoID:           2512,
+			MinRangedDamage:  100.0,
+			MaxRangedDamage:  120.0,
+			RangedAttackTime: 2000,
+		},
+	}
+	srv.sessions[sess] = struct{}{}
+
+	targetGUID := uint64(50)
+	targetMotion := &creatureMotion{
+		GUID:        targetGUID,
+		X:           20.0, // 20 yards away
+		Y:           0,
+		Z:           0,
+		Health:      1000,
+		MaxHealth:   1000,
+		CombatReach: 1.5,
+		Level:       80,
+	}
+	srv.creatureMotion[targetGUID] = targetMotion
+
+	go func() {
+		for {
+			if _, _, err := readServerFrame(clientConn, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Execute ranged attack
+	target := combatTarget{GUID: targetGUID, Health: 1000, MaxHealth: 1000, Level: 80, CombatReach: 1.5}
+	sess.executeRangedAttack(context.Background(), target, 75)
+
+	// Verify target took damage
+	if targetMotion.Health >= 1000 {
+		t.Fatalf("expected creature to take ranged damage, health is %d", targetMotion.Health)
+	}
+	// Verify creature entered combat and set target
+	if !targetMotion.InCombat || targetMotion.TargetGUID != 10 {
+		t.Fatalf("expected creature in combat targeting 10, got inCombat=%v target=%d", targetMotion.InCombat, targetMotion.TargetGUID)
+	}
+
+	// Verify ammo count was decremented from 10 to 9
+	var remainingCount int64
+	err = cdb.QueryRow(`SELECT count FROM item_instance WHERE guid = 999`).Scan(&remainingCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remainingCount != 9 {
+		t.Fatalf("expected remaining ammo count 9, got %d", remainingCount)
 	}
 }
 

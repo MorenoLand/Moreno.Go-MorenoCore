@@ -469,12 +469,213 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 }
 
+func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, spellID uint32) {
+	if s.player == nil || target.Health == 0 {
+		return
+	}
+	now := time.Now()
+	s.lastRangedSwing = now
+
+	// Consume ammo for hunter bow/gun/crossbow (Spell 75) (TC Spell::TakeAmmo)
+	if spellID == 75 && s.player.AmmoID > 0 && s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		var itemGUID, count int64
+		err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT ii.guid, ii.count FROM character_inventory ci JOIN item_instance ii ON ci.item = ii.guid WHERE ci.guid = ? AND ii.itemEntry = ? AND ii.count > 0 LIMIT 1", s.playerGUID, s.player.AmmoID).Scan(&itemGUID, &count)
+		if err == nil {
+			if count <= 1 {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ?", itemGUID)
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+				s.player.AmmoID = 0
+				_ = s.calculatePlayerStats(ctx, s.player)
+				s.sendPlayerUpdate()
+				s.autoRepeatSpell = 0
+				s.autoRepeatTarget = 0
+				buf := protocol.NewBuffer(9)
+				buf.WritePackedGUID(s.playerGUID)
+				_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+				_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(1, spellID, 75), true) // SPELL_FAILED_NO_AMMO = 75
+			} else {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE item_instance SET count = count - 1 WHERE guid = ?", itemGUID)
+			}
+		}
+	}
+
+	// Visual: broadcast SMSG_SPELL_GO (TC Spell::SendSpellGo)
+	castID := uint8(1)
+	castTimeStamp := uint32(now.UnixMilli())
+	hitTargets := []uint64{target.GUID}
+	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: target.GUID}
+	goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+	}
+
+	// Outcome: ranged attacks can be dodged or blocked, but cannot be parried (TC rollMeleeOutcome)
+	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
+	canBlock := false
+	if isPlayerVictim && s.server != nil {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
+			canBlock = vicSess.player.Block > 0
+		}
+	}
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false)
+
+	minDmg := s.player.MinRangedDamage
+	maxDmg := s.player.MaxRangedDamage
+	if maxDmg < minDmg || minDmg <= 0 {
+		minDmg = 1.0
+		maxDmg = 2.0
+	}
+	damage := uint32(minDmg + rand.Float32()*(maxDmg-minDmg))
+	if damage < 1 {
+		damage = 1
+	}
+
+	switch outcome {
+	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitEvade:
+		damage = 0
+	case protocol.MeleeHitBlock:
+		blocked := damage / 4
+		if blocked < 1 {
+			blocked = 1
+		}
+		damage -= blocked
+	case protocol.MeleeHitCrit:
+		damage *= 2
+	}
+
+	overkill := uint32(0)
+	if damage >= target.Health && target.Health > 0 {
+		overkill = damage - target.Health
+	}
+
+	schoolMask := uint8(1) // Physical default
+	if s.server != nil && s.server.Data != nil {
+		if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found && spellInfo.SchoolMask != 0 {
+			schoolMask = uint8(spellInfo.SchoolMask)
+		}
+	}
+	logPkt := buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s)
+	}
+
+	if s.player.UnitFlags&unitFlagInCombat == 0 {
+		s.player.UnitFlags |= unitFlagInCombat
+		s.sendPlayerUpdate()
+	}
+	s.lastCombatTime = now
+
+	if isPlayerVictim && s.server != nil {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
+			if vicSess.player.UnitFlags&unitFlagInCombat == 0 {
+				vicSess.player.UnitFlags |= unitFlagInCombat
+			}
+			vicSess.lastCombatTime = now
+			if damage > 0 {
+				if damage >= vicSess.player.Health {
+					vicSess.player.Health = 0
+					vicSess.sendPlayerUpdate()
+					vicSess.killPlayer(ctx)
+					s.autoRepeatSpell = 0
+					s.autoRepeatTarget = 0
+					buf := protocol.NewBuffer(9)
+					buf.WritePackedGUID(s.playerGUID)
+					_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+				} else {
+					vicSess.player.Health -= damage
+					vicSess.delayCurrentCast()
+					vicSess.delayCurrentChannel()
+					vicSess.sendPlayerUpdate()
+				}
+			}
+		}
+		return
+	}
+
+	low := uint32(target.GUID & 0x00FFFFFF)
+	entry := uint32((target.GUID >> 24) & 0x00FFFFFF)
+	stdKey := creatureWorldGUID(low, entry)
+
+	if damage >= target.Health {
+		// Target dies
+		s.server.motionMu.Lock()
+		motion := s.server.creatureMotion[target.GUID]
+		if motion == nil {
+			motion = s.server.creatureMotion[stdKey]
+		}
+		if motion != nil {
+			motion.Health = 0
+			motion.InCombat = false
+			motion.TargetGUID = 0
+			motion.Moving = false
+			if motion.ThreatMgr != nil {
+				motion.ThreatMgr.ClearThreat()
+			}
+		}
+		s.server.motionMu.Unlock()
+
+		s.server.stopCreatureMotion(target.Map, target.GUID, target.X, target.Y, target.Z)
+		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+			unitFieldHealth:       0,
+			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+		})
+		s.server.broadcastThreatClear(target.Map, target.GUID)
+		s.autoRepeatSpell = 0
+		s.autoRepeatTarget = 0
+		buf := protocol.NewBuffer(9)
+		buf.WritePackedGUID(s.playerGUID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+		s.onCreatureKilled(ctx, target)
+		s.debug("target slain", "account", s.accountName, "guid", target.GUID)
+	} else {
+		newHealth := target.Health - damage
+		s.server.motionMu.Lock()
+		motion := s.server.creatureMotion[target.GUID]
+		if motion == nil {
+			motion = s.server.creatureMotion[stdKey]
+		}
+		if motion != nil {
+			motion.Health = newHealth
+			if motion.ThreatMgr == nil {
+				motion.ThreatMgr = NewThreatManager(target.GUID)
+			}
+			if motion.BossAI == nil {
+				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
+			}
+			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, float32(damage), false)
+			if switched && newVictim != motion.TargetGUID {
+				motion.TargetGUID = newVictim
+				entries := motion.ThreatMgr.SortedEntries()
+				s.server.broadcastHighestThreatUpdate(motion.Map, motion.GUID, newVictim, entries)
+			}
+			if motion.BossAI != nil {
+				motion.BossAI.OnDamageTaken(ctx, s.server, motion, s.playerGUID, damage)
+			}
+		}
+		s.server.motionMu.Unlock()
+
+		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
+			unitFieldHealth: newHealth,
+		})
+		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+	}
+}
+
 func (s *session) handleAttackStop() bool {
 	if !s.playerLoaded {
 		return true
 	}
 	victim := s.attackTarget
 	s.attackTarget = 0
+	if s.autoRepeatSpell != 0 {
+		s.autoRepeatSpell = 0
+		s.autoRepeatTarget = 0
+		buf := protocol.NewBuffer(9)
+		buf.WritePackedGUID(s.playerGUID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+	}
 	if err := s.sendAttackStop(victim, false); err != nil {
 		s.debug("attack stop failed", "account", s.accountName, "error", err)
 		return false
