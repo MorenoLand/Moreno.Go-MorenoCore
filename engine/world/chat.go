@@ -84,6 +84,9 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid characters")
 		return true
 	}
+	if s.warden != nil && s.warden.processLuaCheckResponse(message) {
+		return true
+	}
 	if strings.HasPrefix(message, ".") || strings.HasPrefix(message, "!") {
 		command := strings.TrimSpace(message[1:])
 		if command == "" {
