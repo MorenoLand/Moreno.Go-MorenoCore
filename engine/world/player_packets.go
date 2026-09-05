@@ -76,9 +76,9 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 		}
 	}
 
-	// If player has few spells, ensure custom starter spells from playercreateinfo_spell_custom are also learned
+	// If player has few spells, ensure custom starter spells from playercreateinfo_spell_custom are also learned (if PlayerStart.AllSpells enabled)
 	// In world.db, racemask and classmask are raw integer IDs (1..11), not bitmasks.
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil && s.server.Config.PlayerStartAllSpells {
 		crows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR racemask = ?) AND (classmask = 0 OR classmask = ?)", race, class)
 		if err == nil {
 			defer crows.Close()

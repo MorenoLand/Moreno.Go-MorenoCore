@@ -1031,18 +1031,19 @@ func (s *session) createStarterSpells(ctx context.Context, guid uint64, race, cl
 		}
 	}
 
-	// 5. Custom spells from playercreateinfo_spell_custom
-	// In world.db, racemask and classmask are raw integer IDs (1..11), not bitmasks.
-	rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR racemask = ?) AND (classmask = 0 OR classmask = ?)", race, class)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var spellID int64
-			if err := rows.Scan(&spellID); err == nil && spellID > 0 {
-				id := uint32(spellID)
-				if !seen[id] {
-					seen[id] = true
-					_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, id)
+	// 5. Custom spells from playercreateinfo_spell_custom (only if PlayerStart.AllSpells enabled)
+	if s.server != nil && s.server.Config.PlayerStartAllSpells {
+		rows, err := wdb.QueryContext(ctx, "SELECT Spell FROM playercreateinfo_spell_custom WHERE (racemask = 0 OR racemask = ?) AND (classmask = 0 OR classmask = ?)", race, class)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var spellID int64
+				if err := rows.Scan(&spellID); err == nil && spellID > 0 {
+					id := uint32(spellID)
+					if !seen[id] {
+						seen[id] = true
+						_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", guid, id)
+					}
 				}
 			}
 		}
