@@ -118,6 +118,10 @@ type session struct {
 	duelOutOfBounds    time.Time
 	lastSwing          time.Time
 	lastOffhandSwing   time.Time
+	lastRangedSwing    time.Time
+	autoRepeatSpell    uint32
+	autoRepeatTarget   uint64
+	isMoving           bool
 	lastRegenTick      time.Time
 	lastCastTime       time.Time
 	lastCombatTime     time.Time
@@ -286,7 +290,7 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 	s.sessionsMu.RLock()
 	var combatSessions []*session
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.attackTarget != 0 && sess.player.Health > 0 {
+		if sess.playerLoaded && sess.player != nil && (sess.attackTarget != 0 || sess.autoRepeatSpell != 0) && sess.player.Health > 0 {
 			combatSessions = append(combatSessions, sess)
 		}
 	}
@@ -294,49 +298,98 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 
 	now := time.Now()
 	for _, sess := range combatSessions {
-		target, ok := sess.getCombatTarget(ctx, sess.attackTarget)
-		if !ok || target.Health == 0 {
-			_ = sess.sendAttackStop(sess.attackTarget, target.Health == 0)
-			sess.attackTarget = 0
-			continue
-		}
-		if target.Map != sess.player.Map {
-			_ = sess.sendAttackStop(sess.attackTarget, false)
-			sess.attackTarget = 0
-			continue
-		}
-		mainSpeed := 2 * time.Second
-		if sess.player.AttackTime > 0 {
-			mainSpeed = time.Duration(sess.player.AttackTime) * time.Millisecond
-		}
-		offSpeed := 2 * time.Second
-		if sess.player.OffhandAttackTime > 0 {
-			offSpeed = time.Duration(sess.player.OffhandAttackTime) * time.Millisecond
-		}
-
-		pReach := float32(1.5)
-		if sess.player.CombatReach > 0 {
-			pReach = sess.player.CombatReach
-		}
-		allowedRange := calcMeleeRange(pReach, target.CombatReach) + 2.0
-
-		if distance3D(sess.player.X, sess.player.Y, sess.player.Z, target.X, target.Y, target.Z) <= allowedRange {
-			// Main hand attack
-			if now.Sub(sess.lastSwing) >= mainSpeed {
-				if sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) < attackDisplayDelay {
-					sess.lastOffhandSwing = now.Add(-(offSpeed - attackDisplayDelay))
-				}
-				sess.lastSwing = now
-				sess.executeMeleeSwing(ctx, target, protocol.BaseAttack)
+		// Melee combat
+		if sess.attackTarget != 0 {
+			target, ok := sess.getCombatTarget(ctx, sess.attackTarget)
+			if !ok || target.Health == 0 {
+				_ = sess.sendAttackStop(sess.attackTarget, target.Health == 0)
+				sess.attackTarget = 0
+				continue
+			}
+			if target.Map != sess.player.Map {
+				_ = sess.sendAttackStop(sess.attackTarget, false)
+				sess.attackTarget = 0
+				continue
+			}
+			mainSpeed := 2 * time.Second
+			if sess.player.AttackTime > 0 {
+				mainSpeed = time.Duration(sess.player.AttackTime) * time.Millisecond
+			}
+			offSpeed := 2 * time.Second
+			if sess.player.OffhandAttackTime > 0 {
+				offSpeed = time.Duration(sess.player.OffhandAttackTime) * time.Millisecond
 			}
 
-			// Off-hand attack (dual-wielding)
-			if sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) >= offSpeed {
-				if now.Sub(sess.lastSwing) < attackDisplayDelay {
-					sess.lastSwing = now.Add(-(mainSpeed - attackDisplayDelay))
+			pReach := float32(1.5)
+			if sess.player.CombatReach > 0 {
+				pReach = sess.player.CombatReach
+			}
+			allowedRange := calcMeleeRange(pReach, target.CombatReach) + 2.0
+
+			if distance3D(sess.player.X, sess.player.Y, sess.player.Z, target.X, target.Y, target.Z) <= allowedRange {
+				// Main hand attack
+				if now.Sub(sess.lastSwing) >= mainSpeed {
+					if sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) < attackDisplayDelay {
+						sess.lastOffhandSwing = now.Add(-(offSpeed - attackDisplayDelay))
+					}
+					sess.lastSwing = now
+					sess.executeMeleeSwing(ctx, target, protocol.BaseAttack)
 				}
-				sess.lastOffhandSwing = now
-				sess.executeMeleeSwing(ctx, target, protocol.OffAttack)
+
+				// Off-hand attack (dual-wielding)
+				if sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) >= offSpeed {
+					if now.Sub(sess.lastSwing) < attackDisplayDelay {
+						sess.lastSwing = now.Add(-(mainSpeed - attackDisplayDelay))
+					}
+					sess.lastOffhandSwing = now
+					sess.executeMeleeSwing(ctx, target, protocol.OffAttack)
+				}
+			}
+		}
+
+		// Ranged auto-attacks / auto-repeat spells (Auto Shot, Shoot Wand) (TC: Unit::_UpdateAutoRepeatSpell)
+		if sess.autoRepeatSpell != 0 {
+			targetGUID := sess.autoRepeatTarget
+			if targetGUID == 0 {
+				targetGUID = sess.selection
+			}
+			rTarget, rOk := sess.getCombatTarget(ctx, targetGUID)
+			if !rOk || rTarget.Health == 0 || rTarget.Map != sess.player.Map {
+				sess.autoRepeatSpell = 0
+				sess.autoRepeatTarget = 0
+				buf := protocol.NewBuffer(9)
+				buf.WritePackedGUID(sess.playerGUID)
+				_ = sess.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+			} else {
+				pReach := float32(1.5)
+				if sess.player.CombatReach > 0 {
+					pReach = sess.player.CombatReach
+				}
+				dist := distance3D(sess.player.X, sess.player.Y, sess.player.Z, rTarget.X, rTarget.Y, rTarget.Z)
+				minRange := float64(0)
+				maxRange := float64(30.0)
+				if sess.autoRepeatSpell == 75 {
+					minRange = calcMeleeRange(pReach, rTarget.CombatReach)
+					maxRange = 35.0
+				}
+				// Wand shooting is cancelled if moving (TC Unit::_UpdateAutoRepeatSpell)
+				if sess.isMoving && sess.autoRepeatSpell != 75 {
+					sess.autoRepeatSpell = 0
+					sess.autoRepeatTarget = 0
+					buf := protocol.NewBuffer(9)
+					buf.WritePackedGUID(sess.playerGUID)
+					_ = sess.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+				} else if !sess.isMoving || sess.autoRepeatSpell == 75 {
+					if dist >= minRange && dist <= maxRange {
+						rangedSpeed := 2 * time.Second
+						if sess.player.RangedAttackTime > 0 {
+							rangedSpeed = time.Duration(sess.player.RangedAttackTime) * time.Millisecond
+						}
+						if now.Sub(sess.lastRangedSwing) >= rangedSpeed {
+							sess.executeRangedAttack(ctx, rTarget, sess.autoRepeatSpell)
+						}
+					}
+				}
 			}
 		}
 	}

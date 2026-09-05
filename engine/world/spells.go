@@ -129,6 +129,55 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	isAutoRepeat := (spell.AttributesEx1&0x20 != 0) || spellID == 75 || spellID == 5019
+	targetGUID := uint64(0)
+	if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+		targetGUID = target.UnitGUID
+	} else if s.selection != 0 {
+		targetGUID = s.selection
+	}
+
+	// Auto-repeat toggle: if already repeating this spell on this target, toggle it off (TC SpellHandler.cpp:420-430)
+	if isAutoRepeat && s.autoRepeatSpell == spellID && s.autoRepeatTarget == targetGUID {
+		s.autoRepeatSpell = 0
+		s.autoRepeatTarget = 0
+		buf := protocol.NewBuffer(9)
+		buf.WritePackedGUID(s.playerGUID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
+		return true
+	}
+
+	// Range and Ammo checks for ranged / auto-repeat spells (TC Spell::CheckCast)
+	if targetGUID != 0 && targetGUID != s.playerGUID {
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			pReach := float32(1.5)
+			if s.player.CombatReach > 0 {
+				pReach = s.player.CombatReach
+			}
+			dist := distance3D(s.player.X, s.player.Y, s.player.Z, tgt.X, tgt.Y, tgt.Z)
+			if spellID == 75 { // Auto Shot (TC: Range 114, SPELL_RANGE_RANGED)
+				minRange := calcMeleeRange(pReach, tgt.CombatReach)
+				if dist < minRange {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 128), true) // SPELL_FAILED_TOO_CLOSE = 128
+					return true
+				}
+				if dist > 35.0 {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
+					return true
+				}
+				if s.player.AmmoID == 0 {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 75), true) // SPELL_FAILED_NO_AMMO = 75
+					return true
+				}
+			} else if spellID == 5019 { // Shoot wand (Range 4)
+				if dist > 30.0 {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 97), true) // SPELL_FAILED_OUT_OF_RANGE = 97
+					return true
+				}
+			}
+		}
+	}
+
 	// Interrupt any existing spell cast (TC: Unit::InterruptNonMeleeSpells)
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
@@ -190,6 +239,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		hitTargets[0] = s.selection
 	}
 	targetGUID := hitTargets[0]
+
+	// Auto-repeat ranged spells (e.g. Auto Shot, Shoot Wand) (TC: CURRENT_AUTOREPEAT_SPELL)
+	if (spell.AttributesEx1&0x20 != 0) || spellID == 75 || spellID == 5019 {
+		s.autoRepeatSpell = spellID
+		s.autoRepeatTarget = targetGUID
+		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+			s.executeRangedAttack(ctx, tgt, spellID)
+		}
+		return
+	}
 
 	// Spell hit check for offensive spells targeting another unit
 	var missStatus []protocol.SpellMissStatus
@@ -1664,6 +1723,8 @@ func (s *session) handleCancelAutoRepeatSpell(payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	s.autoRepeatSpell = 0
+	s.autoRepeatTarget = 0
 	buf := protocol.NewBuffer(9)
 	buf.WritePackedGUID(s.playerGUID)
 	_ = s.write(uint16(protocol.OpcodeSMSG_CANCEL_AUTO_REPEAT), buf.Bytes(), true)
