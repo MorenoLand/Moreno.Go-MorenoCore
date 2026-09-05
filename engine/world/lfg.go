@@ -1006,13 +1006,36 @@ func (s *session) handleLfgTeleport(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	if s.player.Health == 0 {
+	// Reference: LFGMgr::TeleportPlayer (LFGMgr.cpp:1529-1582)
+	teleportErr := LFGTeleportErrorOK
+	if s.player.Health == 0 || (s.player.PlayerFlags&playerFlagGhost != 0) {
+		teleportErr = LFGTeleportErrorPlayerDead
+	} else if s.isFalling {
+		teleportErr = LFGTeleportErrorFalling
+	} else if s.isFatigueActive() {
+		teleportErr = LFGTeleportErrorFatigue
+	} else if s.player.VehicleGUID != 0 {
+		teleportErr = LFGTeleportErrorInVehicle
+	} else if s.hasAura(9454) { // Freeze debuff (Player.cpp:9454 check)
+		teleportErr = LFGTeleportErrorInvalidLocation
+	}
+
+	if teleportErr != LFGTeleportErrorOK {
 		packet := protocol.NewBuffer(4)
-		packet.WriteU32(LFGTeleportErrorPlayerDead)
+		packet.WriteU32(teleportErr)
 		_ = s.write(uint16(protocol.OpcodeSMSG_LFG_TELEPORT_DENIED), packet.Bytes(), true)
 		return true
 	}
 
+	dungeonMap, _, _, _, _ := s.getLFGDungeonEntrance(lfgDungeonID)
+	if dungeonMap != 0 && s.player.Map == dungeonMap {
+		packet := protocol.NewBuffer(4)
+		packet.WriteU32(LFGTeleportErrorInvalidLocation)
+		_ = s.write(uint16(protocol.OpcodeSMSG_LFG_TELEPORT_DENIED), packet.Bytes(), true)
+		return true
+	}
+
+	s.finishTaxiFlight()
 	s.teleportToLFGDungeon(lfgDungeonID)
 	return true
 }

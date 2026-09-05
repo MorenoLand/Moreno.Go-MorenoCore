@@ -396,6 +396,18 @@ func (s *session) isInFlight() bool {
 	return s.inFlight
 }
 
+// finishTaxiFlight mirrors Player::FinishTaxiFlight.
+func (s *session) finishTaxiFlight() {
+	if !s.inFlight {
+		return
+	}
+	s.inFlight = false
+	if s.currentPlayer() != nil && s.player.MountDisplayID != 0 {
+		s.player.MountDisplayID = 0
+		s.sendPlayerMountUpdate()
+	}
+}
+
 // initTaxiNodesForLevel mirrors PlayerTaxi::InitTaxiNodesForLevel for the
 // race/team starting nodes available without discovering them first.
 func (s *session) initTaxiNodesForLevel() {

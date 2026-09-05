@@ -152,3 +152,11 @@ func TestHandleChannelList(t *testing.T) {
 		t.Fatalf("member flags=%d err=%v", value, err)
 	}
 }
+
+func TestChannel_Moderate(t *testing.T) {
+	state := &session{playerLoaded: true}
+	if !state.handleChannelModerate(nil, []byte("General\x00")) {
+		t.Fatal("expected handleChannelModerate to return true")
+	}
+}
+

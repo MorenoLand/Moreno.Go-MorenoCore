@@ -92,6 +92,13 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	info.Flags = sanitizeMovementFlags(info.Flags)
 	isMove := info.Flags&(movementForward|movementBackward|movementStrafeLeft|movementStrafeRight|movementFalling) != 0
 	s.isMoving = isMove
+	isFalling := (info.Flags & movementFalling) != 0
+	if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
+		isFalling = false
+	} else if opcode == uint32(protocol.OpcodeMSG_MOVE_JUMP) {
+		isFalling = true
+	}
+	s.isFalling = isFalling
 	if isMove {
 		s.interruptCurrentCast()
 		s.interruptCurrentChannel()
@@ -737,19 +744,25 @@ func (s *session) handleRequestVehiclePrevSeat(ctx context.Context, payload []by
 	return true
 }
 
-// handleRequestVehicleSwitchSeat processes CMSG_REQUEST_VEHICLE_SWITCH_SEAT (0x472).
+// handleRequestVehicleSwitchSeat processes CMSG_REQUEST_VEHICLE_SWITCH_SEAT (0x479).
 // Reference: WorldSession::HandleChangeSeatsOnControlledVehicle (VehicleHandler.cpp:108).
 func (s *session) handleRequestVehicleSwitchSeat(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	seat := int8(payload[0])
-	if len(payload) >= 9 {
+	if len(payload) >= 2 {
 		r := protocol.NewReader(payload)
-		_, _ = r.ReadU64()
-		sByte, err := r.ReadU8()
-		if err == nil {
-			seat = int8(sByte)
+		if _, err := r.ReadPackedGUID(); err == nil {
+			if sByte, err := r.ReadU8(); err == nil {
+				seat = int8(sByte)
+			}
+		} else if len(payload) >= 9 {
+			r = protocol.NewReader(payload)
+			_, _ = r.ReadU64()
+			if sByte, err := r.ReadU8(); err == nil {
+				seat = int8(sByte)
+			}
 		}
 	}
 	s.player.VehicleSeat = seat
