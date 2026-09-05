@@ -187,3 +187,161 @@ func TestBuyItemSendsItemCreate(t *testing.T) {
 		t.Fatalf("expected update object for item creation, got op=%x err=%v", op2, err)
 	}
 }
+
+func TestVendorBuybackFullParityAndFields(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, ContainerSlots INTEGER)",
+		"INSERT INTO characters VALUES (1, 1000, '')",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 25, 100, 1, 0)",
+		"INSERT INTO item_instance (guid, itemEntry, owner_guid, count, durability) VALUES (500, 5001, 1, 1, 100)",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 500)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{AuthStore: store, CharactersStore: store, WorldStore: store}
+	sess := &session{
+		conn:         serverConn,
+		server:       srv,
+		playerGUID:   1,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:  1,
+			Money: 1000,
+		},
+	}
+
+	vendorGUID := creatureWorldGUID(1, 101)
+
+	type serverPkt struct {
+		opcode uint16
+		data   []byte
+	}
+	receivedPkts := make(chan serverPkt, 64)
+	go func() {
+		for {
+			op, data, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+			receivedPkts <- serverPkt{opcode: op, data: data}
+		}
+	}()
+
+	// 1. Sell item (guid 500) to vendor
+	sellBuf := protocol.NewBuffer(17)
+	sellBuf.WriteU64(vendorGUID)
+	sellBuf.WriteU64(500)
+	sellBuf.WriteU8(1)
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- sess.handleSellItem(context.Background(), sellBuf.Bytes())
+	}()
+
+	// Read SMSG_SELL_ITEM
+	pkt1 := <-receivedPkts
+	if pkt1.opcode != uint16(protocol.OpcodeSMSG_SELL_ITEM) {
+		t.Fatalf("expected SMSG_SELL_ITEM (0x1A1), got op=%x", pkt1.opcode)
+	}
+
+	// Read SMSG_UPDATE_OBJECT from sendInventoryItems
+	pkt2 := <-receivedPkts
+	if pkt2.opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && pkt2.opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected update object, got op=%x", pkt2.opcode)
+	}
+
+	// Read SMSG_UPDATE_OBJECT from sendPlayerUpdate
+	pkt3 := <-receivedPkts
+	if pkt3.opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && pkt3.opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected player update object, got op=%x", pkt3.opcode)
+	}
+	<-done
+
+	// Verify player earned 25 copper: 1000 + 25 = 1025
+	if sess.player.Money != 1025 {
+		t.Fatalf("expected 1025 money after sell, got %d", sess.player.Money)
+	}
+
+	// Verify buyback slot 0 is populated
+	bb0 := sess.buyback[0]
+	if bb0 == nil {
+		t.Fatal("expected buyback[0] to be populated")
+	}
+	expectedFullGUID := uint64(500) | (uint64(0x4000) << 48)
+	if bb0.ItemGUID != expectedFullGUID {
+		t.Fatalf("expected buyback GUID %x, got %x", expectedFullGUID, bb0.ItemGUID)
+	}
+	if bb0.ItemEntry != 5001 || bb0.Count != 1 || bb0.Price != 25 {
+		t.Fatalf("unexpected buyback data: %+v", bb0)
+	}
+	if bb0.Timestamp == 0 {
+		t.Fatal("expected non-zero buyback timestamp")
+	}
+
+	// Verify character_inventory slot 23 is now empty
+	var invCount int
+	_ = db.QueryRow("SELECT COUNT(1) FROM character_inventory WHERE guid = 1 AND slot = 23").Scan(&invCount)
+	if invCount != 0 {
+		t.Fatalf("expected slot 23 cleared in character_inventory")
+	}
+
+	// 2. Buyback item using retail slot 74 (BUYBACK_SLOT_START)
+	buybackBuf := protocol.NewBuffer(12)
+	buybackBuf.WriteU64(vendorGUID)
+	buybackBuf.WriteU32(74) // slot 74
+
+	buyDone := make(chan bool, 1)
+	go func() {
+		buyDone <- sess.handleBuybackItem(context.Background(), buybackBuf.Bytes())
+	}()
+
+	// Read SMSG_BUY_ITEM (skipping any destroy/despawn of the old buyback object)
+	var pktBuy serverPkt
+	for {
+		pkt := <-receivedPkts
+		if pkt.opcode == uint16(protocol.OpcodeSMSG_BUY_ITEM) {
+			pktBuy = pkt
+			break
+		}
+	}
+	if pktBuy.opcode != uint16(protocol.OpcodeSMSG_BUY_ITEM) {
+		t.Fatalf("expected SMSG_BUY_ITEM (0x1A2), got op=%x", pktBuy.opcode)
+	}
+
+	<-buyDone
+
+	// Verify money deducted back to 1000
+	if sess.player.Money != 1000 {
+		t.Fatalf("expected 1000 money after buyback, got %d", sess.player.Money)
+	}
+
+	// Verify buyback slot 0 is now empty
+	if sess.buyback[0] != nil {
+		t.Fatalf("expected buyback[0] nil after buyback, got %+v", sess.buyback[0])
+	}
+
+	// Verify item is restored to character_inventory
+	var restoredEntry int
+	err = db.QueryRow("SELECT ii.itemEntry FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = 1 AND ci.bag = 0 AND ci.slot = 23").Scan(&restoredEntry)
+	if err != nil || restoredEntry != 5001 {
+		t.Fatalf("expected item 5001 restored to inventory, got err=%v entry=%d", err, restoredEntry)
+	}
+}

@@ -71,8 +71,12 @@ func TestSlice13Handlers(t *testing.T) {
 	}
 
 	// 3. CMSG_BUYBACK_ITEM
-	sess.buyback = []buybackEntry{
-		{ItemEntry: 4567, Count: 2, Price: 200},
+	sess.buyback[0] = &buybackSlot{
+		ItemGUID:  4001 | (uint64(0x4000) << 48),
+		ItemEntry: 4567,
+		Count:     2,
+		Price:     200,
+		Timestamp: 1000,
 	}
 	buybackBuf := protocol.NewBuffer(12)
 	buybackBuf.WriteU64(777)
@@ -83,8 +87,8 @@ func TestSlice13Handlers(t *testing.T) {
 	if sess.player.Money != 9300 { // 9500 - 200 = 9300
 		t.Fatalf("expected 9300 money, got %d", sess.player.Money)
 	}
-	if len(sess.buyback) != 0 {
-		t.Fatalf("expected buyback empty, got %d", len(sess.buyback))
+	if sess.buyback[0] != nil {
+		t.Fatalf("expected buyback[0] empty, got %+v", sess.buyback[0])
 	}
 	var itemEntry int
 	_ = db.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE owner_guid = 1").Scan(&itemEntry)
