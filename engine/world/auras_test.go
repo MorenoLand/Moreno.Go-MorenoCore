@@ -543,6 +543,7 @@ func TestFinishSpellCast_SpellMiss(t *testing.T) {
 	// Try casting until a miss occurs (level 1 vs 80 has 99% miss chance, virtually 1st try)
 	for i := 0; i < 20; i++ {
 		sess.player.Powers[0] = 200
+		srv.creatureMotion[creatureGUID].Health = 1000
 		sess.finishSpellCast(context.Background(), uint8(i+1), 686, spell, target)
 		time.Sleep(20 * time.Millisecond)
 

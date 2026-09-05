@@ -106,6 +106,19 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
 	s.checkDuelBounds()
 
+	// Swimming state and breath mirror timer updates
+	wasSwimming := s.isSwimming
+	isSwimming := (info.Flags&movementSwimming != 0) || opcode == uint32(protocol.OpcodeMSG_MOVE_START_SWIM)
+	if opcode == uint32(protocol.OpcodeMSG_MOVE_STOP_SWIM) {
+		isSwimming = false
+	}
+	s.isSwimming = isSwimming
+	if isSwimming && !wasSwimming {
+		s.handleEnterSwimming()
+	} else if !isSwimming && wasSwimming {
+		s.handleExitSwimming()
+	}
+
 	// Fall damage generation and parachute interrupts (TC MovementHandler.cpp:359-365)
 	if opcode == uint32(protocol.OpcodeMSG_MOVE_FALL_LAND) {
 		s.handleFall(ctx, info)

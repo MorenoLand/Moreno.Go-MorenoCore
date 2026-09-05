@@ -124,6 +124,9 @@ type session struct {
 	isMoving           bool
 	lastFallZ          float32
 	lastFallTime       uint32
+	isSwimming         bool
+	breathTimer        int32
+	lastBreathTick     time.Time
 	lastRegenTick      time.Time
 	lastCastTime       time.Time
 	lastCombatTime     time.Time
@@ -283,6 +286,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.processCreatureRespawns(ctx, now)
 			s.updatePlayerDeathTimers(ctx, now)
 			s.updateSpiritHealerResurrectWaves(ctx, now)
+			s.updatePlayerUnderwater(ctx, now)
 			s.updateWardenSessions(ctx, 100*time.Millisecond)
 		}
 	}
