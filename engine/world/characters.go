@@ -345,6 +345,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.mounts = mounts
+	s.breathTimer = -1
+	s.fatigueTimer = -1
 
 	// Stream core login verification and capabilities
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD), buildLoginVerifyWorld(state), true); err != nil {
