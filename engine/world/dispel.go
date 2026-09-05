@@ -1,0 +1,629 @@
+package world
+
+import (
+	"context"
+	"math/rand/v2"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+)
+
+const (
+	DispelNone         uint32 = 0
+	DispelMagic        uint32 = 1
+	DispelCurse        uint32 = 2
+	DispelDisease      uint32 = 3
+	DispelPoison       uint32 = 4
+	DispelStealth      uint32 = 5
+	DispelInvisibility uint32 = 6
+	DispelAll          uint32 = 7
+	DispelSpeNpcOnly   uint32 = 8
+	DispelEnrage       uint32 = 9
+	DispelZgTicket     uint32 = 10
+	DispelOldUnused    uint32 = 11
+
+	DispelAllMask uint32 = (1 << DispelMagic) | (1 << DispelCurse) | (1 << DispelDisease) | (1 << DispelPoison)
+
+	spellFailedNothingToDispel uint8 = 86 // SPELL_FAILED_NOTHING_TO_DISPEL (SharedDefines.h:1068)
+
+	spellAuraModDispelResist uint32 = 235   // SPELL_AURA_MOD_DISPEL_RESIST (SpellAuraDefines.h:315)
+	spellUnholyBlight       uint32 = 50536 // DK Unholy Blight aura preventing disease dispel (Unit.cpp:4591)
+)
+
+// getDispelMask converts a DispelType to its bitmask.
+// Mirrors TrinityCore SpellInfo::GetDispelMask (SpellInfo.cpp:1947-1954).
+func getDispelMask(dispelType uint32) uint32 {
+	if dispelType == DispelAll {
+		return DispelAllMask
+	}
+	return 1 << dispelType
+}
+
+// buildSpellDispelLog builds SMSG_SPELLDISPELLOG (0x27B).
+// Mirrors TrinityCore SpellEffects.cpp:2503-2516.
+func buildSpellDispelLog(victimGUID, casterGUID uint64, dispelSpellID uint32, dispelledSpells []uint32) []byte {
+	buf := protocol.NewBuffer(32 + len(dispelledSpells)*5)
+	buf.WritePackedGUID(victimGUID)
+	buf.WritePackedGUID(casterGUID)
+	buf.WriteU32(dispelSpellID)
+	buf.WriteU8(0) // not used
+	buf.WriteU32(uint32(len(dispelledSpells)))
+	for _, id := range dispelledSpells {
+		buf.WriteU32(id)
+		buf.WriteU8(0) // 0 = dispelled, !=0 cleansed
+	}
+	return buf.Bytes()
+}
+
+// buildDispelFailed builds SMSG_DISPEL_FAILED (0x262).
+// Mirrors TrinityCore SpellEffects.cpp:2486-2493.
+func buildDispelFailed(casterGUID, victimGUID uint64, dispelSpellID uint32, failedSpells []uint32) []byte {
+	buf := protocol.NewBuffer(20 + len(failedSpells)*4)
+	buf.WriteU64(casterGUID)
+	buf.WriteU64(victimGUID)
+	buf.WriteU32(dispelSpellID)
+	for _, id := range failedSpells {
+		buf.WriteU32(id)
+	}
+	return buf.Bytes()
+}
+
+// buildSpellstealLog builds SMSG_SPELLSTEALLOG (0x333).
+// Mirrors TrinityCore SpellEffects.cpp:5238-5250.
+func buildSpellstealLog(victimGUID, casterGUID uint64, stealSpellID uint32, stolenSpells []uint32) []byte {
+	buf := protocol.NewBuffer(32 + len(stolenSpells)*5)
+	buf.WritePackedGUID(victimGUID)
+	buf.WritePackedGUID(casterGUID)
+	buf.WriteU32(stealSpellID)
+	buf.WriteU8(0) // not used
+	buf.WriteU32(uint32(len(stolenSpells)))
+	for _, id := range stolenSpells {
+		buf.WriteU32(id)
+		buf.WriteU8(0) // 0 = steals, !=0 transfers
+	}
+	return buf.Bytes()
+}
+
+type dispelCandidate struct {
+	SpellID    uint32
+	DispelType uint32
+	Mechanic   uint32
+	AuraType   uint32
+	Slot       uint8
+	Chance     int32
+	Positive   bool
+	DurationMs uint32
+	PeriodMs   uint32
+	Amount     uint32
+	SchoolMask uint32
+}
+
+func (s *session) isFriendlyToPlayer(targetSess *session) bool {
+	if targetSess == nil || s == targetSess {
+		return true
+	}
+	if s.player == nil || targetSess.player == nil {
+		return false
+	}
+	// Duel check: during active duel, opponents are hostile
+	if s.player.DuelTeam != 0 && s.duelPartner == targetSess.playerGUID {
+		return false
+	}
+	return playerTeam(s.player.Race) == playerTeam(targetSess.player.Race)
+}
+
+func (s *session) isFriendlyToTarget(targetGUID uint64, targetSess *session) bool {
+	if targetGUID == s.playerGUID || targetGUID == 0 {
+		return true
+	}
+	if targetSess != nil {
+		return s.isFriendlyToPlayer(targetSess)
+	}
+	if s.player != nil && s.player.PetGUID != 0 && s.player.PetGUID == targetGUID {
+		return true
+	}
+	return false
+}
+
+// calcDispelChanceLocked calculates dispel chance assuming castMu is already held.
+func (s *session) calcDispelChanceLocked(offensive bool) int32 {
+	resistChance := int32(0)
+	if offensive {
+		for _, aura := range s.activeAuras {
+			if aura != nil && aura.AuraType == spellAuraModDispelResist {
+				resistChance += int32(aura.Amount)
+			}
+		}
+		if s.server != nil && s.server.Data != nil && s.player != nil {
+			for _, pSpell := range s.player.Spells {
+				if !pSpell.Active || pSpell.Disabled {
+					continue
+				}
+				spell, found, err := s.server.Data.Spell(pSpell.ID)
+				if err == nil && found {
+					for _, eff := range spell.Effects {
+						if eff.Aura == spellAuraModDispelResist {
+							resistChance += eff.BasePoints + 1
+						}
+					}
+				}
+			}
+		}
+	}
+	if resistChance < 0 {
+		resistChance = 0
+	} else if resistChance > 100 {
+		resistChance = 100
+	}
+	return 100 - resistChance
+}
+
+// calcDispelChance mirrors TrinityCore Aura::CalcDispelChance (SpellAuras.cpp:1218-1236).
+func (s *session) calcDispelChance(offensive bool) int32 {
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	return s.calcDispelChanceLocked(offensive)
+}
+
+// getDispellableAuraListForPlayer returns the list of auras that can be dispelled from a player.
+// Mirrors TrinityCore Unit::GetDispellableAuraList (Unit.cpp:4588-4628).
+func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMask uint32) []dispelCandidate {
+	if targetSess == nil || targetSess.player == nil {
+		return nil
+	}
+
+	// If target is affected by Unholy Blight (50536), cannot dispel diseases (Unit.cpp:4591)
+	if (dispelMask&(1<<DispelDisease) != 0) && targetSess.hasAura(spellUnholyBlight) {
+		dispelMask &^= (1 << DispelDisease)
+	}
+
+	isFriendly := s.isFriendlyToPlayer(targetSess)
+
+	targetSess.castMu.Lock()
+	defer targetSess.castMu.Unlock()
+
+	var candidates []dispelCandidate
+	for spellID, aura := range targetSess.activeAuras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		var sp wotlk.Spell
+		var found bool
+		if s.server != nil && s.server.Data != nil {
+			sp, found, _ = s.server.Data.Spell(spellID)
+		}
+		// Passive auras cannot be dispelled (Unit.cpp:4603)
+		if found && sp.Attributes&spellAttributePassive != 0 {
+			continue
+		}
+
+		dispelType := aura.DispelType
+		if dispelType == 0 && found {
+			dispelType = sp.DispelType
+		}
+		if (getDispelMask(dispelType) & dispelMask) == 0 {
+			continue
+		}
+
+		// Friendly target: remove harmful debuffs (!aura.Positive)
+		// Hostile target: remove beneficial buffs (aura.Positive)
+		// Mirrors Unit.cpp:4608-4612
+		if isFriendly == aura.Positive {
+			continue
+		}
+
+		// Calculate dispel chance: 100 - resistChance (SpellAuras.cpp:1218-1236)
+		chance := targetSess.calcDispelChanceLocked(!isFriendly)
+		if chance <= 0 {
+			continue
+		}
+
+		candidates = append(candidates, dispelCandidate{
+			SpellID:    spellID,
+			DispelType: dispelType,
+			Mechanic:   aura.Mechanic,
+			AuraType:   aura.AuraType,
+			Slot:       aura.Slot,
+			Chance:     chance,
+			Positive:   aura.Positive,
+			DurationMs: aura.DurationMs,
+			PeriodMs:   aura.PeriodMs,
+			Amount:     aura.Amount,
+			SchoolMask: aura.SchoolMask,
+		})
+	}
+	return candidates
+}
+
+// getDispellableAuraListForCreature returns dispellable auras on a creature.
+func (s *session) getDispellableAuraListForCreature(creatureGUID uint64, dispelMask uint32) []dispelCandidate {
+	if s.server == nil {
+		return nil
+	}
+	s.server.auraMu.Lock()
+	defer s.server.auraMu.Unlock()
+
+	auras := s.server.activeCreatureAuras[creatureGUID]
+	if len(auras) == 0 {
+		return nil
+	}
+
+	isFriendly := false
+	if s.player != nil && s.player.PetGUID != 0 && s.player.PetGUID == creatureGUID {
+		isFriendly = true
+	}
+
+	var candidates []dispelCandidate
+	for spellID, aura := range auras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		var sp wotlk.Spell
+		var found bool
+		if s.server.Data != nil {
+			sp, found, _ = s.server.Data.Spell(spellID)
+		}
+		if found && sp.Attributes&spellAttributePassive != 0 {
+			continue
+		}
+
+		dispelType := aura.DispelType
+		if dispelType == 0 && found {
+			dispelType = sp.DispelType
+		}
+		if (getDispelMask(dispelType) & dispelMask) == 0 {
+			continue
+		}
+
+		if isFriendly == aura.Positive {
+			continue
+		}
+
+		chance := int32(100)
+		candidates = append(candidates, dispelCandidate{
+			SpellID:    spellID,
+			DispelType: dispelType,
+			Mechanic:   aura.Mechanic,
+			AuraType:   aura.AuraType,
+			Slot:       aura.Slot,
+			Chance:     chance,
+			Positive:   aura.Positive,
+			DurationMs: aura.DurationMs,
+			PeriodMs:   aura.PeriodMs,
+			Amount:     aura.Amount,
+			SchoolMask: aura.SchoolMask,
+		})
+	}
+	return candidates
+}
+
+// checkDispelPreCast mirrors TrinityCore Spell::CheckCast (Spell.cpp:5520-5565).
+// Returns spellFailedNothingToDispel (86) if the spell only dispels and target has nothing to dispel.
+func (s *session) checkDispelPreCast(spell wotlk.Spell, targetGUID uint64) uint8 {
+	hasNonDispelEffect := false
+	hasAreaDispel := false
+	dispelMask := uint32(0)
+
+	for _, eff := range spell.Effects {
+		if eff.Effect == 38 { // SPELL_EFFECT_DISPEL
+			if eff.ImplicitTargetA == 18 || eff.ImplicitTargetA == 24 || eff.ImplicitTargetA == 28 || eff.RadiusIndex > 0 {
+				hasAreaDispel = true
+				break
+			}
+			dispelMask |= getDispelMask(uint32(eff.MiscValue))
+		} else if eff.Effect != 0 {
+			hasNonDispelEffect = true
+			break
+		}
+	}
+
+	if hasNonDispelEffect || hasAreaDispel || dispelMask == 0 {
+		return 0
+	}
+
+	// Target resolution
+	var targetSess *session
+	if targetGUID == s.playerGUID || targetGUID == 0 {
+		targetSess = s
+		targetGUID = s.playerGUID
+	} else if s.server != nil {
+		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+
+	var candidates []dispelCandidate
+	if targetSess != nil && targetSess.player != nil {
+		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask)
+	} else if targetGUID != 0 {
+		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask)
+	}
+
+	if len(candidates) == 0 {
+		return spellFailedNothingToDispel
+	}
+	return 0
+}
+
+func isDevourMagicSpell(spellID uint32) bool {
+	switch spellID {
+	case 19505, 19731, 19734, 19736, 27276, 27277:
+		return true
+	default:
+		return false
+	}
+}
+
+// handleEffectDispel processes SPELL_EFFECT_DISPEL (38).
+// Mirrors TrinityCore Spell::EffectDispel (SpellEffects.cpp:2429-2531).
+func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s.player == nil {
+		return
+	}
+
+	dispelType := uint32(eff.MiscValue)
+	dispelMask := getDispelMask(dispelType)
+
+	var targetSess *session
+	if targetGUID == s.playerGUID || targetGUID == 0 {
+		targetSess = s
+		targetGUID = s.playerGUID
+	} else if s.server != nil {
+		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+
+	var candidates []dispelCandidate
+	isTargetPlayer := (targetSess != nil && targetSess.player != nil)
+	if isTargetPlayer {
+		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask)
+	} else {
+		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask)
+	}
+
+	if len(candidates) == 0 {
+		return
+	}
+
+	maxDispelled := int(eff.BasePoints + 1)
+	if maxDispelled <= 0 {
+		maxDispelled = 1
+	}
+
+	var successList []uint32
+	var failList []uint32
+
+	for count := 0; count < maxDispelled && len(candidates) > 0; count++ {
+		idx := rand.IntN(len(candidates))
+		cand := candidates[idx]
+		candidates[idx] = candidates[len(candidates)-1]
+		candidates = candidates[:len(candidates)-1]
+
+		roll := rand.IntN(100)
+		if int32(roll) < cand.Chance {
+			// Dispel success
+			successList = append(successList, cand.SpellID)
+			if isTargetPlayer {
+				targetSess.expirePlayerAura(cand.SpellID)
+			} else {
+				s.expireCreatureAura(targetGUID, cand.SpellID, cand.Slot)
+			}
+
+			// Devour Magic self-heal (SpellEffects.cpp:2520-2530)
+			if isDevourMagicSpell(spell.ID) {
+				healAmount := uint32(100)
+				if len(spell.Effects) > 1 && spell.Effects[1].BasePoints > 0 {
+					healAmount = uint32(spell.Effects[1].BasePoints + 1)
+				}
+				s.player.Health += healAmount
+				if s.player.Health > s.player.MaxHealth {
+					s.player.Health = s.player.MaxHealth
+				}
+				s.sendPlayerUpdate()
+			}
+		} else {
+			// Dispel resisted / failed
+			failList = append(failList, cand.SpellID)
+		}
+	}
+
+	if len(failList) > 0 {
+		failPkt := buildDispelFailed(s.playerGUID, targetGUID, spell.ID, failList)
+		_ = s.write(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, s)
+		}
+	}
+
+	if len(successList) > 0 {
+		logPkt := buildSpellDispelLog(targetGUID, s.playerGUID, spell.ID, successList)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, true)
+		if targetSess != nil && targetSess != s {
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, true)
+		}
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLDISPELLOG), logPkt, s)
+		}
+	}
+}
+
+// handleEffectSpellsteal processes SPELL_EFFECT_STEAL_BENEFICIAL_BUFF (126).
+// Mirrors TrinityCore Spell::EffectStealBeneficialBuff (SpellEffects.cpp:5150-5251).
+func (s *session) handleEffectSpellsteal(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	if s.player == nil || targetGUID == s.playerGUID || targetGUID == 0 {
+		return
+	}
+
+	dispelType := uint32(eff.MiscValue)
+	dispelMask := getDispelMask(dispelType)
+
+	var targetSess *session
+	if s.server != nil {
+		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+
+	var candidates []dispelCandidate
+	isTargetPlayer := (targetSess != nil && targetSess.player != nil)
+	if isTargetPlayer {
+		candidates = s.getDispellableAuraListForPlayer(targetSess, dispelMask)
+	} else {
+		candidates = s.getDispellableAuraListForCreature(targetGUID, dispelMask)
+	}
+
+	// Spellsteal only steals beneficial buffs from non-friendly targets (SpellEffects.cpp:5172)
+	var stealable []dispelCandidate
+	for _, c := range candidates {
+		if c.Positive {
+			stealable = append(stealable, c)
+		}
+	}
+
+	if len(stealable) == 0 {
+		return
+	}
+
+	maxDispelled := int(eff.BasePoints + 1)
+	if maxDispelled <= 0 {
+		maxDispelled = 1
+	}
+
+	var successList []uint32
+	var stolenCandidates []dispelCandidate
+	var failList []uint32
+
+	for count := 0; count < maxDispelled && len(stealable) > 0; count++ {
+		idx := rand.IntN(len(stealable))
+		cand := stealable[idx]
+		stealable[idx] = stealable[len(stealable)-1]
+		stealable = stealable[:len(stealable)-1]
+
+		roll := rand.IntN(100)
+		if int32(roll) < cand.Chance {
+			successList = append(successList, cand.SpellID)
+			stolenCandidates = append(stolenCandidates, cand)
+			if isTargetPlayer {
+				targetSess.expirePlayerAura(cand.SpellID)
+			} else {
+				s.expireCreatureAura(targetGUID, cand.SpellID, cand.Slot)
+			}
+		} else {
+			failList = append(failList, cand.SpellID)
+		}
+	}
+
+	// Apply stolen buffs to caster (capped at 2 minutes / 120000ms per TC)
+	for _, cand := range stolenCandidates {
+		dur := cand.DurationMs
+		if dur == 0 || dur > 120000 {
+			dur = 120000
+		}
+		stSpell := wotlk.Spell{ID: cand.SpellID, DispelType: cand.DispelType, Mechanic: cand.Mechanic}
+		if s.server != nil && s.server.Data != nil {
+			if loaded, found, _ := s.server.Data.Spell(cand.SpellID); found {
+				stSpell = loaded
+			}
+		}
+		eff := wotlk.SpellEffect{
+			Effect:     6,
+			Aura:       cand.AuraType,
+			BasePoints: int32(cand.Amount) - 1,
+		}
+		s.applyAuraToTarget(ctx, s.playerGUID, stSpell, eff, dur, cand.PeriodMs, cand.Amount, cand.SchoolMask)
+	}
+
+	if len(failList) > 0 {
+		failPkt := buildDispelFailed(s.playerGUID, targetGUID, spell.ID, failList)
+		_ = s.write(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, true)
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_DISPEL_FAILED), failPkt, s)
+		}
+	}
+
+	if len(successList) > 0 {
+		logPkt := buildSpellstealLog(targetGUID, s.playerGUID, spell.ID, successList)
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLSTEALLOG), logPkt, true)
+		if targetSess != nil && targetSess != s {
+			_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLSTEALLOG), logPkt, true)
+		}
+		if s.server != nil {
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLSTEALLOG), logPkt, s)
+		}
+	}
+}
+
+// handleEffectDispelMechanic processes SPELL_EFFECT_DISPEL_MECHANIC (108).
+// Mirrors TrinityCore Spell::EffectDispelMechanic (SpellEffects.cpp:4733-4756).
+func (s *session) handleEffectDispelMechanic(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
+	mechanic := uint32(eff.MiscValue)
+	if mechanic == 0 {
+		return
+	}
+
+	var targetSess *session
+	if targetGUID == s.playerGUID || targetGUID == 0 {
+		targetSess = s
+		targetGUID = s.playerGUID
+	} else if s.server != nil {
+		targetSess = s.server.findSessionByGUID(targetGUID)
+	}
+
+	if targetSess != nil && targetSess.player != nil {
+		targetSess.castMu.Lock()
+		var toRemove []uint32
+		for spellID, aura := range targetSess.activeAuras {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			matchesMechanic := (aura.Mechanic == mechanic)
+			if !matchesMechanic {
+				// Also check if aura type corresponds to standard CC mechanics
+				switch mechanic {
+				case 1: // MECHANIC_CHARM
+					matchesMechanic = (aura.AuraType == 6)
+				case 2: // MECHANIC_DISORIENTED
+					matchesMechanic = (aura.AuraType == 5)
+				case 5: // MECHANIC_FEAR
+					matchesMechanic = (aura.AuraType == 7)
+				case 7: // MECHANIC_ROOT
+					matchesMechanic = (aura.AuraType == 15)
+				case 9: // MECHANIC_SILENCE
+					matchesMechanic = (aura.AuraType == 14)
+				case 11: // MECHANIC_SNARE
+					matchesMechanic = (aura.AuraType == 130 || aura.AuraType == 31)
+				case 12: // MECHANIC_STUN
+					matchesMechanic = (aura.AuraType == 12)
+				case 15: // MECHANIC_BLEED
+					matchesMechanic = (aura.AuraType == 3 && aura.SchoolMask == 1)
+				}
+			}
+			if matchesMechanic {
+				toRemove = append(toRemove, spellID)
+			}
+		}
+		targetSess.castMu.Unlock()
+
+		for _, spID := range toRemove {
+			targetSess.expirePlayerAura(spID)
+		}
+	} else if targetGUID != 0 && s.server != nil {
+		s.server.auraMu.Lock()
+		auras := s.server.activeCreatureAuras[targetGUID]
+		var toRemove []struct {
+			spellID uint32
+			slot    uint8
+		}
+		for spellID, aura := range auras {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+			if aura.Mechanic == mechanic || (mechanic == 5 && aura.AuraType == 7) || (mechanic == 12 && aura.AuraType == 12) {
+				toRemove = append(toRemove, struct {
+					spellID uint32
+					slot    uint8
+				}{spellID: spellID, slot: aura.Slot})
+			}
+		}
+		s.server.auraMu.Unlock()
+
+		for _, item := range toRemove {
+			s.expireCreatureAura(targetGUID, item.spellID, item.slot)
+		}
+	}
+}
