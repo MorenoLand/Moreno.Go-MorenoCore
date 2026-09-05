@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -893,6 +894,291 @@ func TestMasterLootParity(t *testing.T) {
 	err = db.QueryRow("SELECT ii.itemEntry FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = 2").Scan(&entry)
 	if err != nil || entry != 19019 {
 		t.Fatalf("expected Thunderfury (19019) in Player 2 inventory, got entry=%d err=%v", entry, err)
+	}
+}
+
+func TestGroupLoot_NeedBeforeGreed_ClassRestriction(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TABLE item_template (entry INTEGER PRIMARY KEY, name TEXT DEFAULT '', AllowableClass INTEGER DEFAULT -1, DisenchantID INTEGER DEFAULT 0);
+		CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER);
+		CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, durability INTEGER);
+		INSERT INTO item_template (entry, name, AllowableClass, DisenchantID) VALUES (12345, 'Warrior Plate', 1, 0);
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	worldStore := &database.Store{DB: db}
+	charStore := &database.Store{DB: db}
+
+	srv := &Server{
+		WorldStore:      worldStore,
+		CharactersStore: charStore,
+		groups:          make(map[uint64]*groupState),
+		creatureLoot:    make(map[uint64]*activeLootState),
+		groupRolls:      make(map[string]*activeGroupRoll),
+		sessions:        make(map[*session]struct{}),
+		Config:          config.Default(),
+	}
+
+	cConn1, sConn1 := net.Pipe()
+	defer cConn1.Close()
+	defer sConn1.Close()
+
+	cConn2, sConn2 := net.Pipe()
+	defer cConn2.Close()
+	defer sConn2.Close()
+
+	sess1 := &session{
+		server:       srv,
+		conn:         sConn1,
+		playerLoaded: true,
+		playerGUID:   10,
+		groupID:      300,
+		player:       &playerState{GUID: 10, Class: 1}, // Warrior
+	}
+	sess2 := &session{
+		server:       srv,
+		conn:         sConn2,
+		playerLoaded: true,
+		playerGUID:   20,
+		groupID:      300,
+		player:       &playerState{GUID: 20, Class: 8}, // Mage
+	}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+
+	srv.groups[300] = &groupState{
+		ID:            300,
+		LootMethod:    4, // Need Before Greed
+		LootThreshold: 2,
+		Members:       []groupMember{{GUID: 10}, {GUID: 20}},
+	}
+
+	targetGUID := uint64(999)
+	srv.creatureLoot[targetGUID] = &activeLootState{
+		TargetGUID: targetGUID,
+		Items: map[uint8]lootItem{
+			0: {Slot: 0, ItemEntry: 12345, Count: 1},
+		},
+	}
+
+	masks := make(chan uint8, 4)
+	go func() {
+		for {
+			_ = cConn1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			op, p, err := readServerFrame(cConn1, nil)
+			if err != nil {
+				return
+			}
+			if op == uint16(protocol.OpcodeSMSG_LOOT_START_ROLL) {
+				r := protocol.NewReader(p)
+				_, _ = r.ReadU64() // source
+				_, _ = r.ReadU32() // map
+				_, _ = r.ReadU32() // slot
+				_, _ = r.ReadU32() // entry
+				_, _ = r.ReadU32() // suffix
+				_, _ = r.ReadU32() // prop
+				_, _ = r.ReadU32() // count
+				_, _ = r.ReadU32() // countdown
+				mask, _ := r.ReadU8()
+				masks <- mask
+			}
+		}
+	}()
+
+	mageMasks := make(chan uint8, 4)
+	go func() {
+		for {
+			_ = cConn2.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			op, p, err := readServerFrame(cConn2, nil)
+			if err != nil {
+				return
+			}
+			if op == uint16(protocol.OpcodeSMSG_LOOT_START_ROLL) {
+				r := protocol.NewReader(p)
+				_, _ = r.ReadU64() // source
+				_, _ = r.ReadU32() // map
+				_, _ = r.ReadU32() // slot
+				_, _ = r.ReadU32() // entry
+				_, _ = r.ReadU32() // suffix
+				_, _ = r.ReadU32() // prop
+				_, _ = r.ReadU32() // count
+				_, _ = r.ReadU32() // countdown
+				mask, _ := r.ReadU8()
+				mageMasks <- mask
+			}
+		}
+	}()
+
+	srv.startGroupLootRoll(targetGUID, 0, 12345, 1, 0, 300)
+
+	// Verify Warrior mask has NEED (0x02)
+	select {
+	case m1 := <-masks:
+		if m1&rollFlagTypeNeed == 0 {
+			t.Fatalf("expected Warrior mask to include rollFlagTypeNeed, got 0x%02X", m1)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for Warrior start roll packet")
+	}
+
+	// Verify Mage mask has NEED (0x02) cleared
+	select {
+	case m2 := <-mageMasks:
+		if m2&rollFlagTypeNeed != 0 {
+			t.Fatalf("expected Mage mask to NOT include rollFlagTypeNeed under Need Before Greed, got 0x%02X", m2)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for Mage start roll packet")
+	}
+
+	// If Mage attempts to roll NEED (1), server should convert to PASS (0)
+	pMage := protocol.NewBuffer(13)
+	pMage.WriteU64(targetGUID)
+	pMage.WriteU32(0)
+	pMage.WriteU8(1) // NEED
+	sess2.handleLootRoll(context.Background(), pMage.Bytes())
+
+	srv.lootMu.Lock()
+	roll := srv.groupRolls[fmt.Sprintf("%d:%d", targetGUID, 0)]
+	if roll == nil || roll.Votes[20] != rollPass {
+		t.Fatalf("expected Mage vote converted to rollPass, got %v", roll.Votes[20])
+	}
+	srv.lootMu.Unlock()
+}
+
+func TestGroupLoot_Disenchant_LootDelivery(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`
+		CREATE TABLE item_template (entry INTEGER PRIMARY KEY, name TEXT DEFAULT '', AllowableClass INTEGER DEFAULT -1, DisenchantID INTEGER DEFAULT 0, stackable INTEGER DEFAULT 1, ContainerSlots INTEGER DEFAULT 0);
+		CREATE TABLE disenchant_loot_template (Entry INTEGER, Item INTEGER, Chance REAL DEFAULT 100, MinCount INTEGER DEFAULT 1, MaxCount INTEGER DEFAULT 1);
+		CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot));
+		CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT);
+		CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT);
+		INSERT INTO characters VALUES (10, 100, ''), (20, 100, '');
+		INSERT INTO item_template (entry, name, AllowableClass, DisenchantID, stackable, ContainerSlots) VALUES (7777, 'Magic Staff', -1, 50, 1, 0), (10940, 'Strange Dust', -1, 0, 20, 0);
+		INSERT INTO disenchant_loot_template (Entry, Item, Chance, MinCount, MaxCount) VALUES (50, 10940, 100, 2, 2);
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	worldStore := &database.Store{DB: db}
+	charStore := &database.Store{DB: db}
+
+	srv := &Server{
+		WorldStore:      worldStore,
+		CharactersStore: charStore,
+		groups:          make(map[uint64]*groupState),
+		creatureLoot:    make(map[uint64]*activeLootState),
+		groupRolls:      make(map[string]*activeGroupRoll),
+		sessions:        make(map[*session]struct{}),
+		Config:          config.Default(),
+	}
+
+	cConn1, sConn1 := net.Pipe()
+	defer cConn1.Close()
+	defer sConn1.Close()
+
+	cConn2, sConn2 := net.Pipe()
+	defer cConn2.Close()
+	defer sConn2.Close()
+
+	sess1 := &session{
+		server:       srv,
+		conn:         sConn1,
+		playerLoaded: true,
+		playerGUID:   10,
+		groupID:      400,
+		player:       &playerState{GUID: 10},
+	}
+	sess2 := &session{
+		server:       srv,
+		conn:         sConn2,
+		playerLoaded: true,
+		playerGUID:   20,
+		groupID:      400,
+		player:       &playerState{GUID: 20},
+	}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+
+	srv.groups[400] = &groupState{
+		ID:            400,
+		LootMethod:    3, // Group Loot
+		LootThreshold: 2,
+		Members:       []groupMember{{GUID: 10}, {GUID: 20}},
+	}
+
+	targetGUID := uint64(8888)
+	srv.creatureLoot[targetGUID] = &activeLootState{
+		TargetGUID: targetGUID,
+		Items: map[uint8]lootItem{
+			0: {Slot: 0, ItemEntry: 7777, Count: 1},
+		},
+	}
+
+	go func() {
+		for {
+			_ = cConn1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, _, err := readServerFrame(cConn1, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	go func() {
+		for {
+			_ = cConn2.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+			_, _, err := readServerFrame(cConn2, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	srv.startGroupLootRoll(targetGUID, 0, 7777, 1, 0, 400)
+
+	srv.lootMu.Lock()
+	roll := srv.groupRolls[fmt.Sprintf("%d:%d", targetGUID, 0)]
+	if roll == nil || roll.RollVoteMask&rollFlagTypeDisenchant == 0 {
+		srv.lootMu.Unlock()
+		t.Fatalf("expected rollVoteMask to include rollFlagTypeDisenchant for disenchantable item")
+	}
+	srv.lootMu.Unlock()
+
+	// Sess1 votes DISENCHANT (3)
+	p1 := protocol.NewBuffer(13)
+	p1.WriteU64(targetGUID)
+	p1.WriteU32(0)
+	p1.WriteU8(rollDisenchant)
+	sess1.handleLootRoll(context.Background(), p1.Bytes())
+
+	// Sess2 votes PASS (0)
+	p2 := protocol.NewBuffer(13)
+	p2.WriteU64(targetGUID)
+	p2.WriteU32(0)
+	p2.WriteU8(rollPass)
+	sess2.handleLootRoll(context.Background(), p2.Bytes())
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify winner 10 received Strange Dust (10940) instead of raw Magic Staff (7777)
+	var storedItem int64
+	err = db.QueryRow("SELECT ii.itemEntry FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = 10").Scan(&storedItem)
+	if err != nil || storedItem != 10940 {
+		t.Fatalf("expected Strange Dust (10940) in winner inventory from disenchant, got err=%v item=%d", err, storedItem)
 	}
 }
 
