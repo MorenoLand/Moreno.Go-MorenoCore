@@ -1674,6 +1674,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 	if s.player != nil && s.player.PetGUID != 0 {
 		s.unsummonPet(ctx, petSaveAsCurrent)
 	}
+	s.clearActiveAuras()
 	s.playerLoaded = false
 	s.player = nil
 	s.logoutAt = time.Time{}

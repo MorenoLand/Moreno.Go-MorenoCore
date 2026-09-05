@@ -11,11 +11,39 @@ const (
 	SpellTargetFlagString         uint32 = 0x00002000
 	SpellTargetFlagCorpseAlly     uint32 = 0x00008000
 	SpellTargetFlagUnitMinipet    uint32 = 0x00010000
-	SpellTargetFlagDestTarget     uint32 = 0x00040000
+	SpellTargetFlagDestTarget     uint32 = 0x040000
 	SpellTargetFlagUnitWireMask          = SpellTargetFlagUnit | SpellTargetFlagUnitMinipet | SpellTargetFlagGameObject | SpellTargetFlagCorpseEnemy | SpellTargetFlagCorpseAlly
 	SpellTargetFlagItemWireMask          = SpellTargetFlagItem | SpellTargetFlagTradeItem
 	SpellCastFlagVisualChain      uint32 = 0x00080000
-	SpellMissReflect              uint8  = 2
+
+	SpellMissNone    uint8 = 0
+	SpellMissMiss    uint8 = 1
+	SpellMissResist  uint8 = 2
+	SpellMissDodge   uint8 = 3
+	SpellMissParry   uint8 = 4
+	SpellMissBlock   uint8 = 5
+	SpellMissEvade   uint8 = 6
+	SpellMissImmune  uint8 = 7
+	SpellMissImmune2 uint8 = 8
+	SpellMissDeflect uint8 = 9
+	SpellMissAbsorb  uint8 = 10
+	SpellMissReflect uint8 = 11
+
+	SpellAuraPeriodicDamage        uint32 = 3
+	SpellAuraPeriodicHeal          uint32 = 8
+	SpellAuraObsModHealth          uint32 = 20
+	SpellAuraObsModPower           uint32 = 21
+	SpellAuraPeriodicEnergize      uint32 = 24
+	SpellAuraPeriodicLeech         uint32 = 53
+	SpellAuraPeriodicDamagePercent uint32 = 89
+
+	AuraFlagEffIndex0 uint8 = 0x01
+	AuraFlagEffIndex1 uint8 = 0x02
+	AuraFlagEffIndex2 uint8 = 0x04
+	AuraFlagCaster    uint8 = 0x08
+	AuraFlagPositive  uint8 = 0x10
+	AuraFlagDuration  uint8 = 0x20
+	AuraFlagNegative  uint8 = 0x80
 )
 
 type SpellTargetLocation struct {
@@ -182,3 +210,99 @@ func writeSpellCastTrailer(packet *Buffer, castFlags, targetFlags uint32) {
 		packet.WriteU8(0)
 	}
 }
+
+// BuildPeriodicAuraLogDamage builds SMSG_PERIODICAURALOG for periodic damage / periodic damage percent.
+// Reference: TrinityCore Unit::SendPeriodicAuraLog (Unit.cpp:5372).
+func BuildPeriodicAuraLogDamage(targetGUID, casterGUID uint64, spellID, auraType, damage, overkill, schoolMask, absorb, resist uint32, critical bool) []byte {
+	buf := NewBuffer(36)
+	buf.WritePackedGUID(targetGUID)
+	buf.WritePackedGUID(casterGUID)
+	buf.WriteU32(spellID)
+	buf.WriteU32(1) // count
+	buf.WriteU32(auraType)
+	buf.WriteU32(damage)
+	buf.WriteU32(overkill)
+	buf.WriteU32(schoolMask)
+	buf.WriteU32(absorb)
+	buf.WriteU32(resist)
+	if critical {
+		buf.WriteU8(1)
+	} else {
+		buf.WriteU8(0)
+	}
+	return buf.Bytes()
+}
+
+// BuildPeriodicAuraLogHeal builds SMSG_PERIODICAURALOG for periodic heal / obs mod health.
+// Reference: TrinityCore Unit::SendPeriodicAuraLog (Unit.cpp:5372).
+func BuildPeriodicAuraLogHeal(targetGUID, casterGUID uint64, spellID, auraType, heal, overheal, absorb uint32, critical bool) []byte {
+	buf := NewBuffer(32)
+	buf.WritePackedGUID(targetGUID)
+	buf.WritePackedGUID(casterGUID)
+	buf.WriteU32(spellID)
+	buf.WriteU32(1) // count
+	buf.WriteU32(auraType)
+	buf.WriteU32(heal)
+	buf.WriteU32(overheal)
+	buf.WriteU32(absorb)
+	if critical {
+		buf.WriteU8(1)
+	} else {
+		buf.WriteU8(0)
+	}
+	return buf.Bytes()
+}
+
+// BuildPeriodicAuraLogEnergize builds SMSG_PERIODICAURALOG for periodic energize / obs mod power.
+// Reference: TrinityCore Unit::SendPeriodicAuraLog (Unit.cpp:5372).
+func BuildPeriodicAuraLogEnergize(targetGUID, casterGUID uint64, spellID, auraType, powerType, amount uint32) []byte {
+	buf := NewBuffer(28)
+	buf.WritePackedGUID(targetGUID)
+	buf.WritePackedGUID(casterGUID)
+	buf.WriteU32(spellID)
+	buf.WriteU32(1) // count
+	buf.WriteU32(auraType)
+	buf.WriteU32(powerType)
+	buf.WriteU32(amount)
+	return buf.Bytes()
+}
+
+// BuildAuraUpdate builds SMSG_AURA_UPDATE (0x496) payload.
+// Reference: TrinityCore AuraApplication::BuildUpdatePacket (SpellAuras.cpp:230-252).
+func BuildAuraUpdate(targetGUID, casterGUID uint64, slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32, casterLevel uint8) []byte {
+	buf := NewBuffer(36)
+	buf.WritePackedGUID(targetGUID)
+	buf.WriteU8(slot)
+	if remove {
+		buf.WriteU32(0)
+		return buf.Bytes()
+	}
+	buf.WriteU32(spellID)
+	flags := AuraFlagEffIndex0
+	if casterGUID == targetGUID || casterGUID == 0 {
+		flags |= AuraFlagCaster
+	}
+	if positive {
+		flags |= AuraFlagPositive
+	} else {
+		flags |= AuraFlagNegative
+	}
+	if maxDurationMs > 0 {
+		flags |= AuraFlagDuration
+	}
+	buf.WriteU8(flags)
+	if casterLevel == 0 {
+		casterLevel = 1
+	}
+	buf.WriteU8(casterLevel)
+	buf.WriteU8(1) // stack count
+	if flags&AuraFlagCaster == 0 { // not self-cast
+		buf.WritePackedGUID(casterGUID)
+	}
+	if maxDurationMs > 0 {
+		buf.WriteU32(maxDurationMs)
+		buf.WriteU32(durationMs)
+	}
+	return buf.Bytes()
+}
+
