@@ -188,9 +188,14 @@ func (s *session) handleSetTradeItem(ctx context.Context, payload []byte) bool {
 	if err != nil || itemGUID == 0 {
 		return true
 	}
-	var itemEntry, count int64
+	var itemEntry, count, flags int64
 	var encStr sql.NullString
-	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, enchantments FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &encStr)
+	_ = cdb.QueryRowContext(ctx, "SELECT itemEntry, count, flags, enchantments FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry, &count, &flags, &encStr)
+	if tradeSlot < tradeSlotTradedCount && (flags&1 != 0) {
+		// Soulbound items cannot be placed in traded slots
+		_ = s.sendTradeStatus(tradeStatusTradeCanceled, 0, 0, 0, 0)
+		return true
+	}
 	var enchantID uint32
 	if encStr.Valid && encStr.String != "" {
 		fields := strings.Fields(encStr.String)
@@ -255,8 +260,16 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	if !s.playerLoaded || s.player == nil || s.trade == nil || s.trade.Partner == nil {
 		return true
 	}
-	s.trade.Accepted = true
 	partner := s.trade.Partner
+	if partner.player == nil || s.player.Map != partner.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, partner.player.X, partner.player.Y, partner.player.Z) > tradeDistance {
+		_ = s.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0)
+		_ = partner.sendTradeStatus(tradeStatusTargetTooFar, 0, 0, 0, 0)
+		s.trade = nil
+		partner.trade = nil
+		return true
+	}
+
+	s.trade.Accepted = true
 
 	// Inform partner
 	_ = partner.sendTradeStatus(tradeStatusTradeAccept, 0, 0, 0, 0)
@@ -268,31 +281,71 @@ func (s *session) handleAcceptTrade(ctx context.Context) bool {
 	return true
 }
 
-func findFreeBackpackSlots(ctx context.Context, cdb *sql.DB, guid uint64, count int) ([]uint8, bool) {
+type tradeSlotLoc struct {
+	bagKey int64
+	slot   uint8
+}
+
+func (s *session) findFreeSlotsForTrade(ctx context.Context, count int) ([]tradeSlotLoc, bool) {
 	if count == 0 {
 		return nil, true
 	}
-	usedSlots := make(map[uint8]bool)
-	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", guid)
+	cdb := s.server.CharactersStore.DB
+	if cdb == nil {
+		return nil, false
+	}
+	var freeLocs []tradeSlotLoc
+
+	// 1. Check backpack (bag = 0, slots 23..38)
+	usedBackpack := make(map[uint8]bool)
+	rows, err := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = 0", s.playerGUID)
 	if err == nil {
-		defer rows.Close()
 		for rows.Next() {
 			var sl int64
 			if rows.Scan(&sl) == nil {
-				usedSlots[uint8(sl)] = true
+				usedBackpack[uint8(sl)] = true
 			}
 		}
+		rows.Close()
 	}
-	var free []uint8
 	for sl := uint8(23); sl <= 38; sl++ {
-		if !usedSlots[sl] {
-			free = append(free, sl)
-			if len(free) == count {
-				return free, true
+		if !usedBackpack[sl] {
+			freeLocs = append(freeLocs, tradeSlotLoc{bagKey: 0, slot: sl})
+			if len(freeLocs) == count {
+				return freeLocs, true
 			}
 		}
 	}
-	return free, len(free) >= count
+
+	// 2. Check equipped bags (slots 19..22)
+	equippedBags := s.getEquippedBags(ctx, s.playerGUID)
+	for _, eb := range equippedBags {
+		maxSlots := eb.slots
+		if maxSlots <= 0 || maxSlots > 36 {
+			continue
+		}
+		usedBagSlots := make(map[uint8]bool)
+		bRows, bErr := cdb.QueryContext(ctx, "SELECT slot FROM character_inventory WHERE guid = ? AND bag = ?", s.playerGUID, eb.guid)
+		if bErr == nil {
+			for bRows.Next() {
+				var bsl int64
+				if bRows.Scan(&bsl) == nil {
+					usedBagSlots[uint8(bsl)] = true
+				}
+			}
+			bRows.Close()
+		}
+		for bsl := uint8(0); bsl < uint8(maxSlots); bsl++ {
+			if !usedBagSlots[bsl] {
+				freeLocs = append(freeLocs, tradeSlotLoc{bagKey: eb.guid, slot: bsl})
+				if len(freeLocs) == count {
+					return freeLocs, true
+				}
+			}
+		}
+	}
+
+	return freeLocs, len(freeLocs) >= count
 }
 
 // completeTrade finalizes the trade, exchanging traded items (slots 0..5) and currency.
@@ -317,12 +370,17 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 		}
 	}
 
-	partnerSlots, ok1 := findFreeBackpackSlots(ctx, cdb, partner.playerGUID, len(sTradedItems))
-	sSlots, ok2 := findFreeBackpackSlots(ctx, cdb, s.playerGUID, len(partnerTradedItems))
+	partnerSlots, ok1 := partner.findFreeSlotsForTrade(ctx, len(sTradedItems))
+	sSlots, ok2 := s.findFreeSlotsForTrade(ctx, len(partnerTradedItems))
 	if !ok1 || !ok2 {
 		// EQUIP_ERR_BAG_FULL = 1
-		_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0)
-		_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0)
+		if !ok1 {
+			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0)
+			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 1, 0) // isTargetResult = 1
+		} else {
+			_ = s.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 0, 0)
+			_ = partner.sendTradeStatus(tradeStatusCloseWindow, 0, 1, 1, 0) // isTargetResult = 1
+		}
 		s.trade = nil
 		partner.trade = nil
 		return
@@ -344,17 +402,17 @@ func (s *session) completeTrade(ctx context.Context, partner *session) {
 
 	// Items transfer
 	for _, it := range sTradedItems {
-		targetSlot := partnerSlots[0]
+		targetLoc := partnerSlots[0]
 		partnerSlots = partnerSlots[1:]
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", partner.playerGUID, it.ItemGUID)
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = 0, slot = ? WHERE item = ?", partner.playerGUID, targetSlot, it.ItemGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = ?, slot = ? WHERE item = ?", partner.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
 		s.despawnItem(it.ItemGUID)
 	}
 	for _, it := range partnerTradedItems {
-		targetSlot := sSlots[0]
+		targetLoc := sSlots[0]
 		sSlots = sSlots[1:]
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET owner_guid = ? WHERE guid = ?", s.playerGUID, it.ItemGUID)
-		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = 0, slot = ? WHERE item = ?", s.playerGUID, targetSlot, it.ItemGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE character_inventory SET guid = ?, bag = ?, slot = ? WHERE item = ?", s.playerGUID, targetLoc.bagKey, targetLoc.slot, it.ItemGUID)
 		partner.despawnItem(it.ItemGUID)
 	}
 
