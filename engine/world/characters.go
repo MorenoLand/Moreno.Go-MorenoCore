@@ -488,8 +488,22 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), cinematicBuf.Bytes(), true)
 		}
 	}
-	if s.server != nil {
-		s.server.broadcastFriendStatus(s.playerGUID, friendsResultOnline, uint32(state.Zone), uint32(state.Level), uint32(state.Class))
+	// Spawn active pet if one was active at logout (slot 0)
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		var petID, entry, modelID, level, reactState, curHealth, curMana int64
+		var petName string
+		if err := cdb.QueryRowContext(ctx,
+			"SELECT id, entry, modelid, level, name, curhealth, curmana, COALESCE(Reactstate, 1) FROM character_pet WHERE owner = ? AND slot = 0",
+			s.playerGUID).Scan(&petID, &entry, &modelID, &level, &petName, &curHealth, &curMana, &reactState); err == nil && curHealth > 0 {
+			maxHP, _, maxMP, _ := s.getPetStats(ctx, uint32(entry), uint32(level))
+			if maxHP == 0 {
+				maxHP = uint32(curHealth)
+			}
+			if maxMP == 0 {
+				maxMP = uint32(curMana)
+			}
+			s.spawnPet(ctx, uint32(petID), uint32(entry), petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
+		}
 	}
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true
@@ -1656,6 +1670,9 @@ func (s *session) completeLogout(ctx context.Context) error {
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGOUT_COMPLETE), nil, true); err != nil {
 		return err
+	}
+	if s.player != nil && s.player.PetGUID != 0 {
+		s.unsummonPet(ctx, petSaveAsCurrent)
 	}
 	s.playerLoaded = false
 	s.player = nil
