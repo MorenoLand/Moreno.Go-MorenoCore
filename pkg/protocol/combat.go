@@ -37,6 +37,16 @@ const (
 	VictimStateDeflects  uint8 = 8
 )
 
+// WeaponAttackType enum constants.
+// Reference: TrinityCore UnitDefines.h:261 (enum WeaponAttackType).
+type WeaponAttackType uint8
+
+const (
+	BaseAttack   WeaponAttackType = 0
+	OffAttack    WeaponAttackType = 1
+	RangedAttack WeaponAttackType = 2
+)
+
 // MeleeHitOutcome enum constants.
 // Reference: TrinityCore Unit.h:356 (enum MeleeHitOutcome).
 type MeleeHitOutcome uint8
