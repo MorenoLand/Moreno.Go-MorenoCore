@@ -446,3 +446,299 @@ func TestVehicleSeatsAndPassengerFlow(t *testing.T) {
 		t.Fatal("expected passenger exited vehicle")
 	}
 }
+
+func TestFallDamage_HeightThresholdAndDamageScaling(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{
+		sessions: make(map[*session]struct{}),
+	}
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   10,
+		player: &playerState{
+			GUID:      10,
+			Level:     80,
+			Health:    1000,
+			MaxHealth: 1000,
+			X:         0,
+			Y:         0,
+			Z:         50.0,
+		},
+		lastFallZ:    50.0,
+		lastFallTime: 100,
+	}
+	srv.sessions[sess] = struct{}{}
+
+	receivedOpcodes := make(chan uint16, 16)
+	receivedPayloads := make(chan []byte, 16)
+	go func() {
+		for {
+			op, p, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+			receivedOpcodes <- op
+			receivedPayloads <- p
+		}
+	}()
+
+	// 1. Small fall: from 50.0 to 45.0 (zDiff = 5.0 < 14.57) -> no damage
+	infoSmall := movementInfo{
+		GUID:     10,
+		Time:     200,
+		X:        0,
+		Y:        0,
+		Z:        45.0,
+		FallTime: 200,
+	}
+	bufSmall := protocol.NewBuffer(64)
+	writeMovementInfo(bufSmall, infoSmall)
+
+	if !sess.handleMovement(context.Background(), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), bufSmall.Bytes()) {
+		t.Fatal("handleMovement MSG_MOVE_FALL_LAND failed")
+	}
+	if sess.player.Health != 1000 {
+		t.Fatalf("expected health 1000 after small fall, got %d", sess.player.Health)
+	}
+	if sess.lastFallZ != 45.0 {
+		t.Fatalf("expected lastFallZ updated to 45.0, got %f", sess.lastFallZ)
+	}
+
+	// 2. Fall with damage: set apex at 50.0, land at 25.0 (zDiff = 25.0 >= 14.57)
+	// damageperc = 0.018 * 25.0 - 0.2426 = 0.2074 -> 207 damage on 1000 max health
+	sess.lastFallZ = 50.0
+	infoDamage := movementInfo{
+		GUID:     10,
+		Time:     400,
+		X:        0,
+		Y:        0,
+		Z:        25.0,
+		FallTime: 400,
+	}
+	bufDamage := protocol.NewBuffer(64)
+	writeMovementInfo(bufDamage, infoDamage)
+
+	if !sess.handleMovement(context.Background(), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), bufDamage.Bytes()) {
+		t.Fatal("handleMovement MSG_MOVE_FALL_LAND failed")
+	}
+	if sess.player.Health != 793 {
+		t.Fatalf("expected health 793 (1000 - 207), got %d", sess.player.Health)
+	}
+
+	select {
+	case op := <-receivedOpcodes:
+		if op != uint16(protocol.OpcodeSMSG_ENVIRONMENTAL_DAMAGE_LOG) {
+			t.Fatalf("expected SMSG_ENVIRONMENTAL_DAMAGE_LOG, got 0x%04X", op)
+		}
+		p := <-receivedPayloads
+		r := protocol.NewReader(p)
+		vicGUID, _ := r.ReadU64()
+		dmgType, _ := r.ReadU8()
+		amount, _ := r.ReadU32()
+		if vicGUID != 10 || dmgType != 2 || amount != 207 {
+			t.Fatalf("unexpected damage log: victim=%d type=%d amount=%d", vicGUID, dmgType, amount)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for SMSG_ENVIRONMENTAL_DAMAGE_LOG")
+	}
+
+	// 3. Lethal fall: set apex at 100.0, land at 0.0 (zDiff = 100.0) -> fatal fall damage
+	sess.lastFallZ = 100.0
+	infoLethal := movementInfo{
+		GUID:     10,
+		Time:     600,
+		X:        0,
+		Y:        0,
+		Z:        0.0,
+		FallTime: 600,
+	}
+	bufLethal := protocol.NewBuffer(64)
+	writeMovementInfo(bufLethal, infoLethal)
+
+	if !sess.handleMovement(context.Background(), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), bufLethal.Bytes()) {
+		t.Fatal("handleMovement lethal MSG_MOVE_FALL_LAND failed")
+	}
+	if sess.player.Health != 0 {
+		t.Fatalf("expected health 0 after lethal fall, got %d", sess.player.Health)
+	}
+	if sess.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
+		t.Fatal("expected playerFieldByteReleaseTimer flag set upon death")
+	}
+}
+
+func TestFallDamage_ImmunitiesAndSafeFall(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{
+		sessions: make(map[*session]struct{}),
+	}
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   10,
+		player: &playerState{
+			GUID:      10,
+			Level:     80,
+			Health:    1000,
+			MaxHealth: 1000,
+			X:         0,
+			Y:         0,
+			Z:         50.0,
+		},
+		lastFallZ:    50.0,
+		lastFallTime: 100,
+	}
+	srv.sessions[sess] = struct{}{}
+
+	go func() {
+		for {
+			_, _, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	infoFall := movementInfo{
+		GUID:     10,
+		Time:     200,
+		X:        0,
+		Y:        0,
+		Z:        0.0, // 50 yards fall
+		FallTime: 500,
+	}
+	buf := protocol.NewBuffer(64)
+	writeMovementInfo(buf, infoFall)
+
+	// 1. Feather Fall aura immunity (AuraType 105)
+	sess.activeAuras = map[uint32]*activeAura{
+		130: {SpellID: 130, AuraType: 105},
+	}
+	sess.auras = map[uint32]struct{}{130: {}}
+	sess.lastFallZ = 50.0
+	sess.handleMovement(context.Background(), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), buf.Bytes())
+	if sess.player.Health != 1000 {
+		t.Fatalf("expected Feather Fall to prevent fall damage, health=%d", sess.player.Health)
+	}
+
+	// 2. Flight immunity (inFlight = true)
+	sess.activeAuras = nil
+	sess.auras = nil
+	sess.inFlight = true
+	sess.lastFallZ = 50.0
+	sess.handleMovement(context.Background(), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), buf.Bytes())
+	if sess.player.Health != 1000 {
+		t.Fatalf("expected inFlight to prevent fall damage, health=%d", sess.player.Health)
+	}
+
+	// 3. GM immunity
+	sess.inFlight = false
+	sess.player.PlayerFlags |= playerFlagGM
+	sess.lastFallZ = 50.0
+	sess.handleMovement(context.Background(), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), buf.Bytes())
+	if sess.player.Health != 1000 {
+		t.Fatalf("expected GM mode to prevent fall damage, health=%d", sess.player.Health)
+	}
+	sess.player.PlayerFlags &^= playerFlagGM
+
+	// 4. Safe Fall passive reduction (spell 1860, 17 yards reduction)
+	sess.player.Spells = []learnedSpell{{ID: 1860, Active: true}}
+	sess.lastFallZ = 50.0
+	info25Yards := movementInfo{
+		GUID:     10,
+		Time:     400,
+		X:        0,
+		Y:        0,
+		Z:        25.0, // 25 yards fall
+		FallTime: 300,
+	}
+	buf25 := protocol.NewBuffer(64)
+	writeMovementInfo(buf25, info25Yards)
+
+	// 25 - 17 = 8 yards effective fall (< 14.57 threshold) -> no damage
+	sess.handleMovement(context.Background(), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), buf25.Bytes())
+	if sess.player.Health != 1000 {
+		t.Fatalf("expected Safe Fall to negate 25 yard fall damage, health=%d", sess.player.Health)
+	}
+}
+
+func TestLanding_ParachuteAuraRemoval(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{
+		sessions: make(map[*session]struct{}),
+	}
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   10,
+		player: &playerState{
+			GUID:      10,
+			Level:     80,
+			Health:    1000,
+			MaxHealth: 1000,
+			X:         0,
+			Y:         0,
+			Z:         5.0,
+		},
+		activeAuras: make(map[uint32]*activeAura),
+		auras:       make(map[uint32]struct{}),
+		auraSlots:   make(map[uint32]uint8),
+		lastFallZ:   5.0,
+	}
+	srv.sessions[sess] = struct{}{}
+
+	go func() {
+		for {
+			_, _, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// 1. Parachute removed on landing (MSG_MOVE_FALL_LAND)
+	sess.activeAuras[54649] = &activeAura{SpellID: 54649, AuraInterruptFlags: 0x02000000}
+	sess.auras[54649] = struct{}{}
+	sess.auraSlots[54649] = 0
+
+	infoLand := movementInfo{GUID: 10, Time: 100, X: 0, Y: 0, Z: 5.0}
+	bufLand := protocol.NewBuffer(64)
+	writeMovementInfo(bufLand, infoLand)
+
+	sess.handleMovement(context.Background(), uint32(protocol.OpcodeMSG_MOVE_FALL_LAND), bufLand.Bytes())
+	if _, exists := sess.activeAuras[54649]; exists {
+		t.Fatal("expected parachute aura to be removed from activeAuras upon landing")
+	}
+	if _, exists := sess.auras[54649]; exists {
+		t.Fatal("expected parachute aura to be removed from auras upon landing")
+	}
+
+	// 2. Parachute removed on swimming (MSG_MOVE_START_SWIM)
+	sess.activeAuras[54649] = &activeAura{SpellID: 54649, AuraInterruptFlags: 0x02000000}
+	sess.auras[54649] = struct{}{}
+	sess.auraSlots[54649] = 0
+
+	infoSwim := movementInfo{GUID: 10, Time: 200, X: 0, Y: 0, Z: 5.0, Flags: movementSwimming, HasPitch: true}
+	bufSwim := protocol.NewBuffer(64)
+	writeMovementInfo(bufSwim, infoSwim)
+
+	sess.handleMovement(context.Background(), uint32(protocol.OpcodeMSG_MOVE_START_SWIM), bufSwim.Bytes())
+	if _, exists := sess.activeAuras[54649]; exists {
+		t.Fatal("expected parachute aura to be removed upon start swimming")
+	}
+	if _, exists := sess.auras[54649]; exists {
+		t.Fatal("expected parachute aura to be removed from auras upon start swimming")
+	}
+}
