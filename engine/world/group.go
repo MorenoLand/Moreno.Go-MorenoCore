@@ -26,6 +26,7 @@ type groupState struct {
 	LootMethod    uint8         // 0=Free, 1=RR, 2=MasterLoot, 3=GroupLoot, 4=NeedBeforeGreed
 	MasterLooter  uint64
 	LootThreshold uint8 // item quality threshold (default 2 = uncommon)
+	LooterGUID    uint64 // current round-robin looter GUID
 	DungeonDiff   uint8
 	RaidDiff      uint8
 	IsRaid        bool
@@ -33,6 +34,31 @@ type groupState struct {
 	LFGDungeonID  uint32
 	TargetIcons   [8]uint64 // raid target icons, index=icon, value=target GUID
 	counter       uint32
+}
+
+func (g *groupState) updateLooter(srv *Server, mapID uint32, x, y, z float32) {
+	if g.LootMethod == 0 || len(g.Members) == 0 {
+		return
+	}
+	currIdx := -1
+	for i, m := range g.Members {
+		if m.GUID == g.LooterGUID {
+			currIdx = i
+			break
+		}
+	}
+	for step := 1; step <= len(g.Members); step++ {
+		idx := (currIdx + step) % len(g.Members)
+		mGUID := g.Members[idx].GUID
+		sess := srv.findSessionByGUID(mGUID)
+		if sess != nil && sess.player != nil && sess.player.Map == mapID && distance3D(sess.player.X, sess.player.Y, sess.player.Z, x, y, z) <= 100.0 {
+			g.LooterGUID = mGUID
+			return
+		}
+	}
+	if g.LooterGUID == 0 && len(g.Members) > 0 {
+		g.LooterGUID = g.Members[0].GUID
+	}
 }
 
 func (g *groupState) isLeader(guid uint64) bool {
@@ -338,7 +364,9 @@ func (s *session) handleGroupAccept(_ context.Context, _ []byte) bool {
 		g = &groupState{
 			ID:            newGroupID(),
 			LeaderGUID:    leaderGUID,
+			LootMethod:    3, // Group Loot default in retail / TrinityCore
 			LootThreshold: 2, // uncommon
+			LooterGUID:    leaderGUID,
 			DungeonDiff:   1,
 			RaidDiff:      1,
 		}

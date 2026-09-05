@@ -577,4 +577,324 @@ func TestGroupLootRollState_AllPassed(t *testing.T) {
 	}
 }
 
+func TestGroupMoneySharingParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"INSERT INTO characters VALUES (1, 100, ''), (2, 200, '')",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	worldStore := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{
+		WorldStore:      worldStore,
+		CharactersStore: charStore,
+		groups:          make(map[uint64]*groupState),
+		sessions:        make(map[*session]struct{}),
+		creatureLoot:    make(map[uint64]*activeLootState),
+		Config:          config.Default(),
+	}
+
+	cConn1, sConn1 := net.Pipe()
+	defer cConn1.Close()
+	defer sConn1.Close()
+
+	cConn2, sConn2 := net.Pipe()
+	defer cConn2.Close()
+	defer sConn2.Close()
+
+	sess1 := &session{
+		server:       srv,
+		conn:         sConn1,
+		playerLoaded: true,
+		playerGUID:   1,
+		groupID:      10,
+		player:       &playerState{GUID: 1, Money: 100, Map: 0, X: 0, Y: 0, Z: 0},
+	}
+	sess2 := &session{
+		server:       srv,
+		conn:         sConn2,
+		playerLoaded: true,
+		playerGUID:   2,
+		groupID:      10,
+		player:       &playerState{GUID: 2, Money: 200, Map: 0, X: 10.0, Y: 0, Z: 0},
+	}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+	srv.groups[10] = &groupState{
+		ID:            10,
+		LootMethod:    3,
+		LootThreshold: 2,
+		Members:       []groupMember{{GUID: 1}, {GUID: 2}},
+	}
+
+	loot := &activeLootState{
+		TargetGUID: 1234,
+		Money:      100, // 100 copper
+		Items:      make(map[uint8]lootItem),
+	}
+	sess1.activeLoot = loot
+
+	// Drain frames in background
+	p1Packets := make(chan []byte, 5)
+	p2Packets := make(chan []byte, 5)
+	go func() {
+		for {
+			_ = cConn1.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			op, data, err := readServerFrame(cConn1, nil)
+			if err != nil {
+				return
+			}
+			if op == uint16(protocol.OpcodeSMSG_LOOT_MONEY_NOTIFY) {
+				p1Packets <- data
+			}
+		}
+	}()
+	go func() {
+		for {
+			_ = cConn2.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+			op, data, err := readServerFrame(cConn2, nil)
+			if err != nil {
+				return
+			}
+			if op == uint16(protocol.OpcodeSMSG_LOOT_MONEY_NOTIFY) {
+				p2Packets <- data
+			}
+		}
+	}()
+
+	if !sess1.handleLootMoney(context.Background()) {
+		t.Fatal("handleLootMoney failed")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Both should receive 50 copper (100 / 2)
+	if sess1.player.Money != 150 {
+		t.Fatalf("expected sess1 money 150, got %d", sess1.player.Money)
+	}
+	if sess2.player.Money != 250 {
+		t.Fatalf("expected sess2 money 250, got %d", sess2.player.Money)
+	}
+
+	// Verify SMSG_LOOT_MONEY_NOTIFY has copper=50 and alone=0 ("Your share is...")
+	select {
+	case d1 := <-p1Packets:
+		r := protocol.NewReader(d1)
+		copper, _ := r.ReadU32()
+		alone, _ := r.ReadU8()
+		if copper != 50 || alone != 0 {
+			t.Fatalf("sess1 money notify mismatch: copper=%d, alone=%d", copper, alone)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for sess1 money notify")
+	}
+
+	select {
+	case d2 := <-p2Packets:
+		r := protocol.NewReader(d2)
+		copper, _ := r.ReadU32()
+		alone, _ := r.ReadU8()
+		if copper != 50 || alone != 0 {
+			t.Fatalf("sess2 money notify mismatch: copper=%d, alone=%d", copper, alone)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for sess2 money notify")
+	}
+}
+
+func TestRoundRobinLootParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"INSERT INTO characters VALUES (1, 100, ''), (2, 200, '')",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	worldStore := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{
+		WorldStore:      worldStore,
+		CharactersStore: charStore,
+		groups:          make(map[uint64]*groupState),
+		sessions:        make(map[*session]struct{}),
+		creatureLoot:    make(map[uint64]*activeLootState),
+		Config:          config.Default(),
+	}
+
+	sess1 := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   1,
+		groupID:      10,
+		player:       &playerState{GUID: 1, Money: 100, Map: 0, X: 0, Y: 0, Z: 0},
+	}
+	sess2 := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   2,
+		groupID:      10,
+		player:       &playerState{GUID: 2, Money: 200, Map: 0, X: 1.0, Y: 0, Z: 0},
+	}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+	grp := &groupState{
+		ID:            10,
+		LootMethod:    1, // Round Robin
+		LootThreshold: 2,
+		LooterGUID:    1, // Player 1's turn
+		Members:       []groupMember{{GUID: 1}, {GUID: 2}},
+	}
+	srv.groups[10] = grp
+
+	targetGUID := uint64(50) | uint64(1001)<<24 | uint64(0xF110)<<48
+	loot := &activeLootState{
+		TargetGUID:       targetGUID,
+		MapID:            0,
+		RoundRobinPlayer: 1, // Player 1 is round robin owner
+		Items: map[uint8]lootItem{
+			0: {Slot: 0, ItemEntry: 5001, Count: 1, Quality: 1},
+		},
+	}
+	sess1.activeLoot = loot
+	sess2.activeLoot = loot
+
+	// 1. Player 2 attempts to autostore slot 0 -> should be rejected because Player 1 is round robin owner
+	p2Payload := []byte{0}
+	sess2.handleAutostoreLootItem(context.Background(), p2Payload)
+	if _, ok := loot.Items[0]; !ok {
+		t.Fatal("expected item 0 still present in loot, player 2 should not have looted it")
+	}
+
+	// 2. Player 1 releases without taking it -> RoundRobinPlayer becomes 0 (open to everyone)
+	relBuf := protocol.NewBuffer(8)
+	relBuf.WriteU64(targetGUID)
+	sess1.handleLootRelease(relBuf.Bytes())
+	if loot.RoundRobinPlayer != 0 {
+		t.Fatalf("expected RoundRobinPlayer to be cleared, got %d", loot.RoundRobinPlayer)
+	}
+
+	// 3. Now Player 2 can autostore it
+	sess2.handleAutostoreLootItem(context.Background(), p2Payload)
+	if _, ok := loot.Items[0]; ok {
+		t.Fatal("expected item 0 to be looted by player 2 now that it was released")
+	}
+}
+
+func TestMasterLootParity(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"INSERT INTO characters VALUES (1, 100, ''), (2, 200, '')",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	worldStore := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	srv := &Server{
+		WorldStore:      worldStore,
+		CharactersStore: charStore,
+		groups:          make(map[uint64]*groupState),
+		sessions:        make(map[*session]struct{}),
+		creatureLoot:    make(map[uint64]*activeLootState),
+		Config:          config.Default(),
+	}
+
+	sess1 := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   1,
+		groupID:      10,
+		player:       &playerState{GUID: 1, Money: 100, Map: 0, X: 0, Y: 0, Z: 0},
+	}
+	sess2 := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   2,
+		groupID:      10,
+		player:       &playerState{GUID: 2, Money: 200, Map: 0, X: 5.0, Y: 0, Z: 0},
+	}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+	grp := &groupState{
+		ID:            10,
+		LootMethod:    2, // Master Loot
+		MasterLooter:  1, // Player 1 is ML
+		LootThreshold: 2,
+		Members:       []groupMember{{GUID: 1}, {GUID: 2}},
+	}
+	srv.groups[10] = grp
+
+	targetGUID := uint64(888)
+	loot := &activeLootState{
+		TargetGUID: targetGUID,
+		MapID:      0,
+		Items: map[uint8]lootItem{
+			0: {Slot: 0, ItemEntry: 19019, Count: 1, Quality: 5}, // Thunderfury (Legendary)
+		},
+	}
+	sess1.activeLoot = loot
+	sess2.activeLoot = loot
+
+	// 1. Player 2 cannot autostore ML item
+	sess2.handleAutostoreLootItem(context.Background(), []byte{0})
+	if _, ok := loot.Items[0]; !ok {
+		t.Fatal("expected item 0 still present, player 2 cannot autostore ML item")
+	}
+
+	// 2. Player 1 gives item to Player 2 via CMSG_LOOT_MASTER_GIVE
+	giveBuf := protocol.NewBuffer(17)
+	giveBuf.WriteU64(targetGUID)
+	giveBuf.WriteU8(0) // slot 0
+	giveBuf.WriteU64(2) // target player 2
+	if !sess1.handleLootMasterGive(context.Background(), giveBuf.Bytes()) {
+		t.Fatal("handleLootMasterGive failed")
+	}
+
+	// Item 0 should now be removed from loot
+	if _, ok := loot.Items[0]; ok {
+		t.Fatal("expected item 0 removed from loot after master give")
+	}
+
+	// Verify Player 2 received Thunderfury in inventory
+	var entry int64
+	err = db.QueryRow("SELECT ii.itemEntry FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = 2").Scan(&entry)
+	if err != nil || entry != 19019 {
+		t.Fatalf("expected Thunderfury (19019) in Player 2 inventory, got entry=%d err=%v", entry, err)
+	}
+}
+
+
 
