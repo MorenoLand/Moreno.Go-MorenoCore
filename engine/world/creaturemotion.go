@@ -601,7 +601,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			if isPlayerVictim && target.Sess.player.Level > 0 {
 				targetLevel = target.Sess.player.Level
 			}
-			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, false)
+			canBlock := isPlayerVictim && target.Sess.player.Block > 0
+			canParry := isPlayerVictim && (target.Sess.player.Level >= 10 || target.Sess.player.Level == 0)
+			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, canBlock, canParry)
 			blocked := uint32(0)
 
 			switch outcome {
@@ -617,6 +619,20 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				damage *= 2
 			case protocol.MeleeHitCrushing:
 				damage = uint32(float64(damage) * 1.5)
+			}
+
+			// Handle player parry haste when player parries creature attack
+			if targetState == protocol.VictimStateParry && isPlayerVictim {
+				pMainSpeed := time.Duration(target.Sess.player.AttackTime) * time.Millisecond
+				if pMainSpeed <= 0 {
+					pMainSpeed = 2 * time.Second
+				}
+				elapsed := now.Sub(target.Sess.lastSwing)
+				if elapsed < pMainSpeed {
+					rem := pMainSpeed - elapsed
+					hasted := calcParryHastedRemaining(rem, pMainSpeed)
+					target.Sess.lastSwing = now.Add(-(pMainSpeed - hasted))
+				}
 			}
 
 			overkill := uint32(0)

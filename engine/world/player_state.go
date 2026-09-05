@@ -217,6 +217,7 @@ type playerState struct {
 	MaxRangedDamage   float32
 	RangedAttackTime  uint32
 	CombatRatings     [25]uint32
+	SpellPower        uint32
 	DungeonDifficulty uint8
 	RaidDifficulty    uint8
 	VehicleGUID       uint64
@@ -494,6 +495,8 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 						state.AttackPower += uint32(val)
 					case 39: // Ranged attack power
 						state.RangedAttackPower += uint32(val)
+					case 45: // Spell power (ITEM_MOD_SPELL_POWER)
+						state.SpellPower += uint32(val)
 					}
 				}
 			}

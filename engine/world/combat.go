@@ -10,7 +10,43 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
-const meleeAttackRange = 5.0
+const (
+	meleeAttackRange               = 5.0
+	creatureFlagExtraNoParryHasten = 0x00000008
+	attackDisplayDelay             = 200 * time.Millisecond
+)
+
+// haveOffhandWeapon checks if the player has an offhand weapon equipped.
+func (s *session) haveOffhandWeapon() bool {
+	if s == nil || s.player == nil {
+		return false
+	}
+	return s.player.OffhandAttackTime > 0 || s.player.MaxOffhandDamage > 0
+}
+
+// calcParryHastedRemaining computes new remaining attack swing time when a defender parries,
+// matching TrinityCore Unit.cpp:1480-1510.
+// If remaining time is <= 20% of weapon speed, it is unchanged.
+// If remaining time is between 20% and 60%, it is set to 20%.
+// If remaining time is > 60%, it is reduced by 40% (2 * 20%).
+func calcParryHastedRemaining(remaining, attackTime time.Duration) time.Duration {
+	if attackTime <= 0 || remaining <= 0 {
+		return remaining
+	}
+	percent20 := attackTime / 5
+	percent60 := 3 * percent20
+	if remaining > percent20 && remaining <= percent60 {
+		return percent20
+	}
+	if remaining > percent60 {
+		hasted := remaining - 2*percent20
+		if hasted < percent20 {
+			return percent20
+		}
+		return hasted
+	}
+	return remaining
+}
 
 type combatTarget struct {
 	GUID       uint64
@@ -138,30 +174,63 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPayload, s)
 	}
 	if distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) <= meleeAttackRange+2.0 {
-		s.executeMeleeSwing(ctx, target)
+		s.executeMeleeSwing(ctx, target, protocol.BaseAttack)
+	}
+	// If dual wielding, delay offhand swing by 50% of base attack time (TrinityCore Unit.cpp:5745)
+	if s.haveOffhandWeapon() {
+		baseSpeed := time.Duration(s.player.AttackTime) * time.Millisecond
+		if baseSpeed <= 0 {
+			baseSpeed = 2 * time.Second
+		}
+		offSpeed := time.Duration(s.player.OffhandAttackTime) * time.Millisecond
+		if offSpeed <= 0 {
+			offSpeed = 2 * time.Second
+		}
+		s.lastOffhandSwing = time.Now().Add(-(offSpeed - baseSpeed/2))
 	}
 	return true
 }
 
-func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
+func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType) {
 	if s.player == nil || target.Health == 0 {
 		return
 	}
-	s.lastSwing = time.Now()
+	now := time.Now()
+	var minDmg, maxDmg float32
+	var attTime uint32
+
+	if attType == protocol.OffAttack {
+		s.lastOffhandSwing = now
+		minDmg = s.player.MinOffhandDamage
+		maxDmg = s.player.MaxOffhandDamage
+		attTime = s.player.OffhandAttackTime
+	} else {
+		s.lastSwing = now
+		minDmg = s.player.MinDamage
+		maxDmg = s.player.MaxDamage
+		attTime = s.player.AttackTime
+	}
+
 	damage := uint32(20 + int(s.player.Level)*5)
-	if s.player.MaxDamage > s.player.MinDamage && s.player.MinDamage > 0 {
-		attSpeed := float64(s.player.AttackTime) / 1000.0
+	if maxDmg > minDmg && minDmg > 0 {
+		attSpeed := float64(attTime) / 1000.0
 		if attSpeed <= 0 {
 			attSpeed = 2.0
 		}
 		apBonus := (float64(s.player.AttackPower) * attSpeed) / 14.0
-		variance := float64(s.player.MaxDamage - s.player.MinDamage)
-		baseDmg := float64(s.player.MinDamage)
+		variance := float64(maxDmg - minDmg)
+		baseDmg := float64(minDmg)
 		if variance > 0 {
 			baseDmg += rand.Float64() * variance
 		}
 		damage = uint32(baseDmg + apBonus)
 	}
+
+	// Off-hand weapon attacks suffer a 50% damage penalty by default (TrinityCore Unit.cpp:353)
+	if attType == protocol.OffAttack {
+		damage = uint32(math.Round(float64(damage) * 0.5))
+	}
+
 	// Apply target armor damage reduction
 	if target.Armor > 0 {
 		damage = calcArmorReducedDamage(float64(target.Armor), s.player.Level, damage)
@@ -174,8 +243,21 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 	outcome := protocol.MeleeHitNormal
 	hitInfo := protocol.HitInfoAffectsVictim
 	targetState := protocol.VictimStateHit
+
+	isDualWielding := s.haveOffhandWeapon()
+	canBlock := false
+	canParry := target.Level >= 10 || isPlayerVictim
+	if isPlayerVictim && s.server != nil {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
+			canBlock = vicSess.player.Block > 0
+		}
+	}
+
 	if s.player.Level > 0 {
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, false)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry)
+	}
+	if attType == protocol.OffAttack {
+		hitInfo |= protocol.HitInfoOffHand
 	}
 	blocked := uint32(0)
 
@@ -197,6 +279,40 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget) {
 		}
 	case protocol.MeleeHitCrushing:
 		damage = uint32(float64(damage) * 1.5)
+	}
+
+	// Handle parry haste: if defender parried, haste defender's next attack!
+	// Matching TrinityCore Unit.cpp:1480-1510.
+	if targetState == protocol.VictimStateParry && s.server != nil {
+		if playerVictim := s.server.findSessionByGUID(target.GUID); playerVictim != nil && playerVictim.player != nil {
+			vMainSpeed := time.Duration(playerVictim.player.AttackTime) * time.Millisecond
+			if vMainSpeed <= 0 {
+				vMainSpeed = 2 * time.Second
+			}
+			elapsed := now.Sub(playerVictim.lastSwing)
+			if elapsed < vMainSpeed {
+				rem := vMainSpeed - elapsed
+				hasted := calcParryHastedRemaining(rem, vMainSpeed)
+				playerVictim.lastSwing = now.Add(-(vMainSpeed - hasted))
+			}
+		} else {
+			s.server.motionMu.Lock()
+			if motion := s.server.creatureMotion[target.GUID]; motion != nil {
+				if motion.FlagsExtra&creatureFlagExtraNoParryHasten == 0 {
+					cSpeed := time.Duration(motion.AttackTime) * time.Millisecond
+					if cSpeed <= 0 {
+						cSpeed = 2 * time.Second
+					}
+					elapsed := now.Sub(motion.LastAttack)
+					if elapsed < cSpeed {
+						rem := cSpeed - elapsed
+						hasted := calcParryHastedRemaining(rem, cSpeed)
+						motion.LastAttack = now.Add(-(cSpeed - hasted))
+					}
+				}
+			}
+			s.server.motionMu.Unlock()
+		}
 	}
 
 	overkill := uint32(0)
@@ -652,7 +768,7 @@ func distance3D(x1, y1, z1, x2, y2, z2 float32) float64 {
 // rollMeleeOutcome implements TrinityCore's single-roll melee attack table:
 // MISS > DODGE > PARRY > GLANCING > BLOCK > CRIT > CRUSHING > HIT
 // Reference: Unit::RollMeleeOutcomeAgainst (Unit.cpp:2189-2320).
-func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, canBlock, canParry bool) (protocol.MeleeHitOutcome, uint32, uint8) {
+func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry bool) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
 	}
@@ -684,6 +800,11 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 		if victimLevel < 10 {
 			missChance = int32(float64(missChance) * (float64(victimLevel) / 10.0))
 		}
+	}
+	// Dual-wielding auto-attacks have +19% chance to miss (+1900 / 10000)
+	// Reference: TrinityCore Unit::MeleeSpellMissChance (Unit.cpp:12425).
+	if isDualWielding {
+		missChance += 1900
 	}
 	if missChance < 0 {
 		missChance = 0

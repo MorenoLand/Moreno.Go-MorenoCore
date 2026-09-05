@@ -117,6 +117,7 @@ type session struct {
 	duelArbiterZ       float32
 	duelOutOfBounds    time.Time
 	lastSwing          time.Time
+	lastOffhandSwing   time.Time
 	lastRegenTick      time.Time
 	lastCastTime       time.Time
 	lastCombatTime     time.Time
@@ -304,14 +305,32 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 			sess.attackTarget = 0
 			continue
 		}
-		swingSpeed := 2 * time.Second
+		mainSpeed := 2 * time.Second
 		if sess.player.AttackTime > 0 {
-			swingSpeed = time.Duration(sess.player.AttackTime) * time.Millisecond
+			mainSpeed = time.Duration(sess.player.AttackTime) * time.Millisecond
 		}
+		offSpeed := 2 * time.Second
+		if sess.player.OffhandAttackTime > 0 {
+			offSpeed = time.Duration(sess.player.OffhandAttackTime) * time.Millisecond
+		}
+
 		if distance3D(sess.player.X, sess.player.Y, sess.player.Z, target.X, target.Y, target.Z) <= meleeAttackRange+2.0 {
-			if now.Sub(sess.lastSwing) >= swingSpeed {
+			// Main hand attack
+			if now.Sub(sess.lastSwing) >= mainSpeed {
+				if sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) < attackDisplayDelay {
+					sess.lastOffhandSwing = now.Add(-(offSpeed - attackDisplayDelay))
+				}
 				sess.lastSwing = now
-				sess.executeMeleeSwing(ctx, target)
+				sess.executeMeleeSwing(ctx, target, protocol.BaseAttack)
+			}
+
+			// Off-hand attack (dual-wielding)
+			if sess.haveOffhandWeapon() && now.Sub(sess.lastOffhandSwing) >= offSpeed {
+				if now.Sub(sess.lastSwing) < attackDisplayDelay {
+					sess.lastSwing = now.Add(-(mainSpeed - attackDisplayDelay))
+				}
+				sess.lastOffhandSwing = now
+				sess.executeMeleeSwing(ctx, target, protocol.OffAttack)
 			}
 		}
 	}

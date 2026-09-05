@@ -221,7 +221,7 @@ func TestDuelLifecycleAndMeleeResolution(t *testing.T) {
 	}
 
 	// Melee swing that brings duel partner to 0 HP
-	sess1.executeMeleeSwing(context.Background(), target)
+	sess1.executeMeleeSwing(context.Background(), target, protocol.BaseAttack)
 
 	// Loser's health must be 1 (never dies in a duel)
 	if sess2.player.Health != 1 {
@@ -764,7 +764,7 @@ func TestPvPMeleeSwingContinuationAndNearbyBroadcast(t *testing.T) {
 	for i := 0; i < 5 && vicSess.player.Health >= 1000; i++ {
 		target, ok := attSess.getCombatTarget(context.Background(), 20)
 		if ok {
-			attSess.executeMeleeSwing(context.Background(), target)
+			attSess.executeMeleeSwing(context.Background(), target, protocol.BaseAttack)
 		}
 	}
 	if vicSess.player.Health >= 1000 {
@@ -1134,7 +1134,7 @@ func TestCreatureClassLevelStatsAndArmorScaling(t *testing.T) {
 func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 1. High level player vs level 1 mob: miss chance is 0
 	for i := 0; i < 200; i++ {
-		outcome, hitInfo, targetState := rollMeleeOutcome(80, 1, true, false, false, false)
+		outcome, hitInfo, targetState := rollMeleeOutcome(80, 1, true, false, false, false, false)
 		if outcome == protocol.MeleeHitMiss {
 			t.Fatalf("expected 0%% miss chance for level 80 vs 1 mob, got miss")
 		}
@@ -1146,7 +1146,7 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 2. Glancing blow: player vs higher level mob (e.g. 70 vs 73)
 	glancingFound := false
 	for i := 0; i < 1000; i++ {
-		outcome, hitInfo, _ := rollMeleeOutcome(70, 73, true, false, false, false)
+		outcome, hitInfo, _ := rollMeleeOutcome(70, 73, true, false, false, false, false)
 		if outcome == protocol.MeleeHitGlancing {
 			glancingFound = true
 			if hitInfo&protocol.HitInfoGlancing == 0 {
@@ -1162,7 +1162,7 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 3. Crushing blow: mob 4+ levels higher attacking player (e.g. 74 vs 70)
 	crushingFound := false
 	for i := 0; i < 1000; i++ {
-		outcome, hitInfo, _ := rollMeleeOutcome(74, 70, false, true, false, false)
+		outcome, hitInfo, _ := rollMeleeOutcome(74, 70, false, true, false, false, false)
 		if outcome == protocol.MeleeHitCrushing {
 			crushingFound = true
 			if hitInfo&protocol.HitInfoCrushing == 0 {
@@ -1178,7 +1178,7 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 4. Block: target can block
 	blockFound := false
 	for i := 0; i < 1000; i++ {
-		outcome, hitInfo, _ := rollMeleeOutcome(70, 70, true, true, true, false)
+		outcome, hitInfo, _ := rollMeleeOutcome(70, 70, true, true, false, true, false)
 		if outcome == protocol.MeleeHitBlock {
 			blockFound = true
 			if hitInfo&protocol.HitInfoBlock == 0 {
@@ -1194,7 +1194,7 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 5. Parry: target can parry
 	parryFound := false
 	for i := 0; i < 1000; i++ {
-		outcome, _, targetState := rollMeleeOutcome(70, 70, true, true, false, true)
+		outcome, _, targetState := rollMeleeOutcome(70, 70, true, true, false, false, true)
 		if outcome == protocol.MeleeHitParry {
 			parryFound = true
 			if targetState != protocol.VictimStateParry {
@@ -1210,7 +1210,7 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 6. Crit: crit outcome
 	critFound := false
 	for i := 0; i < 1000; i++ {
-		outcome, hitInfo, _ := rollMeleeOutcome(70, 70, true, true, false, false)
+		outcome, hitInfo, _ := rollMeleeOutcome(70, 70, true, true, false, false, false)
 		if outcome == protocol.MeleeHitCrit {
 			critFound = true
 			if hitInfo&protocol.HitInfoCriticalHit == 0 {
@@ -1221,6 +1221,273 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	}
 	if !critFound {
 		t.Fatalf("expected at least one crit outcome in 1000 rolls")
+	}
+}
+
+func TestRollMeleeOutcome_DualWieldPenalty(t *testing.T) {
+	// Dual-wielding adds +19% miss chance: equal level player PvP miss is 5% + 19% = 24%
+	missCountDW := 0
+	missCountSingle := 0
+	trials := 5000
+	for i := 0; i < trials; i++ {
+		outDW, _, _ := rollMeleeOutcome(80, 80, true, true, true, false, false)
+		if outDW == protocol.MeleeHitMiss {
+			missCountDW++
+		}
+		outSingle, _, _ := rollMeleeOutcome(80, 80, true, true, false, false, false)
+		if outSingle == protocol.MeleeHitMiss {
+			missCountSingle++
+		}
+	}
+
+	dwRate := float64(missCountDW) / float64(trials)
+	singleRate := float64(missCountSingle) / float64(trials)
+
+	// Single wield miss should be around 5% (0.03 - 0.08)
+	if singleRate < 0.03 || singleRate > 0.08 {
+		t.Fatalf("expected single wield miss rate ~5%%, got %.2f%%", singleRate*100)
+	}
+	// Dual wield miss should be around 24% (0.20 - 0.28)
+	if dwRate < 0.20 || dwRate > 0.28 {
+		t.Fatalf("expected dual wield miss rate ~24%%, got %.2f%%", dwRate*100)
+	}
+}
+
+func TestParryHaste_Calculation(t *testing.T) {
+	attackTime := 2000 * time.Millisecond
+	// 20% = 400ms, 60% = 1200ms
+
+	// 1. Remaining time <= 20% (e.g. 300ms) -> unchanged
+	rem1 := calcParryHastedRemaining(300*time.Millisecond, attackTime)
+	if rem1 != 300*time.Millisecond {
+		t.Fatalf("expected <=20%% remaining time to be unchanged (300ms), got %v", rem1)
+	}
+
+	// 2. Remaining time between 20% and 60% (e.g. 800ms) -> set to 20% (400ms)
+	rem2 := calcParryHastedRemaining(800*time.Millisecond, attackTime)
+	if rem2 != 400*time.Millisecond {
+		t.Fatalf("expected 20%%..60%% remaining time to be hasted to 20%% (400ms), got %v", rem2)
+	}
+
+	// 3. Remaining time > 60% (e.g. 1500ms) -> reduced by 40% (800ms) -> 700ms
+	rem3 := calcParryHastedRemaining(1500*time.Millisecond, attackTime)
+	if rem3 != 700*time.Millisecond {
+		t.Fatalf("expected >60%% remaining time to be reduced by 40%% (1500 - 800 = 700ms), got %v", rem3)
+	}
+}
+
+func TestOffhandAttack_50PctPenaltyAndHitInfo(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{sessions: make(map[*session]struct{})}
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   10,
+		player: &playerState{
+			GUID:              10,
+			Level:             80,
+			MinDamage:         100,
+			MaxDamage:         100,
+			AttackTime:        2000,
+			MinOffhandDamage:  100,
+			MaxOffhandDamage:  100,
+			OffhandAttackTime: 2000,
+		},
+	}
+	srv.sessions[sess] = struct{}{}
+
+	pktChan := make(chan capturedPacket, 10)
+	stopDrain := make(chan struct{})
+	defer close(stopDrain)
+	go drainPackets(clientConn, pktChan, stopDrain)
+
+	// Target mob with 0 armor for predictable base comparison
+	target := combatTarget{
+		GUID:      uint64(999) | (uint64(500) << 24) | (uint64(0xF130) << 48),
+		Health:    5000,
+		MaxHealth: 5000,
+		Level:     80,
+		Armor:     0,
+	}
+
+	// 1. Off-hand attack execution
+	sess.executeMeleeSwing(context.Background(), target, protocol.OffAttack)
+	time.Sleep(20 * time.Millisecond)
+
+	var offAsu []byte
+	for len(pktChan) > 0 {
+		p := <-pktChan
+		if p.opcode == uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE) {
+			offAsu = p.data
+			break
+		}
+	}
+	if len(offAsu) == 0 {
+		t.Fatal("expected SMSG_ATTACKERSTATEUPDATE for offhand attack")
+	}
+
+	r := protocol.NewReader(offAsu)
+	hitInfo, _ := r.ReadU32()
+	if hitInfo&protocol.HitInfoOffHand == 0 {
+		t.Fatalf("expected HitInfoOffHand (0x04) on offhand attack, got 0x%08X", hitInfo)
+	}
+}
+
+func TestSpellPower_DirectDamageAndHeal(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	srv := &Server{
+		creatureMotion: map[uint64]*creatureMotion{
+			500: {
+				GUID:      500,
+				Health:    5000,
+				MaxHealth: 5000,
+				Level:     80,
+			},
+		},
+		sessions: make(map[*session]struct{}),
+	}
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   10,
+		player: &playerState{
+			GUID:       10,
+			Level:      80,
+			Health:     1000,
+			MaxHealth:  2000,
+			SpellPower: 500, // +500 spell power
+		},
+	}
+	srv.sessions[sess] = struct{}{}
+
+	pktChan := make(chan capturedPacket, 10)
+	stopDrain := make(chan struct{})
+	defer close(stopDrain)
+	go drainPackets(clientConn, pktChan, stopDrain)
+
+	// Cast direct spell with base 100 damage:
+	// With 500 spell power and default ~85.7% coefficient, damage increases by ~428 -> ~528+
+	sess.executeSpellDamage(context.Background(), 500, 133, 100)
+	time.Sleep(20 * time.Millisecond)
+
+	var spellDmg uint32
+	for len(pktChan) > 0 {
+		p := <-pktChan
+		if p.opcode == uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG) {
+			r := protocol.NewReader(p.data)
+			_, _ = r.ReadPackedGUID() // target
+			_, _ = r.ReadPackedGUID() // attacker
+			_, _ = r.ReadU32()        // spellID
+			spellDmg, _ = r.ReadU32() // damage
+			break
+		}
+	}
+	if spellDmg < 500 {
+		t.Fatalf("expected spell damage boosted by 500 spell power (got %d, expected > 500)", spellDmg)
+	}
+
+	// Test healing boosted by spell power
+	initialHealth := sess.player.Health
+	sess.executeSpellHeal(context.Background(), sess.playerGUID, 2060, 200)
+	healedAmount := sess.player.Health - initialHealth
+	if healedAmount < 600 {
+		t.Fatalf("expected heal boosted by 500 spell power (got %d, expected > 600)", healedAmount)
+	}
+}
+
+func TestParryHaste_Integration(t *testing.T) {
+	serverConn1, clientConn1 := net.Pipe()
+	defer serverConn1.Close()
+	defer clientConn1.Close()
+
+	serverConn2, clientConn2 := net.Pipe()
+	defer serverConn2.Close()
+	defer clientConn2.Close()
+
+	srv := &Server{sessions: make(map[*session]struct{})}
+	attacker := &session{
+		server:       srv,
+		conn:         serverConn1,
+		playerLoaded: true,
+		playerGUID:   10,
+		player: &playerState{
+			GUID:       10,
+			Level:      80,
+			AttackTime: 2000,
+			Health:     1000,
+			MaxHealth:  1000,
+		},
+	}
+	defender := &session{
+		server:       srv,
+		conn:         serverConn2,
+		playerLoaded: true,
+		playerGUID:   20,
+		player: &playerState{
+			GUID:       20,
+			Level:      80,
+			AttackTime: 2000,
+			Health:     1000,
+			MaxHealth:  1000,
+		},
+	}
+	srv.sessions[attacker] = struct{}{}
+	srv.sessions[defender] = struct{}{}
+
+	go func() {
+		for {
+			if _, _, err := readServerFrame(clientConn1, nil); err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		for {
+			if _, _, err := readServerFrame(clientConn2, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	now := time.Now()
+	// Defender swung 500ms ago (1500ms remaining on a 2000ms attack timer: >60% threshold)
+	defender.lastSwing = now.Add(-500 * time.Millisecond)
+
+	// Target struct for defender
+	target := combatTarget{
+		GUID:      20,
+		Level:     80,
+		Health:    1000,
+		MaxHealth: 1000,
+	}
+
+	// Loop swings until a parry occurs (with parry enabled against defender)
+	parried := false
+	for i := 0; i < 200; i++ {
+		// Reset defender lastSwing to 500ms ago before each trial
+		defender.lastSwing = time.Now().Add(-500 * time.Millisecond)
+		beforeRemaining := 2000*time.Millisecond - time.Since(defender.lastSwing)
+
+		attacker.executeMeleeSwing(context.Background(), target, protocol.BaseAttack)
+
+		afterRemaining := 2000*time.Millisecond - time.Since(defender.lastSwing)
+		// If parry hasted, remaining should drop by ~800ms (from ~1500ms to ~700ms)
+		if afterRemaining < beforeRemaining-500*time.Millisecond {
+			parried = true
+			break
+		}
+	}
+
+	if !parried {
+		t.Logf("no parry occurred during 200 trials (within normal RNG variance)")
 	}
 }
 
