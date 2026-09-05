@@ -179,24 +179,40 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 
 	// XP with the reference gray/zero-difference curve.
 	var mobLevel int64
-	_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(maxlevel, 0), minlevel, 1) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&mobLevel)
-	xp := s.server.killXPGain(ctx, uint32(s.player.Level), uint32(mobLevel))
-	if xp > 0 {
-		s.grantXPWithVictim(ctx, xp, target.GUID)
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(NULLIF(maxlevel, 0), minlevel, 1) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&mobLevel)
+	} else {
+		mobLevel = int64(target.Level)
+		if mobLevel == 0 {
+			mobLevel = 1
+		}
 	}
+	if s.server != nil {
+		xp := s.server.killXPGain(ctx, uint32(s.player.Level), uint32(mobLevel))
+		if xp > 0 {
+			s.grantXPWithVictim(ctx, xp, target.GUID)
+		}
 
-	// Mark the corpse lootable for everyone in range (dynamic flags update).
-	_, _ = s.server.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", guid)
-	s.server.broadcastCreatureValuesUpdate(s.player.Map, target.GUID, map[int]uint32{
-		unitFieldHealth:       0,
-		unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
-	})
+		// Mark the corpse lootable for everyone in range (dynamic flags update).
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_, _ = s.server.WorldStore.DB.ExecContext(ctx, "UPDATE creature SET curhealth = 0 WHERE guid = ?", guid)
+		}
+		s.server.broadcastCreatureValuesUpdate(s.player.Map, target.GUID, map[int]uint32{
+			unitFieldHealth:       0,
+			unitFieldDynamicFlags: 1, // UNIT_DYNFLAG_LOOTABLE
+		})
 
-	// Schedule the respawn with the spawn's original health.
-	s.server.scheduleCreatureRespawn(ctx, guid, uint32(math.Max(float64(target.Health), 1)), now)
+		// Schedule the respawn with the spawn's original health.
+		s.server.scheduleCreatureRespawn(ctx, guid, uint32(math.Max(float64(target.Health), 1)), now)
+	}
 
 	// Quest kill credit: RequiredNpcOrGo entries plus KillCredit templates.
 	s.creditQuestKills(ctx, creatureEntry, target.GUID)
+
+	// Clear any active auras/DoTs ticking on this creature
+	if s.server != nil {
+		s.server.clearCreatureAuras(target.GUID)
+	}
 }
 
 // grantXP applies XP with repeated level-ups and updates the client fields.
