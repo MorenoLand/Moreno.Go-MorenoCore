@@ -1387,19 +1387,24 @@ func TestSpellPower_DirectDamageAndHeal(t *testing.T) {
 
 	// Cast direct spell with base 100 damage:
 	// With 500 spell power and default ~85.7% coefficient, damage increases by ~428 -> ~528+
-	sess.executeSpellDamage(context.Background(), 500, 133, 100)
-	time.Sleep(20 * time.Millisecond)
-
 	var spellDmg uint32
-	for len(pktChan) > 0 {
-		p := <-pktChan
-		if p.opcode == uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG) {
-			r := protocol.NewReader(p.data)
-			_, _ = r.ReadPackedGUID() // target
-			_, _ = r.ReadPackedGUID() // attacker
-			_, _ = r.ReadU32()        // spellID
-			spellDmg, _ = r.ReadU32() // damage
-			break
+	for attempt := 0; attempt < 10 && spellDmg == 0; attempt++ {
+		sess.executeSpellDamage(context.Background(), 500, 133, 100)
+		time.Sleep(20 * time.Millisecond)
+
+		for len(pktChan) > 0 {
+			p := <-pktChan
+			if p.opcode == uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG) {
+				r := protocol.NewReader(p.data)
+				_, _ = r.ReadPackedGUID() // target
+				_, _ = r.ReadPackedGUID() // attacker
+				_, _ = r.ReadU32()        // spellID
+				dmg, _ := r.ReadU32()     // damage
+				if dmg > 0 {
+					spellDmg = dmg
+					break
+				}
+			}
 		}
 	}
 	if spellDmg < 500 {

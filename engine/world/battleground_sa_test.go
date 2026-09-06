@@ -69,7 +69,6 @@ func setupSATestServer(t *testing.T) (*Server, *session, *session) {
 	drain := func(c net.Conn) {
 		buf := make([]byte, 4096)
 		for {
-			_ = c.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 			if _, err := c.Read(buf); err != nil {
 				return
 			}

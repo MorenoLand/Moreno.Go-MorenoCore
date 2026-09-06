@@ -223,6 +223,11 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	if s.server != nil && s.player.Map == 607 {
 		s.server.handleSACreatureKilled(s, creatureEntry)
 	}
+
+	// Isle of Conquest (Map 628) creature kills (Bosses & Vehicles)
+	if s.server != nil && s.player.Map == 628 {
+		s.server.handleICCreatureKilled(s, creatureEntry)
+	}
 }
 
 // grantXP applies XP with repeated level-ups and updates the client fields.

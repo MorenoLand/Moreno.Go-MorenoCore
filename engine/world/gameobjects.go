@@ -334,6 +334,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.server.handleSAGameObjectUse(ctx, s, guid, entry)
 	}
 
+	// Delegate Isle of Conquest objects to IC state machine
+	if s.server != nil && isICGameObject(entry) {
+		return s.server.handleICGameObjectUse(ctx, s, guid, entry)
+	}
+
 	if s.server == nil {
 		return true
 	}
