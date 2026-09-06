@@ -270,7 +270,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 
 	// Apply target armor damage reduction
 	if target.Armor > 0 {
-		damage = calcArmorReducedDamage(float64(target.Armor), s.player.Level, damage)
+		damage = calcArmorReducedDamage(float64(target.Armor), s.player.Level, damage, s.getArmorPenPct())
 	}
 	if damage < 1 {
 		damage = 1
@@ -308,7 +308,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 
 	if s.player.Level > 0 {
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP)
+		hitBonusBP := int32(math.Round(s.getMeleeHitPct() * 100))
+		critBonusBP := int32(math.Round(s.getMeleeCritPct() * 100))
+		expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP)
 	}
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
@@ -570,7 +573,10 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			canDodge = false
 		}
 	}
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP)
+	hitBonusBP := int32(math.Round(s.getRangedHitPct() * 100))
+	critBonusBP := int32(math.Round(s.getRangedCritPct() * 100))
+	expertiseBP := int32(math.Round(s.getExpertiseDodgeParryReductionPct() * 100))
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP, hitBonusBP, critBonusBP, expertiseBP)
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			if vicSess.isImmuneToDamage(1) {
@@ -610,16 +616,20 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		}
 	}
 
-	overkill := uint32(0)
-	if damage >= target.Health && target.Health > 0 {
-		overkill = damage - target.Health
-	}
-
 	schoolMask := uint8(1) // Physical default
 	if s.server != nil && s.server.Data != nil {
 		if spellInfo, found, err := s.server.Data.Spell(spellID); err == nil && found && spellInfo.SchoolMask != 0 {
 			schoolMask = uint8(spellInfo.SchoolMask)
 		}
+	}
+	// Apply target armor damage reduction for physical ranged attacks
+	if schoolMask == 1 && target.Armor > 0 && damage > 0 {
+		damage = calcArmorReducedDamage(float64(target.Armor), s.player.Level, damage, s.getArmorPenPct())
+	}
+
+	overkill := uint32(0)
+	if damage >= target.Health && target.Health > 0 {
+		overkill = damage - target.Health
 	}
 	logPkt := buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
@@ -795,9 +805,10 @@ func buildAttackStop(attacker, victim uint64, nowDead bool) []byte {
 	return packet.Bytes()
 }
 
-// calcArmorReducedDamage computes physical damage reduction based on victim armor
-// and attacker level, matching TrinityCore Unit::CalcArmorReducedDamage.
-func calcArmorReducedDamage(armor float64, attackerLevel uint8, damage uint32) uint32 {
+// calcArmorReducedDamage computes physical damage reduction based on victim armor,
+// attacker level, and optional attacker armor penetration percentage (ArP).
+// Matching TrinityCore Unit::CalcArmorReducedDamage (Unit.cpp:1600-1650).
+func calcArmorReducedDamage(armor float64, attackerLevel uint8, damage uint32, armorPenPct ...float64) uint32 {
 	if armor <= 0 || damage == 0 {
 		return damage
 	}
@@ -808,7 +819,25 @@ func calcArmorReducedDamage(armor float64, attackerLevel uint8, damage uint32) u
 	if levelModifier > 59.0 {
 		levelModifier += 4.5 * (levelModifier - 59.0)
 	}
-	damageReduction := 0.1 * armor / (8.5*levelModifier + 40.0)
+
+	effectiveArmor := armor
+	if len(armorPenPct) > 0 && armorPenPct[0] > 0 {
+		arp := armorPenPct[0]
+		if arp > 100.0 {
+			arp = 100.0
+		}
+		// WotLK 3.3.5 Armor Penetration cap formula:
+		// maxArmorPen = (armor + 400.0 + 85.0 * levelModifier) / 3.0
+		// Reference: TrinityCore Unit::CalcArmorReducedDamage
+		maxArmorPen := (armor + 400.0 + 85.0*levelModifier) / 3.0
+		penetrated := math.Min(armor, maxArmorPen) * (arp / 100.0)
+		effectiveArmor -= penetrated
+		if effectiveArmor < 0 {
+			effectiveArmor = 0
+		}
+	}
+
+	damageReduction := 0.1 * effectiveArmor / (8.5*levelModifier + 40.0)
 	damageReduction /= (1.0 + damageReduction)
 	if damageReduction < 0 {
 		damageReduction = 0
@@ -1098,12 +1127,31 @@ func distance3D(x1, y1, z1, x2, y2, z2 float32) float64 {
 // rollMeleeOutcome implements TrinityCore's single-roll melee attack table:
 // MISS > DODGE > PARRY > GLANCING > BLOCK > CRIT > CRUSHING > HIT
 // Reference: Unit::RollMeleeOutcomeAgainst (Unit.cpp:2189-2320).
-func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry, canDodge bool, critReductionBP ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
+// Optional modifiers:
+// [0] critReductionBP (from defender resilience)
+// [1] hitBonusBP (from attacker hit rating)
+// [2] critBonusBP (from attacker crit rating & agility)
+// [3] expertiseBP (reduces defender dodge and parry)
+func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry, canDodge bool, modifiers ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
 	}
 	if victimLevel == 0 {
 		victimLevel = 1
+	}
+
+	var critReductionBP, hitBonusBP, critBonusBP, expertiseBP int32
+	if len(modifiers) > 0 {
+		critReductionBP = modifiers[0]
+	}
+	if len(modifiers) > 1 {
+		hitBonusBP = modifiers[1]
+	}
+	if len(modifiers) > 2 {
+		critBonusBP = modifiers[2]
+	}
+	if len(modifiers) > 3 {
+		expertiseBP = modifiers[3]
 	}
 
 	leveldif := int32(victimLevel) - int32(attackerLevel)
@@ -1136,6 +1184,9 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 	if isDualWielding {
 		missChance += 1900
 	}
+	if hitBonusBP > 0 {
+		missChance -= hitBonusBP
+	}
 	if missChance < 0 {
 		missChance = 0
 	}
@@ -1147,6 +1198,12 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 		if leveldif > 0 {
 			dodgeChance += leveldif * 10
 		}
+		if expertiseBP > 0 {
+			dodgeChance -= expertiseBP
+		}
+		if dodgeChance < 0 {
+			dodgeChance = 0
+		}
 	}
 
 	// 3. Parry chance: base 5% (500/10000) if victim can parry
@@ -1155,6 +1212,12 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 		parryChance = 500
 		if leveldif > 0 {
 			parryChance += leveldif * 10
+		}
+		if expertiseBP > 0 {
+			parryChance -= expertiseBP
+		}
+		if parryChance < 0 {
+			parryChance = 0
 		}
 	}
 
@@ -1180,8 +1243,11 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 	} else if leveldif > 0 {
 		critChance -= leveldif * 20
 	}
-	if len(critReductionBP) > 0 {
-		critChance -= critReductionBP[0]
+	if critBonusBP > 0 {
+		critChance += critBonusBP
+	}
+	if critReductionBP > 0 {
+		critChance -= critReductionBP
 	}
 	if critChance < 0 {
 		critChance = 0

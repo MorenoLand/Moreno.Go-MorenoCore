@@ -525,14 +525,18 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 						state.CombatRatings[14] += uint32(val)
 						state.CombatRatings[15] += uint32(val)
 						state.CombatRatings[16] += uint32(val)
+					case 37: // Expertise rating (ITEM_MOD_EXPERTISE_RATING)
+						state.CombatRatings[23] += uint32(val)
 					case 38: // Attack power
 						state.AttackPower += uint32(val)
 					case 39: // Ranged attack power
 						state.RangedAttackPower += uint32(val)
-					case 44: // Spell penetration (ITEM_MOD_SPELL_PENETRATION)
-						state.SpellPenetration += uint32(val)
+					case 44: // Armor penetration rating (ITEM_MOD_ARMOR_PENETRATION_RATING)
+						state.CombatRatings[24] += uint32(val)
 					case 45: // Spell power (ITEM_MOD_SPELL_POWER)
 						state.SpellPower += uint32(val)
+					case 47: // Spell penetration (ITEM_MOD_SPELL_PENETRATION)
+						state.SpellPenetration += uint32(val)
 					}
 				}
 			}

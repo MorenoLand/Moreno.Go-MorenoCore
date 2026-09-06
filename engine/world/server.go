@@ -329,11 +329,11 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 			}
 			mainSpeed := 2 * time.Second
 			if sess.player.AttackTime > 0 {
-				mainSpeed = time.Duration(sess.player.AttackTime) * time.Millisecond
+				mainSpeed = sess.getHastedMeleeSpeed(time.Duration(sess.player.AttackTime) * time.Millisecond)
 			}
 			offSpeed := 2 * time.Second
 			if sess.player.OffhandAttackTime > 0 {
-				offSpeed = time.Duration(sess.player.OffhandAttackTime) * time.Millisecond
+				offSpeed = sess.getHastedMeleeSpeed(time.Duration(sess.player.OffhandAttackTime) * time.Millisecond)
 			}
 
 			pReach := float32(1.5)
@@ -399,7 +399,7 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 					if dist >= minRange && dist <= maxRange {
 						rangedSpeed := 2 * time.Second
 						if sess.player.RangedAttackTime > 0 {
-							rangedSpeed = time.Duration(sess.player.RangedAttackTime) * time.Millisecond
+							rangedSpeed = sess.getHastedRangedSpeed(time.Duration(sess.player.RangedAttackTime) * time.Millisecond)
 						}
 						if now.Sub(sess.lastRangedSwing) >= rangedSpeed {
 							sess.executeRangedAttack(ctx, rTarget, sess.autoRepeatSpell)
