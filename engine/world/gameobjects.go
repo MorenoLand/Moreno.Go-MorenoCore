@@ -329,6 +329,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.server.handleAVGameObjectUse(ctx, s, guid, entry)
 	}
 
+	// Delegate Strand of the Ancients objects to SA state machine
+	if s.server != nil && isSAGameObject(entry) {
+		return s.server.handleSAGameObjectUse(ctx, s, guid, entry)
+	}
+
 	if s.server == nil {
 		return true
 	}
