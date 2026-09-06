@@ -116,6 +116,7 @@ func (s *session) killPlayer(ctx context.Context) {
 		s.server.handleAVPlayerDeath(s)
 		s.server.handleSAPlayerDeath(s)
 		s.server.handleICPlayerDeath(s)
+		s.server.handleArenaPlayerDeath(s)
 	}
 	s.clearActiveAuras()
 	s.clearDiminishings()

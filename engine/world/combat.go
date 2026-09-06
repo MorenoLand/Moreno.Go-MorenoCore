@@ -692,7 +692,15 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			}
 			vicSess.lastCombatTime = now
 			if damage > 0 {
+				s.server.updateArenaDamageScore(s, damage)
 				if damage >= vicSess.player.Health {
+					if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+						arena.mu.Lock()
+						if sc, ok := arena.Scores[s.playerGUID]; ok {
+							sc.KillingBlows++
+						}
+						arena.mu.Unlock()
+					}
 					vicSess.player.Health = 0
 					vicSess.sendPlayerUpdate()
 					vicSess.killPlayer(ctx)

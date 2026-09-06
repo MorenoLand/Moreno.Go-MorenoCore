@@ -1023,6 +1023,9 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 		targetSess.player.Health += heal
 	}
 	overheal := heal - effectiveHeal
+	if s.server != nil {
+		s.server.updateArenaHealingScore(s, effectiveHeal)
+	}
 
 	// TC Unit.cpp:6550: packet = packed(target), packed(healer), spellID, heal, overheal, absorb, crit, unused
 	healPkt := buildSpellHealLog(targetGUID, s.playerGUID, spellID, heal, overheal, 0, isCrit)

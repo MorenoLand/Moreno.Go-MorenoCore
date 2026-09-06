@@ -72,6 +72,8 @@ type Server struct {
 	saState             map[uint32]*saBattlegroundState
 	icMu                sync.RWMutex
 	icState             map[uint32]*icBattlegroundState
+	arenaMu             sync.RWMutex
+	arenaState          map[uint32]*arenaBattlegroundState
 	totemMu             sync.RWMutex
 	activeTotems        map[uint64][4]*activeTotem
 	nextDynamicCreatureGUID uint32
@@ -212,11 +214,17 @@ type activeCastState struct {
 }
 
 type bgQueueEntry struct {
-	Active     bool
-	BgTypeID   uint32
-	InstanceID uint32
-	JoinTime   time.Time
-	Status     uint32
+	Active       bool
+	BgTypeID     uint32
+	InstanceID   uint32
+	JoinTime     time.Time
+	Status       uint32
+	ArenaType    uint8
+	IsArena      bool
+	IsRated      bool
+	ArenaFaction uint8
+	MapID        uint32
+	StartTime    time.Time
 }
 
 type buybackSlot struct {

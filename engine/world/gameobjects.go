@@ -339,6 +339,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.server.handleICGameObjectUse(ctx, s, guid, entry)
 	}
 
+	// Delegate Arena objects to Arena state machine
+	if s.server != nil && isArenaGameObject(entry) {
+		return s.server.handleArenaGameObjectUse(ctx, s, guid, entry)
+	}
+
 	if s.server == nil {
 		return true
 	}

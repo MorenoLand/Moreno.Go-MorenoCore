@@ -979,6 +979,15 @@ func (s *session) handleInspectHonorStats(ctx context.Context, payload []byte) b
 // handlePvpLogData processes MSG_PVP_LOG_DATA (0x2E0).
 // Reference: WorldSession::HandlePVPLogDataOpcode (BattlegroundHandler.cpp:211).
 func (s *session) handlePvpLogData(ctx context.Context, payload []byte) bool {
+	if s.server != nil && s.player != nil && IsArenaMap(s.player.Map) {
+		if arena := s.server.findArenaState(s.player.Map, 0); arena != nil {
+			pkt := s.server.buildArenaPvPLogDataPacket(arena)
+			if len(pkt) > 0 {
+				_ = s.write(uint16(protocol.OpcodeMSG_PVP_LOG_DATA), pkt, true)
+				return true
+			}
+		}
+	}
 	buf := protocol.NewBuffer(16)
 	buf.WriteU8(0)  // arena (0)
 	buf.WriteU32(0) // count (0)

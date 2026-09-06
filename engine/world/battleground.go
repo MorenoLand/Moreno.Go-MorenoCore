@@ -98,13 +98,29 @@ func (s *session) handleBattlemasterJoin(ctx context.Context, payload []byte) bo
 // handleBattlemasterJoinArena processes CMSG_BATTLEMASTER_JOIN_ARENA (0x358).
 // Reference: WorldSession::HandleBattlemasterJoinArena (BattleGroundHandler.cpp:166).
 func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 11 {
 		return true
 	}
 	r := protocol.NewReader(payload)
 	_, _ = r.ReadU64() // guid
-	arenaType, _ := r.ReadU8()
-	_ = arenaType
+	arenaSlot, _ := r.ReadU8()
+	asGroup, _ := r.ReadU8()
+	isRated, _ := r.ReadU8()
+	_ = asGroup
+
+	arenaType := uint8(2)
+	switch arenaSlot {
+	case 0:
+		arenaType = 2
+	case 1:
+		arenaType = 3
+	case 2:
+		arenaType = 5
+	default:
+		if arenaSlot == 2 || arenaSlot == 3 || arenaSlot == 5 {
+			arenaType = arenaSlot
+		}
+	}
 
 	slot := -1
 	for i := 0; i < len(s.bgQueues); i++ {
@@ -118,15 +134,19 @@ func (s *session) handleBattlemasterJoinArena(ctx context.Context, payload []byt
 	}
 
 	s.bgQueues[slot] = bgQueueEntry{
-		Active:     true,
-		BgTypeID:   4, // BATTLEGROUND_AA (All Arenas)
-		InstanceID: 0,
-		JoinTime:   time.Now(),
-		Status:     1,
+		Active:       true,
+		BgTypeID:     4, // BATTLEGROUND_AA (All Arenas)
+		InstanceID:   0,
+		JoinTime:     time.Now(),
+		Status:       1, // STATUS_WAIT_QUEUE
+		ArenaType:    arenaType,
+		IsArena:      true,
+		IsRated:      isRated != 0,
+		ArenaFaction: 0,
 	}
 
 	s.sendBattlefieldStatus(uint8(slot))
-	s.debug("queued for arena", "account", s.accountName, "slot", slot)
+	s.debug("queued for arena", "account", s.accountName, "slot", slot, "type", arenaType, "rated", isRated != 0)
 	return true
 }
 
@@ -187,14 +207,22 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 
 	buf := protocol.NewBuffer(40)
 	buf.WriteU32(uint32(slot))
-	buf.WriteU8(0) // arenatype
-	buf.WriteU8(0) // isArena
+	buf.WriteU8(entry.ArenaType)
+	if entry.IsArena {
+		buf.WriteU8(0x0E)
+	} else {
+		buf.WriteU8(0x00)
+	}
 	buf.WriteU32(entry.BgTypeID)
 	buf.WriteU16(0x1F90)
 	buf.WriteU8(10) // minLevel
 	buf.WriteU8(80) // maxLevel
 	buf.WriteU32(entry.InstanceID)
-	buf.WriteU8(0)             // isRated
+	if entry.IsRated {
+		buf.WriteU8(1)
+	} else {
+		buf.WriteU8(0)
+	}
 	buf.WriteU32(entry.Status) // STATUS_WAIT_QUEUE = 1
 	switch entry.Status {
 	case 1: // wait queue
@@ -202,15 +230,19 @@ func (s *session) sendBattlefieldStatus(slot uint8) {
 		timeInQueue := uint32(time.Since(entry.JoinTime).Milliseconds())
 		buf.WriteU32(timeInQueue)
 	case 2: // wait join
-		buf.WriteU32(0) // map id
+		buf.WriteU32(entry.MapID)
 		buf.WriteU64(0)
 		buf.WriteU32(120000) // time to remove
 	case 3: // in progress
-		buf.WriteU32(0) // map id
+		buf.WriteU32(entry.MapID)
 		buf.WriteU64(0)
-		buf.WriteU32(0)
-		buf.WriteU32(0)
-		buf.WriteU8(0)
+		buf.WriteU32(0) // time to auto leave
+		elapsed := uint32(0)
+		if !entry.StartTime.IsZero() {
+			elapsed = uint32(time.Since(entry.StartTime).Milliseconds())
+		}
+		buf.WriteU32(elapsed)
+		buf.WriteU8(entry.ArenaFaction)
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_BATTLEFIELD_STATUS), buf.Bytes(), true)
 }
@@ -285,6 +317,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bo
 		s.server.handleEOTSPlayerLeave(s)
 		s.server.handleSAPlayerLeave(s)
 		s.server.handleICPlayerLeave(s)
+		s.server.handleArenaPlayerLeave(s)
 	}
 	for slot := 0; slot < len(s.bgQueues); slot++ {
 		if s.bgQueues[slot].Active {
@@ -332,9 +365,9 @@ func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload
 		return false
 	}
 	// Reference BattlegroundHandler.cpp:266-268:
-	// Only respond if player is inside a battleground instance/map
+	// Only respond if player is inside a battleground or arena instance/map
 	switch s.player.Map {
-	case 30, 489, 529, 566, 607, 628:
+	case 30, 489, 529, 566, 607, 628, 559, 562, 572, 617, 618:
 		var teammates []*session
 		if s.server != nil {
 			s.server.sessionsMu.RLock()
