@@ -172,6 +172,7 @@ type session struct {
 	activeChannel      *activeChannelState
 	castMu             sync.Mutex
 	schoolLockouts     map[uint32]int64
+	gcdEnd             int64 // Unix millisecond timestamp when Global Cooldown expires
 	pendingBindInstanceID uint64
 	pendingBindMapID      uint32
 	pendingBindDiff       uint32
