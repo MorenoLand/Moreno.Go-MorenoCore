@@ -110,6 +110,9 @@ func (s *session) killPlayer(ctx context.Context) {
 		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
 	}
 	s.deathTimer = time.Now().Add(autoRepopDelay)
+	if s.server != nil {
+		s.server.handleWSGPlayerDeath(s)
+	}
 	s.clearActiveAuras()
 	s.clearDiminishings()
 	s.stopMirrorTimers()

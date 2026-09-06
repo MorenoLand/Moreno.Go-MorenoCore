@@ -1772,6 +1772,15 @@ func buildLearnedDanceMoves() []byte {
 
 func buildInitWorldStates(state playerState) []byte {
 	worldStates := [][2]int32{{2264, 0}, {2263, 0}, {2262, 0}, {2261, 0}, {2260, 0}, {2259, 0}, {3191, 0}, {3901, 0}}
+	if state.Map == 489 {
+		worldStates = append(worldStates,
+			[2]int32{1581, 0}, // WS_FLAG_CAPTURES_ALLIANCE
+			[2]int32{1582, 0}, // WS_FLAG_CAPTURES_HORDE
+			[2]int32{1601, 3}, // WS_FLAG_MAX_CAPTURES
+			[2]int32{2338, 1}, // WS_FLAG_STATE_HORDE (1 = base)
+			[2]int32{2339, 1}, // WS_FLAG_STATE_ALLIANCE (1 = base)
+		)
+	}
 	packet := protocol.NewBuffer(16 + len(worldStates)*8)
 	packet.WriteI32(int32(state.Map))
 	packet.WriteI32(int32(state.Zone))
