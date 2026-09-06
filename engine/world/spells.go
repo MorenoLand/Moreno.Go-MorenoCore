@@ -302,16 +302,44 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 
 	// Spell hit check for offensive spells targeting another unit
 	var missStatus []protocol.SpellMissStatus
+	isReflected := false
 	if targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
-		targetLevel := uint8(1)
-		if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
-			targetLevel = tgt.Level
+		var targetSess *session
+		if s.server != nil {
+			targetSess = s.server.findSessionByGUID(targetGUID)
 		}
-		isPlayerVictim := s.server != nil && s.server.findSessionByGUID(targetGUID) != nil
-		missInfo := magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim)
-		if missInfo != protocol.SpellMissNone {
+		if targetSess != nil && targetSess.checkSpellReflection(spell) {
+			isReflected = true
+			missStatus = []protocol.SpellMissStatus{{
+				TargetGUID:    targetGUID,
+				Reason:        protocol.SpellMissReflect,
+				ReflectStatus: 2,
+			}}
+			targetGUID = s.playerGUID
+			hitTargets = []uint64{s.playerGUID}
+		} else if targetSess != nil && targetSess.isImmuneToSpell(spell) {
 			hitTargets = nil
-			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
+			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
+		} else {
+			targetLevel := uint8(1)
+			if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok {
+				targetLevel = tgt.Level
+			}
+			isPlayerVictim := targetSess != nil
+			missInfo := magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim)
+			if missInfo != protocol.SpellMissNone {
+				hitTargets = nil
+				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
+			}
+		}
+	} else if targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
+		var targetSess *session
+		if s.server != nil {
+			targetSess = s.server.findSessionByGUID(targetGUID)
+		}
+		if targetSess != nil && targetSess.isImmuneToSpell(spell) {
+			hitTargets = nil
+			missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissImmune}}
 		}
 	}
 
@@ -401,6 +429,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 
 	// Apply spell effects
 	applyEffects := func(effCtx context.Context) {
+		if len(missStatus) > 0 && !isReflected {
+			return
+		}
 		interruptHandled := false
 		for _, eff := range spell.Effects {
 			if eff.Effect == 0 {
@@ -412,7 +443,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				if damage <= 1 {
 					damage = uint32(20 + int(s.player.Level)*10)
 				}
-				if targetGUID != 0 && targetGUID != s.playerGUID {
+				if targetGUID != 0 && (targetGUID != s.playerGUID || isReflected) {
 					s.executeSpellDamage(effCtx, targetGUID, spellID, damage)
 				}
 			case 10, 136, 105: // Heal effects
@@ -460,6 +491,8 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 
 				auraTarget := s.playerGUID
 				if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) {
+					auraTarget = s.playerGUID
+				} else if isReflected {
 					auraTarget = s.playerGUID
 				} else if eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) {
 					if targetGUID != 0 && targetGUID != s.playerGUID {
@@ -636,6 +669,9 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
 	if isPlayerVictim {
 		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
+			if playerSess.isImmuneToDamage(uint32(schoolMask)) {
+				damage = 0
+			}
 			isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
 			playerSess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
 		}
@@ -662,7 +698,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
 			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, 0, resisted, hitInfo), true)
-			if damage >= playerSess.player.Health {
+			if damage > 0 && damage >= playerSess.player.Health {
 				if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
 					// Duel defeat: loser drops to 1 HP and duel completes
 					playerSess.player.Health = 1
@@ -673,7 +709,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 					playerSess.sendPlayerUpdate()
 					playerSess.killPlayer(ctx)
 				}
-			} else {
+			} else if damage > 0 {
 				playerSess.player.Health -= damage
 				playerSess.delayCurrentCast()
 				playerSess.delayCurrentChannel()
@@ -1335,6 +1371,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 
 	if targetSess != nil && targetSess.player != nil {
 		if targetSess.player.Health == 0 {
+			return
+		}
+		if targetSess.isImmuneToSpell(spell) {
 			return
 		}
 

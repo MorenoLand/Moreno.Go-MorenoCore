@@ -636,10 +636,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			}
 			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, canBlock, canParry, canDodge)
+			if isPlayerVictim && target.Sess != nil {
+				if target.Sess.isImmuneToDamage(1) {
+					outcome = protocol.MeleeHitImmune
+					hitInfo = protocol.HitInfoMiss
+					targetState = protocol.VictimStateIsImmune
+				}
+			}
 			blocked := uint32(0)
 
 			switch outcome {
-			case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade:
+			case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 				damage = 0
 			case protocol.MeleeHitBlock:
 				blocked = damage / 4
