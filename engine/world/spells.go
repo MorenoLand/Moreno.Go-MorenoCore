@@ -760,7 +760,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 				playerSess.player.Health -= damage
 				playerSess.delayCurrentCast()
 				playerSess.delayCurrentChannel()
-				playerSess.procDamageAuras(true)
+				playerSess.procDamageAuras(true, damage)
 				playerSess.sendPlayerUpdate()
 			}
 			return
@@ -833,6 +833,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		}
 		s.server.motionMu.Unlock()
 		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
+		s.server.procCreatureDamageAuras(target.GUID, true, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 	}
 }
@@ -1052,6 +1053,7 @@ type activeAura struct {
 	CasterLevel        uint8
 	AuraInterruptFlags uint32
 	DRGroup            DiminishingGroup
+	DamageTaken        uint32
 	Timer              *time.Timer
 	TickTimer          *time.Timer
 	Stopped            bool
@@ -1760,7 +1762,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.clearActiveAuras()
 		} else {
 			ts.player.Health -= dmg
-			ts.procDamageAuras(false)
+			ts.procDamageAuras(false, dmg)
 			ts.sendPlayerUpdate()
 		}
 
