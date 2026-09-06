@@ -288,10 +288,10 @@ func TestPlayerSpellDamageAndHeal(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. Test executeSpellHeal on sess2 (30 HP -> +40 HP = 70 HP)
+	// 1. Test executeSpellHeal on sess2 (30 HP -> +40 HP = 70 HP, or 90 HP on crit)
 	sess1.executeSpellHeal(ctx, 20, 2050, 40) // Lesser Heal
-	if sess2.player.Health != 70 {
-		t.Fatalf("expected sess2 health 70 after heal, got %d", sess2.player.Health)
+	if sess2.player.Health != 70 && sess2.player.Health != 90 {
+		t.Fatalf("expected sess2 health 70 or 90 after heal, got %d", sess2.player.Health)
 	}
 
 	// 2. Set duel and test executeSpellDamage (70 HP - 100 dmg = lethal)

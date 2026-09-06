@@ -324,6 +324,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.server.handleEOTSGameObjectUse(ctx, s, guid, entry)
 	}
 
+	// Delegate Alterac Valley banners to AV state machine
+	if s.server != nil && isAVGameObject(entry) {
+		return s.server.handleAVGameObjectUse(ctx, s, guid, entry)
+	}
+
 	if s.server == nil {
 		return true
 	}
