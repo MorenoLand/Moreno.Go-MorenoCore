@@ -484,6 +484,54 @@ func (s *session) spawnPet(ctx context.Context, petID uint32, entry uint32, name
 
 	s.sendPlayerUpdate()
 	s.sendPetSpells(ctx, petID, entry, reactState)
+
+	if s.server != nil {
+		var autocast []uint32
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			if rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT spell FROM pet_spell WHERE guid = ? AND active = 1", petID); err == nil {
+				defer rows.Close()
+				for rows.Next() {
+					var sp uint32
+					if rows.Scan(&sp) == nil && sp > 0 {
+						autocast = append(autocast, sp)
+					}
+				}
+			}
+		}
+		s.server.motionMu.Lock()
+		if s.server.creatureMotion == nil {
+			s.server.creatureMotion = make(map[uint64]*creatureMotion)
+		}
+		s.server.creatureMotion[petGUID] = &creatureMotion{
+			GUID:           petGUID,
+			Entry:          entry,
+			Map:            s.player.Map,
+			HomeX:          petX,
+			HomeY:          petY,
+			HomeZ:          petZ,
+			X:              petX,
+			Y:              petY,
+			Z:              petZ,
+			Orientation:    petO,
+			Speed:          2.5,
+			RunSpeed:       7.0,
+			Faction:        faction,
+			Level:          level,
+			UnitFlags:      unitFlagPlayerControlled,
+			AttackTime:     2000,
+			CombatReach:    1.5,
+			Health:         curHealth,
+			MaxHealth:      maxHealth,
+			OwnerGUID:      s.playerGUID,
+			PetCommand:     PetCommandFollow,
+			PetReact:       reactState,
+			AutocastSpells: autocast,
+			MinDamage:      float32(maxUint32(level*2, 5)),
+			MaxDamage:      float32(maxUint32(level*3, 10)),
+		}
+		s.server.motionMu.Unlock()
+	}
+
 	s.debug("pet spawned", "account", s.accountName, "petID", petID, "entry", entry, "name", name, "level", level)
 }
 
@@ -520,6 +568,14 @@ func (s *session) unsummonPet(ctx context.Context, mode uint8) {
 	buf := protocol.NewBuffer(8)
 	buf.WriteU64(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_PET_SPELLS), buf.Bytes(), true)
+
+	if s.server != nil {
+		s.server.motionMu.Lock()
+		if s.server.creatureMotion != nil {
+			delete(s.server.creatureMotion, petGUID)
+		}
+		s.server.motionMu.Unlock()
+	}
 
 	s.player.PetGUID = 0
 	s.sendPlayerUpdate()
@@ -1252,6 +1308,9 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 	case actCommand:
 		switch spellOrAction {
 		case commandAttack:
+			if s.server != nil {
+				s.server.onPetCommandAttack(petGUID, targetGUID)
+			}
 			// Send hostile AI reaction (plays pet attack sound/growl)
 			reactionBuf := protocol.NewBuffer(12)
 			reactionBuf.WriteU64(petGUID)
@@ -1262,14 +1321,27 @@ func (s *session) handlePetAction(ctx context.Context, payload []byte) bool {
 			}
 			s.debug("pet attack command", "account", s.accountName, "pet", petGUID, "target", targetGUID)
 		case commandFollow:
+			if s.server != nil {
+				s.server.onPetCommandFollow(petGUID)
+			}
+			stopPkt := buildAttackStop(petGUID, 0, false)
+			_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 			s.debug("pet follow command", "account", s.accountName, "pet", petGUID)
 		case commandStay:
+			if s.server != nil {
+				s.server.onPetCommandStay(petGUID)
+			}
+			stopPkt := buildAttackStop(petGUID, 0, false)
+			_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
 			s.debug("pet stay command", "account", s.accountName, "pet", petGUID)
 		case commandAbandon:
 			s.unsummonPet(ctx, petSaveAsDeleted)
 			s.debug("pet abandoned via command", "account", s.accountName, "pet", petGUID)
 		}
 	case actReaction:
+		if s.server != nil {
+			s.server.onPetSetReaction(petGUID, uint8(spellOrAction))
+		}
 		// Save react state (0 = passive, 1 = defensive, 2 = aggressive)
 		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_pet SET Reactstate = ? WHERE owner = ? AND slot = 0", spellOrAction, s.playerGUID)
@@ -1552,6 +1624,11 @@ func (s *session) syncPetSpellAutocast(ctx context.Context, petID uint32, spellI
 				_, _ = cdb.ExecContext(ctx, "UPDATE character_pet SET abdata = ? WHERE owner = ? AND id = ?", newAbdata, s.playerGUID, petID)
 			}
 		}
+	}
+
+	if s.server != nil {
+		petGUID := uint64(petID) | (uint64(0xF140) << 48)
+		s.server.onPetToggleAutocast(petGUID, spellID, active != 0)
 	}
 }
 

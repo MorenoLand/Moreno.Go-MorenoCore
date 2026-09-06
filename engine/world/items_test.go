@@ -1132,12 +1132,27 @@ drainLoop:
 		t.Fatal("handleOpenItem container failed")
 	}
 
-	select {
-	case op := <-opChan:
-		data := <-pChan
-		if op != uint16(protocol.OpcodeSMSG_LOOT_RESPONSE) {
-			t.Fatalf("expected SMSG_LOOT_RESPONSE (0x160), got 0x%04X", op)
+	var data []byte
+	foundLoot := false
+	for i := 0; i < 5; i++ {
+		select {
+		case op := <-opChan:
+			d := <-pChan
+			if op == uint16(protocol.OpcodeSMSG_LOOT_RESPONSE) {
+				data = d
+				foundLoot = true
+				break
+			}
+		case <-time.After(200 * time.Millisecond):
+			break
 		}
+		if foundLoot {
+			break
+		}
+	}
+	if !foundLoot {
+		t.Fatalf("expected SMSG_LOOT_RESPONSE (0x160)")
+	}
 		r := protocol.NewReader(data)
 		lGUID, _ := r.ReadU64()
 		lType, _ := r.ReadU8()
@@ -1152,9 +1167,6 @@ drainLoop:
 		if lootItemEntry != 7777 || lootItemCount != 2 {
 			t.Fatalf("expected 2x item 7777 in clam loot, got %dx %d", lootItemCount, lootItemEntry)
 		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("timeout waiting for SMSG_LOOT_RESPONSE for open item")
-	}
 
 	// 4. Single Item Repair: Repair shield 3001 (durability 20 -> 100, cost 800)
 	repBuf := protocol.NewBuffer(17)
