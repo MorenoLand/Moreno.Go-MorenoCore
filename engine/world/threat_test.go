@@ -119,3 +119,94 @@ func TestThreat_HandleEffectTaunt(t *testing.T) {
 		t.Fatalf("expected taunter threat to match 300, got %f", motion.ThreatMgr.GetThreat(2))
 	}
 }
+
+func TestThreat_DistributeHealingThreat(t *testing.T) {
+	srv := &Server{
+		creatureMotion: make(map[uint64]*creatureMotion),
+		sessions:       make(map[*session]struct{}),
+	}
+
+	healerGUID := uint64(10)
+	targetGUID := uint64(20)
+
+	healerSess := &session{
+		server:       srv,
+		playerGUID:   healerGUID,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:      healerGUID,
+			Level:     80,
+			Map:       0,
+			X:         100.0,
+			Y:         100.0,
+			Z:         0.0,
+			UnitFlags: 0,
+		},
+	}
+	srv.sessions[healerSess] = struct{}{}
+
+	// Creature 1 & 2 in combat with targetGUID
+	mob1GUID := uint64(1001)
+	mob2GUID := uint64(1002)
+
+	mob1 := &creatureMotion{
+		GUID:       mob1GUID,
+		Map:        0,
+		Health:     1000,
+		InCombat:   true,
+		TargetGUID: targetGUID,
+		ThreatMgr:  NewThreatManager(mob1GUID),
+		X:          102.0,
+		Y:          100.0,
+		Z:          0.0,
+	}
+	mob1.ThreatMgr.AddThreat(targetGUID, 100, true)
+
+	mob2 := &creatureMotion{
+		GUID:       mob2GUID,
+		Map:        0,
+		Health:     1000,
+		InCombat:   true,
+		TargetGUID: targetGUID,
+		ThreatMgr:  NewThreatManager(mob2GUID),
+		X:          150.0,
+		Y:          100.0,
+		Z:          0.0,
+	}
+	mob2.ThreatMgr.AddThreat(targetGUID, 100, false)
+
+	srv.creatureMotion[mob1GUID] = mob1
+	srv.creatureMotion[mob2GUID] = mob2
+
+	// Effective heal: 600 HP
+	// Total threat = 600 * 0.5 = 300 threat.
+	// Divided between mob1 and mob2 -> 150 threat each.
+	srv.distributeHealingThreat(context.Background(), healerGUID, targetGUID, 600)
+
+	if threat := mob1.ThreatMgr.GetThreat(healerGUID); threat != 150 {
+		t.Fatalf("expected mob1 threat for healer to be 150, got %f", threat)
+	}
+	if threat := mob2.ThreatMgr.GetThreat(healerGUID); threat != 150 {
+		t.Fatalf("expected mob2 threat for healer to be 150, got %f", threat)
+	}
+
+	// Mob 1: healer is at distance 2.0 (<= melee range 5.0).
+	// Target threat is 100. Healer threat is 150.
+	// Melee threshold is 110% = 110 threat. 150 > 110, so mob1 should switch target to healer.
+	if mob1.TargetGUID != healerGUID {
+		t.Fatalf("expected mob1 target to switch to healer %d, got %d", healerGUID, mob1.TargetGUID)
+	}
+
+	// Mob 2: healer is at distance 50.0 (> melee range).
+	// Target threat is 100. Healer threat is 150.
+	// Ranged threshold is 130% = 130 threat. 150 > 130, so mob2 should also switch target to healer.
+	if mob2.TargetGUID != healerGUID {
+		t.Fatalf("expected mob2 target to switch to healer %d, got %d", healerGUID, mob2.TargetGUID)
+	}
+
+	// Healer should now have InCombat unit flag set
+	if healerSess.player.UnitFlags&unitFlagInCombat == 0 {
+		t.Fatalf("expected healer to have unitFlagInCombat set")
+	}
+}
+
