@@ -219,7 +219,7 @@ func TestMissileSpellTravelDelay(t *testing.T) {
 		conn:         serverConn,
 		playerLoaded: true,
 		playerGUID:   1,
-		player:       &playerState{GUID: 1, Map: 0, X: 0, Y: 0, Z: 0, Level: 1},
+		player:       &playerState{GUID: 1, Map: 0, X: 0, Y: 0, Z: 0, Level: 1, CombatRatings: [25]uint32{CombatRatingHitSpell: 1000}},
 	}
 	ctx := context.Background()
 

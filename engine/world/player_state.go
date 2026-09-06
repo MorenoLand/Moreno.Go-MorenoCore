@@ -218,6 +218,7 @@ type playerState struct {
 	RangedAttackTime  uint32
 	CombatRatings     [25]uint32
 	SpellPower        uint32
+	SpellPenetration  uint32
 	CombatReach       float32
 	AmmoDPS           float32
 	DungeonDifficulty uint8
@@ -398,6 +399,8 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	state.Block = 0
 	state.AttackPower = 0
 	state.RangedAttackPower = 0
+	state.SpellPower = 0
+	state.SpellPenetration = 0
 	for i := range state.CombatRatings {
 		state.CombatRatings[i] = 0
 	}
@@ -526,6 +529,8 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 						state.AttackPower += uint32(val)
 					case 39: // Ranged attack power
 						state.RangedAttackPower += uint32(val)
+					case 44: // Spell penetration (ITEM_MOD_SPELL_PENETRATION)
+						state.SpellPenetration += uint32(val)
 					case 45: // Spell power (ITEM_MOD_SPELL_POWER)
 						state.SpellPower += uint32(val)
 					}

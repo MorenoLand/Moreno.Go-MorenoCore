@@ -36,6 +36,28 @@ func (s *session) getSpellHastePct() float64 {
 	return rating / ratingPerPct
 }
 
+// getSpellHitPct returns the bonus spell hit percentage from gear rating.
+// Mirrors TrinityCore Player::GetRatingBonusValue(CR_HIT_SPELL) (Player.cpp:8800).
+func (s *session) getSpellHitPct() float64 {
+	if s == nil || s.player == nil {
+		return 0
+	}
+	rating := float64(s.player.CombatRatings[CombatRatingHitSpell])
+	if rating <= 0 {
+		return 0
+	}
+	lvl := float64(s.player.Level)
+	if lvl <= 0 {
+		lvl = 80
+	}
+	// At level 80: 26.231995 rating = 1.0% spell hit (from gtCombatRatings.dbc)
+	ratingPerPct := 26.231995 * (lvl / 80.0)
+	if ratingPerPct < 5.0 {
+		ratingPerPct = 5.0
+	}
+	return rating / ratingPerPct
+}
+
 // calculateSpellCastTime resolves the cast time in milliseconds, modified by spell haste.
 // Mirrors TrinityCore Player::CalculateCastTime (Player.cpp:8800-8830):
 // castTime = baseCastTime / (1.0 + hastePct / 100.0)
