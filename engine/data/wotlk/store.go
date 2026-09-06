@@ -93,6 +93,7 @@ type Spell struct {
 	ChannelInterrupt   uint32
 	DurationIndex    uint32
 	SpellLevel       uint32
+	PreventionType   uint32 // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
 	Speed            float32
 	Effects          [3]SpellEffect
 }
@@ -429,6 +430,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{33, &spell.ChannelInterrupt},
 		{40, &spell.DurationIndex},
 		{39, &spell.SpellLevel},
+		{214, &spell.PreventionType}, // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
 	}
 	for _, value := range values {
 		if *value.dest, err = record.Uint32(value.field); err != nil {
