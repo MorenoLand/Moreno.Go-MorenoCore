@@ -61,6 +61,7 @@ const (
 	MeleeHitCrit     MeleeHitOutcome = 6
 	MeleeHitCrushing MeleeHitOutcome = 7
 	MeleeHitNormal   MeleeHitOutcome = 8
+	MeleeHitImmune   MeleeHitOutcome = 10
 )
 
 // BuildAttackerStateUpdate builds SMSG_ATTACKERSTATEUPDATE (0x14A) packet.

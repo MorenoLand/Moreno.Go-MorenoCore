@@ -309,13 +309,22 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	if s.player.Level > 0 {
 		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP)
 	}
+	if isPlayerVictim && s.server != nil {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+			if vicSess.isImmuneToDamage(1) {
+				outcome = protocol.MeleeHitImmune
+				hitInfo = protocol.HitInfoMiss
+				targetState = protocol.VictimStateIsImmune
+			}
+		}
+	}
 	if attType == protocol.OffAttack {
 		hitInfo |= protocol.HitInfoOffHand
 	}
 	blocked := uint32(0)
 
 	switch outcome {
-	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade:
+	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 		damage = 0
 	case protocol.MeleeHitBlock:
 		blocked = damage / 4
@@ -561,6 +570,13 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		}
 	}
 	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP)
+	if isPlayerVictim && s.server != nil {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+			if vicSess.isImmuneToDamage(1) {
+				outcome = protocol.MeleeHitImmune
+			}
+		}
+	}
 
 	minDmg := s.player.MinRangedDamage
 	maxDmg := s.player.MaxRangedDamage
@@ -573,11 +589,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		damage = 1
 	}
 
+	blocked := uint32(0)
 	switch outcome {
-	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitEvade:
+	case protocol.MeleeHitMiss, protocol.MeleeHitDodge, protocol.MeleeHitParry, protocol.MeleeHitEvade, protocol.MeleeHitImmune:
 		damage = 0
 	case protocol.MeleeHitBlock:
-		blocked := damage / 4
+		blocked = damage / 4
 		if blocked < 1 {
 			blocked = 1
 		}
