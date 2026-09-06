@@ -314,6 +314,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.server.handleWSGFlagUse(ctx, s, guid, entry)
 	}
 
+	// Delegate Arathi Basin banners to AB state machine
+	if s.server != nil && isABBanner(entry) {
+		return s.server.handleABBannerUse(ctx, s, guid, entry)
+	}
+
 	if s.server == nil {
 		return true
 	}
