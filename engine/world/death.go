@@ -113,6 +113,7 @@ func (s *session) killPlayer(ctx context.Context) {
 	if s.server != nil {
 		s.server.handleWSGPlayerDeath(s)
 		s.server.handleEOTSPlayerDeath(s)
+		s.server.handleAVPlayerDeath(s)
 	}
 	s.clearActiveAuras()
 	s.clearDiminishings()

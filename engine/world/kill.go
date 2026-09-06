@@ -213,6 +213,11 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	if s.server != nil {
 		s.server.clearCreatureAuras(target.GUID)
 	}
+
+	// Alterac Valley (Map 30) creature kills (Generals, Captains, Mine bosses)
+	if s.server != nil && s.player.Map == 30 {
+		s.server.handleAVCreatureKilled(s, creatureEntry)
+	}
 }
 
 // grantXP applies XP with repeated level-ups and updates the client fields.
