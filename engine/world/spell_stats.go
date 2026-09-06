@@ -58,6 +58,67 @@ func (s *session) getSpellHitPct() float64 {
 	return rating / ratingPerPct
 }
 
+// calculateSpellHitChance calculates the chance [0.0, 1.0] for a spell to hit the target,
+// based on caster level, target level, whether target is a player or creature, and caster's Spell Hit Rating.
+// Formula mirrors TrinityCore Unit::MagicSpellHitResult (Unit.cpp:2470-2520).
+func (s *session) calculateSpellHitChance(targetLevel uint8, isTargetPlayer bool) float64 {
+	if s == nil || s.player == nil {
+		return 1.0
+	}
+	casterLevel := s.player.Level
+	if casterLevel == 0 {
+		casterLevel = 80
+	}
+	if targetLevel == 0 {
+		targetLevel = casterLevel
+	}
+
+	levelDiff := int(targetLevel) - int(casterLevel)
+	hitChance := 100.0
+
+	if isTargetPlayer {
+		if levelDiff <= 0 {
+			hitChance = 96.0 // 4% base miss in PvP
+		} else if levelDiff == 1 {
+			hitChance = 95.0 // 5% miss
+		} else if levelDiff == 2 {
+			hitChance = 94.0 // 6% miss
+		} else {
+			hitChance = 94.0 - float64(levelDiff-2)*7.0
+		}
+	} else {
+		// PvE against creatures
+		if levelDiff <= 0 {
+			hitChance = 96.0 // 4% base miss
+		} else if levelDiff == 1 {
+			hitChance = 95.0 // 5% miss
+		} else if levelDiff == 2 {
+			hitChance = 94.0 // 6% miss
+		} else {
+			// Level 83 boss against Level 80 player: 83% hit chance (17% miss)
+			hitChance = 83.0 - float64(levelDiff-3)*11.0
+		}
+	}
+
+	// Add spell hit percentage from gear rating (CombatRatingHitSpell = 7)
+	hitChance += s.getSpellHitPct()
+
+	if hitChance > 100.0 {
+		hitChance = 100.0
+	}
+	if hitChance < 1.0 {
+		hitChance = 1.0
+	}
+
+	return hitChance / 100.0
+}
+
+// rollSpellHit rolls whether a spell hits or misses the target.
+func (s *session) rollSpellHit(targetLevel uint8, isTargetPlayer bool) bool {
+	chance := s.calculateSpellHitChance(targetLevel, isTargetPlayer)
+	return rand.Float64() < chance
+}
+
 // calculateSpellCastTime resolves the cast time in milliseconds, modified by spell haste.
 // Mirrors TrinityCore Player::CalculateCastTime (Player.cpp:8800-8830):
 // castTime = baseCastTime / (1.0 + hastePct / 100.0)

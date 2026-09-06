@@ -694,46 +694,53 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 		return
 	}
 
-	// Spell crit roll
-	crit := s.rollSpellCrit(target.GUID, schoolMask)
+	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
+	isHit := s.rollSpellHit(target.Level, isPlayerVictim)
 	hitInfo := uint32(0)
-	if crit {
-		mult := 1.5
-		if s.server != nil && s.server.Data != nil {
-			if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
-				mult = s.getSpellCritMultiplier(sp)
+	resisted := uint32(0)
+	absorbed := uint32(0)
+
+	if !isHit {
+		hitInfo = 0x01 // SPELL_HIT_TYPE_MISS
+		damage = 0
+	} else {
+		// Spell crit roll
+		crit := s.rollSpellCrit(target.GUID, schoolMask)
+		if crit {
+			mult := 1.5
+			if s.server != nil && s.server.Data != nil {
+				if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+					mult = s.getSpellCritMultiplier(sp)
+				} else {
+					mult = s.getSpellCritMultiplier(wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)})
+				}
 			} else {
 				mult = s.getSpellCritMultiplier(wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)})
 			}
-		} else {
-			mult = s.getSpellCritMultiplier(wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)})
+			damage = uint32(math.Round(float64(damage) * mult))
+			hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
 		}
-		damage = uint32(math.Round(float64(damage) * mult))
-		hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
-	}
 
-	resisted := uint32(0)
-	if schoolMask > 1 && s.player != nil && s.player.Level > 0 {
-		resIdx := schoolMaskToResistanceIndex(schoolMask)
-		victimRes := target.Resistances[resIdx]
-		resisted, damage = calcMagicSpellResistance(damage, schoolMask, victimRes, s.player.Level, target.Level, s.player.SpellPenetration)
-	}
-
-	absorbed := uint32(0)
-	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
-	if isPlayerVictim {
-		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
-			if playerSess.isImmuneToDamage(uint32(schoolMask)) {
-				damage = 0
-			}
-			isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
-			playerSess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
-			if damage > 0 {
-				absorbed, damage = playerSess.applyAbsorptionShields(damage, schoolMask)
-			}
+		if schoolMask > 1 && s.player != nil && s.player.Level > 0 {
+			resIdx := schoolMaskToResistanceIndex(schoolMask)
+			victimRes := target.Resistances[resIdx]
+			resisted, damage = calcMagicSpellResistance(damage, schoolMask, victimRes, s.player.Level, target.Level, s.player.SpellPenetration)
 		}
-	} else if s.server != nil && damage > 0 {
-		absorbed, damage = s.server.applyCreatureAbsorptionShields(target.GUID, damage, schoolMask)
+
+		if isPlayerVictim {
+			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
+				if playerSess.isImmuneToDamage(uint32(schoolMask)) {
+					damage = 0
+				}
+				isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
+				playerSess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
+				if damage > 0 {
+					absorbed, damage = playerSess.applyAbsorptionShields(damage, schoolMask)
+				}
+			}
+		} else if s.server != nil && damage > 0 {
+			absorbed, damage = s.server.applyCreatureAbsorptionShields(target.GUID, damage, schoolMask)
+		}
 	}
 
 	overkill := uint32(0)
