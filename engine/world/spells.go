@@ -1919,6 +1919,10 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		ts.player.Health = newHP
 		ts.sendPlayerUpdate()
 
+		if ts.server != nil && heal > overheal {
+			ts.server.distributeHealingThreat(context.Background(), aura.CasterGUID, aura.TargetGUID, heal-overheal)
+		}
+
 	case 24: // SPELL_AURA_PERIODIC_ENERGIZE
 		logPkt := protocol.BuildPeriodicAuraLogEnergize(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, 0, aura.Amount)
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)

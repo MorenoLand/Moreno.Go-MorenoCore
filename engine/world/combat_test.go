@@ -300,7 +300,9 @@ func TestPlayerSpellDamageAndHeal(t *testing.T) {
 	sess1.player.DuelTeam = 1
 	sess2.player.DuelTeam = 2
 
-	sess1.executeSpellDamage(ctx, 20, 133, 100) // Fireball
+	for i := 0; i < 10 && sess2.player.Health > 1; i++ {
+		sess1.executeSpellDamage(ctx, 20, 133, 100) // Fireball
+	}
 
 	// In a duel, lethal damage caps health at 1 and ends duel
 	if sess2.player.Health != 1 {

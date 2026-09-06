@@ -48,6 +48,9 @@ const (
 	unitFieldChosenTitle                        = 1195
 	unitFieldAmmoID                             = 1198
 	unitFieldPlayerSelfResSpell                 = 1199 // PLAYER_SELF_RES_SPELL = UNIT_END + 0x041B
+	playerFieldHonorCurrency                    = 1208 // PLAYER_FIELD_HONOR_CURRENCY = UNIT_END + 0x0424
+	playerFieldArenaCurrency                    = 1209 // PLAYER_FIELD_ARENA_CURRENCY = UNIT_END + 0x0425
+	playerFieldLifetimeHonorableKills           = 1210 // PLAYER_FIELD_LIFETIME_HONORABLE_KILLS = UNIT_END + 0x0426
 	playerFieldDuelArbiter                      = 148  // PLAYER_DUEL_ARBITER = UNIT_END + 0x0000 (Size 2)
 	playerFieldDuelTeam                         = 156  // PLAYER_DUEL_TEAM = UNIT_END + 0x0008 (Size 1)
 	playerQuestLogStart                         = 158  // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
@@ -221,10 +224,17 @@ type playerState struct {
 	SpellPenetration  uint32
 	CombatReach       float32
 	AmmoDPS           float32
-	DungeonDifficulty uint8
-	RaidDifficulty    uint8
-	VehicleGUID       uint64
-	VehicleSeat       int8
+	DungeonDifficulty    uint8
+	RaidDifficulty       uint8
+	VehicleGUID          uint64
+	VehicleSeat          int8
+	ArenaPoints          uint32
+	TotalHonorPoints     uint32
+	TodayHonorPoints     uint32
+	YesterdayHonorPoints uint32
+	TotalKills           uint32
+	TodayKills           uint16
+	YesterdayKills       uint16
 }
 
 type playerReputation struct {
@@ -756,6 +766,17 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		}
 		gRows.Close()
 	}
+	var arenaPts, totalHonor, todayHonor, yesterdayHonor, totalKills, todayKills, yesterdayKills int64
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(arenaPoints, 0), COALESCE(totalHonorPoints, 0), COALESCE(todayHonorPoints, 0), COALESCE(yesterdayHonorPoints, 0), COALESCE(totalKills, 0), COALESCE(todayKills, 0), COALESCE(yesterdayKills, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&arenaPts, &totalHonor, &todayHonor, &yesterdayHonor, &totalKills, &todayKills, &yesterdayKills)
+		state.ArenaPoints = uint32(arenaPts)
+		state.TotalHonorPoints = uint32(totalHonor)
+		state.TodayHonorPoints = uint32(todayHonor)
+		state.YesterdayHonorPoints = uint32(yesterdayHonor)
+		state.TotalKills = uint32(totalKills)
+		state.TodayKills = uint16(todayKills)
+		state.YesterdayKills = uint16(yesterdayKills)
+	}
 	return nil
 }
 
@@ -1024,6 +1045,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		values[playerFieldKnownTitles+i] = state.KnownTitles[i]
 	}
 	values[unitFieldAmmoID] = state.AmmoID
+	values[playerFieldHonorCurrency] = state.TotalHonorPoints
+	values[playerFieldArenaCurrency] = state.ArenaPoints
+	values[playerFieldLifetimeHonorableKills] = state.TotalKills
 	if state.DuelArbiter != 0 {
 		values[playerFieldDuelArbiter] = uint32(state.DuelArbiter)
 		values[playerFieldDuelArbiter+1] = uint32(state.DuelArbiter >> 32)
