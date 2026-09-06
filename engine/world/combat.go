@@ -420,6 +420,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 	s.lastCombatTime = time.Now()
 
+	// Trigger weapon enchantment procs on hit (TrinityCore Unit::ProcDamageAndSpellFor)
+	s.procWeaponEnchantments(ctx, target, attType, outcome)
+
 	// If target is an online player (e.g. duel opponent or PvP)
 	if s.server != nil {
 		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil && playerSess.player != nil {
