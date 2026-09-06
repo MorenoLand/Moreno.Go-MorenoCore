@@ -68,6 +68,8 @@ type Server struct {
 	eotsState           map[uint32]*eotsBattlegroundState
 	avMu                sync.RWMutex
 	avState             map[uint32]*avBattlegroundState
+	saMu                sync.RWMutex
+	saState             map[uint32]*saBattlegroundState
 	totemMu             sync.RWMutex
 	activeTotems        map[uint64][4]*activeTotem
 	nextDynamicCreatureGUID uint32
@@ -240,7 +242,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[uint64]map[uint32]struct{}), activeCreatureAuras: make(map[uint64]map[uint32]*activeAura), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), creatureMotion: make(map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), creatureLoot: make(map[uint64]*activeLootState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[string]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr()}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[uint64]map[uint32]struct{}), activeCreatureAuras: make(map[uint64]map[uint32]*activeAura), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), creatureMotion: make(map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), creatureLoot: make(map[uint64]*activeLootState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[string]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr()}
 	server.Features.LFG.SetDungeonValidator(func(id uint32) bool {
 		dungeon, found, err := server.Data.LFGDungeon(id)
 		return err == nil && found && wotlk.IsSupportedLFGType(dungeon.TypeID)

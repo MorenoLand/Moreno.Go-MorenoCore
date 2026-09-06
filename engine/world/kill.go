@@ -218,6 +218,11 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	if s.server != nil && s.player.Map == 30 {
 		s.server.handleAVCreatureKilled(s, creatureEntry)
 	}
+
+	// Strand of the Ancients (Map 607) creature kills (Demolishers)
+	if s.server != nil && s.player.Map == 607 {
+		s.server.handleSACreatureKilled(s, creatureEntry)
+	}
 }
 
 // grantXP applies XP with repeated level-ups and updates the client fields.
