@@ -675,6 +675,15 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 
 			overkill := uint32(0)
+			if damage > 0 && isPlayerVictim {
+				absorbed, rem := target.Sess.applyAbsorptionShields(damage, 1)
+				damage = rem
+				if rem == 0 && absorbed > 0 {
+					hitInfo |= protocol.HitInfoFullAbsorb
+				} else if absorbed > 0 {
+					hitInfo |= protocol.HitInfoPartialAbsorb
+				}
+			}
 			if damage > 0 {
 				if damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health
