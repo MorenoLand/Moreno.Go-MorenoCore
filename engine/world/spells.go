@@ -700,6 +700,12 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 	}
 
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
+	if !isPlayerVictim && s.server != nil && s.server.isCreatureEvading(target.GUID) {
+		hitInfo := uint32(0x01) // SPELL_HIT_TYPE_MISS
+		damage = 0
+		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, 0, schoolMask, 0, 0, hitInfo), true)
+		return
+	}
 	isHit := s.rollSpellHit(target.Level, isPlayerVictim)
 	hitInfo := uint32(0)
 	resisted := uint32(0)
@@ -1740,7 +1746,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		return
 	}
 
-	if s.server == nil {
+	if s.server == nil || s.server.isCreatureEvading(targetGUID) {
 		return
 	}
 	s.server.auraMu.Lock()
@@ -1986,7 +1992,7 @@ func (s *session) scheduleCreaturePeriodicTick(aura *activeAura, periodMs uint32
 func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 	ctx := context.Background()
 	target, ok := s.getCombatTarget(ctx, aura.TargetGUID)
-	if !ok || target.Health == 0 {
+	if !ok || target.Health == 0 || (s.server != nil && s.server.isCreatureEvading(aura.TargetGUID)) {
 		if s.server != nil {
 			s.server.clearCreatureAuras(aura.TargetGUID)
 		}

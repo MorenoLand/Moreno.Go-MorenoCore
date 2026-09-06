@@ -278,7 +278,7 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 		entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
 		motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
 	}
-	if motion == nil {
+	if motion == nil || motion.Evading {
 		return
 	}
 	if motion.ThreatMgr == nil {
@@ -323,7 +323,7 @@ func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, target
 
 	var engaged []*creatureMotion
 	for _, m := range s.creatureMotion {
-		if m == nil || m.Health == 0 || !m.InCombat || m.Map != healerSess.player.Map {
+		if m == nil || m.Health == 0 || !m.InCombat || m.Map != healerSess.player.Map || m.Evading {
 			continue
 		}
 		isEngaged := false
