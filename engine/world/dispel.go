@@ -352,6 +352,26 @@ func isDevourMagicSpell(spellID uint32) bool {
 	}
 }
 
+// isUnstableAfflictionSpell returns true if the spell is Unstable Affliction (TrinityCore SpellMgr.cpp).
+func isUnstableAfflictionSpell(spellID uint32) bool {
+	switch spellID {
+	case 30108, 30404, 30405, 47841, 47843:
+		return true
+	default:
+		return false
+	}
+}
+
+// isVampiricTouchSpell returns true if the spell is Vampiric Touch (TrinityCore SpellMgr.cpp).
+func isVampiricTouchSpell(spellID uint32) bool {
+	switch spellID {
+	case 34914, 34916, 34917, 48159, 48160:
+		return true
+	default:
+		return false
+	}
+}
+
 // handleEffectDispel processes SPELL_EFFECT_DISPEL (38).
 // Mirrors TrinityCore Spell::EffectDispel (SpellEffects.cpp:2429-2531).
 func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spell wotlk.Spell, eff wotlk.SpellEffect) {
@@ -417,6 +437,36 @@ func (s *session) handleEffectDispel(ctx context.Context, targetGUID uint64, spe
 					s.player.Health = s.player.MaxHealth
 				}
 				s.sendPlayerUpdate()
+			}
+
+			// Dispel Backfire / Backlash Mechanics (SpellEffects.cpp:2470-2485)
+			// Unstable Affliction: deals 9 * tick damage (cand.Amount * 9) and silences dispeller for 5 seconds (spell 31117).
+			if isUnstableAfflictionSpell(cand.SpellID) {
+				backlashDamage := cand.Amount * 9
+				if backlashDamage == 0 {
+					backlashDamage = 1800
+				}
+				s.executeSpellDamage(ctx, s.playerGUID, 31117, backlashDamage)
+
+				silenceSpell := wotlk.Spell{
+					ID:         31117,
+					DispelType: DispelMagic,
+					Mechanic:   9, // MECHANIC_SILENCE
+				}
+				silenceEff := wotlk.SpellEffect{
+					Effect: 6,  // SPELL_EFFECT_APPLY_AURA
+					Aura:   18, // SPELL_AURA_MOD_SILENCE
+				}
+				s.applyAuraToTarget(ctx, s.playerGUID, silenceSpell, silenceEff, 5000, 0, 0, 32)
+			}
+
+			// Vampiric Touch: deals 2 * tick damage (cand.Amount * 2) to the dispeller (spell 64085).
+			if isVampiricTouchSpell(cand.SpellID) {
+				backlashDamage := cand.Amount * 2
+				if backlashDamage == 0 {
+					backlashDamage = 680
+				}
+				s.executeSpellDamage(ctx, s.playerGUID, 64085, backlashDamage)
 			}
 		} else {
 			// Dispel resisted / failed

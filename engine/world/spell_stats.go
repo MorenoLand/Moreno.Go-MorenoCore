@@ -141,3 +141,56 @@ func (s *session) rollSpellCrit(targetGUID uint64, schoolMask uint8) bool {
 	chance := s.calculateSpellCritChance(targetGUID, schoolMask)
 	return rand.Float64() < chance
 }
+
+// getSpellCritMultiplier calculates the critical strike damage/healing multiplier for a spell,
+// factoring in the base 150% multiplier, talents/auras modifying critical bonus (AuraType 182),
+// and metagem modifiers (+3% crit damage).
+// Mirrors TrinityCore Unit::SpellCriticalDamageBonus (Unit.cpp:1650-1700).
+func (s *session) getSpellCritMultiplier(spell wotlk.Spell) float64 {
+	baseBonusPct := 50.0 // 1.5x base multiplier (1.0 + 50/100)
+	extraBonusPct := 0.0
+	metaBonusPct := 0.0
+
+	if s == nil || s.player == nil {
+		return 1.5
+	}
+
+	s.castMu.Lock()
+	for _, aura := range s.activeAuras {
+		if aura == nil || aura.Stopped {
+			continue
+		}
+		// SPELL_AURA_MOD_CRIT_DAMAGE_BONUS = 182
+		if aura.AuraType == 182 {
+			if aura.SchoolMask == 0 || (spell.SchoolMask != 0 && aura.SchoolMask&spell.SchoolMask != 0) {
+				extraBonusPct += float64(aura.Amount)
+			}
+		}
+		// Chaotic Skyflare Diamond / Relentless Earthsiege Diamond (3% increased critical damage)
+		if aura.SpellID == 26297 || aura.SpellID == 44795 || aura.SpellID == 55341 || aura.SpellID == 28557 {
+			metaBonusPct += 3.0
+		}
+	}
+	s.castMu.Unlock()
+
+	// Check learned talent spells:
+	// Ruin (Warlock 17959): 100% extra bonus for Destruction (Fire 4 / Shadow 32) spells
+	// Elemental Fury (Shaman 16089): 100% extra bonus for Fire 4 / Nature 8 / Frost 16 spells
+	// Ice Shards (Mage 15058): up to 100% extra bonus for Frost 16 spells
+	// Spell Power (Mage 35581): 25%/50% extra bonus
+	if s.hasActiveSpell(17959) && (spell.SchoolMask&4 != 0 || spell.SchoolMask&32 != 0) { // Ruin
+		extraBonusPct += 50.0
+	} else if s.hasActiveSpell(16089) && (spell.SchoolMask&4 != 0 || spell.SchoolMask&8 != 0 || spell.SchoolMask&16 != 0) { // Elemental Fury
+		extraBonusPct += 50.0
+	} else if s.hasActiveSpell(15058) && (spell.SchoolMask&16 != 0) { // Ice Shards Rank 3
+		extraBonusPct += 50.0
+	} else if s.hasActiveSpell(35581) { // Spell Power Rank 2
+		extraBonusPct += 25.0
+	}
+
+	multiplier := 1.0 + (baseBonusPct+extraBonusPct)/100.0
+	if metaBonusPct > 0 {
+		multiplier *= (1.0 + metaBonusPct/100.0)
+	}
+	return multiplier
+}
