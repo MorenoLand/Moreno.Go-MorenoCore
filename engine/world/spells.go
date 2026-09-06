@@ -1020,6 +1020,10 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ? WHERE guid = ?", targetSess.player.Health, targetSess.playerGUID)
 	}
+
+	if s.server != nil && effectiveHeal > 0 {
+		s.server.distributeHealingThreat(ctx, s.playerGUID, targetGUID, effectiveHeal)
+	}
 }
 
 func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damage, overkill uint32, schoolMask uint8, extra ...uint32) []byte {

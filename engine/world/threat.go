@@ -293,3 +293,74 @@ func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spel
 	motion.InCombat = true
 	motion.Moving = true
 }
+
+// distributeHealingThreat calculates and splits healing threat among all creatures
+// currently in combat with the healer or the heal target.
+// Formula mirrors TrinityCore Unit::SendHealSpellLog and Unit::DoAttack (Unit.cpp:6550-6580):
+// Base threat = effectiveHeal * 0.5 * healerThreatMultiplier.
+// Threat is divided equally by the number of engaged creatures.
+func (s *Server) distributeHealingThreat(ctx context.Context, healerGUID, targetGUID uint64, effectiveHeal uint32) {
+	if s == nil || healerGUID == 0 || effectiveHeal == 0 {
+		return
+	}
+
+	healerSess := s.findSessionByGUID(healerGUID)
+	if healerSess == nil || healerSess.player == nil {
+		return
+	}
+
+	mult := healerSess.getThreatMultiplier(2) // Holy/Healing school mask = 2
+	totalThreat := float32(effectiveHeal) * 0.5 * mult
+	if totalThreat <= 0 {
+		return
+	}
+
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if s.creatureMotion == nil {
+		return
+	}
+
+	var engaged []*creatureMotion
+	for _, m := range s.creatureMotion {
+		if m == nil || m.Health == 0 || !m.InCombat || m.Map != healerSess.player.Map {
+			continue
+		}
+		isEngaged := false
+		if m.TargetGUID == healerGUID || m.TargetGUID == targetGUID {
+			isEngaged = true
+		} else if m.ThreatMgr != nil {
+			if m.ThreatMgr.GetThreat(healerGUID) > 0 || (targetGUID != 0 && m.ThreatMgr.GetThreat(targetGUID) > 0) {
+				isEngaged = true
+			}
+		}
+		if isEngaged {
+			engaged = append(engaged, m)
+		}
+	}
+
+	if len(engaged) == 0 {
+		return
+	}
+
+	threatPerCreature := totalThreat / float32(len(engaged))
+	for _, m := range engaged {
+		if m.ThreatMgr == nil {
+			m.ThreatMgr = NewThreatManager(m.GUID)
+		}
+		dist := distance3D(healerSess.player.X, healerSess.player.Y, healerSess.player.Z, m.X, m.Y, m.Z)
+		inMelee := dist <= meleeAttackRange
+		switched, newVictim := m.ThreatMgr.AddThreat(healerGUID, threatPerCreature, inMelee)
+		if switched && newVictim != m.TargetGUID {
+			m.TargetGUID = newVictim
+			entries := m.ThreatMgr.SortedEntries()
+			s.broadcastHighestThreatUpdate(m.Map, m.GUID, newVictim, entries)
+		}
+		m.Moving = true
+	}
+
+	if healerSess.player.UnitFlags&unitFlagInCombat == 0 {
+		healerSess.player.UnitFlags |= unitFlagInCombat
+		healerSess.sendPlayerUpdate()
+	}
+}
