@@ -54,6 +54,7 @@ type combatTarget struct {
 	X           float32
 	Y           float32
 	Z           float32
+	Orientation float32
 	Health      uint32
 	MaxHealth   uint32
 	Armor       uint32
@@ -100,6 +101,7 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 				X:           playerSess.player.X,
 				Y:           playerSess.player.Y,
 				Z:           playerSess.player.Z,
+				Orientation: playerSess.player.Orientation,
 				Health:      playerSess.player.Health,
 				MaxHealth:   playerSess.player.MaxHealth,
 				Armor:       playerSess.player.Armor,
@@ -133,6 +135,7 @@ func (s *session) getCombatTarget(ctx context.Context, guid uint64) (combatTarge
 				X:           motion.X,
 				Y:           motion.Y,
 				Z:           motion.Z,
+				Orientation: motion.Orientation,
 				Health:      motion.Health,
 				MaxHealth:   motion.MaxHealth,
 				Armor:       motion.Armor,
@@ -280,6 +283,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	isDualWielding := s.haveOffhandWeapon()
 	canBlock := false
 	canParry := target.Level >= 10 || isPlayerVictim
+	canDodge := true
 	var critReductionBP int32
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
@@ -290,8 +294,20 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		}
 	}
 
+	// Positional defense checks (TrinityCore Unit::RollMeleeOutcomeAgainst):
+	// A defender can only parry or block attacks from within their front 180° arc (M_PI).
+	// Player victims cannot dodge attacks from behind. (NPCs can dodge from behind).
+	attackerInFront := hasInArc(target.Orientation, target.X, target.Y, s.player.X, s.player.Y, math.Pi)
+	if !attackerInFront {
+		canBlock = false
+		canParry = false
+		if isPlayerVictim {
+			canDodge = false
+		}
+	}
+
 	if s.player.Level > 0 {
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, critReductionBP)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, canDodge, critReductionBP)
 	}
 	if attType == protocol.OffAttack {
 		hitInfo |= protocol.HitInfoOffHand
@@ -526,6 +542,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// Outcome: ranged attacks can be dodged or blocked, but cannot be parried (TC rollMeleeOutcome)
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
 	canBlock := false
+	canDodge := true
 	var critReductionBP int32
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
@@ -535,7 +552,14 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			critReductionBP = 500 - critChanceBP
 		}
 	}
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, critReductionBP)
+	attackerInFront := hasInArc(target.Orientation, target.X, target.Y, s.player.X, s.player.Y, math.Pi)
+	if !attackerInFront {
+		canBlock = false
+		if isPlayerVictim {
+			canDodge = false
+		}
+	}
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, canDodge, critReductionBP)
 
 	minDmg := s.player.MinRangedDamage
 	maxDmg := s.player.MaxRangedDamage
@@ -957,6 +981,14 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	target.GUID = creatureWorldGUID(uint32(low), uint32(entry))
 	target.Map = uint32(mapID)
 
+	var ori sql.NullFloat64
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT c.orientation FROM creature AS c WHERE c.guid = ?", lowGUID).Scan(&ori)
+		if ori.Valid {
+			target.Orientation = float32(ori.Float64)
+		}
+	}
+
 	st := s.server.loadCreatureStats(ctx, uint32(entry))
 	target.UnitFlags = st.UnitFlags
 	target.FlagsExtra = st.FlagsExtra
@@ -978,7 +1010,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 		s.server.creatureMotion = make(map[uint64]*creatureMotion)
 	}
 	if motion := s.server.creatureMotion[target.GUID]; motion != nil {
-		target.X, target.Y, target.Z = motion.X, motion.Y, motion.Z
+		target.X, target.Y, target.Z, target.Orientation = motion.X, motion.Y, motion.Z, motion.Orientation
 		target.UnitFlags, target.FlagsExtra = motion.UnitFlags, motion.FlagsExtra
 		if motion.Health > 0 {
 			target.Health = motion.Health
@@ -1043,7 +1075,7 @@ func distance3D(x1, y1, z1, x2, y2, z2 float32) float64 {
 // rollMeleeOutcome implements TrinityCore's single-roll melee attack table:
 // MISS > DODGE > PARRY > GLANCING > BLOCK > CRIT > CRUSHING > HIT
 // Reference: Unit::RollMeleeOutcomeAgainst (Unit.cpp:2189-2320).
-func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry bool, critReductionBP ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
+func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry, canDodge bool, critReductionBP ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
 	}
@@ -1087,7 +1119,7 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 
 	// 2. Dodge chance: base 5% (500/10000)
 	dodgeChance := int32(0)
-	if isPlayerVictim || victimLevel >= 10 {
+	if canDodge && (isPlayerVictim || victimLevel >= 10) {
 		dodgeChance = 500
 		if leveldif > 0 {
 			dodgeChance += leveldif * 10
