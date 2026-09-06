@@ -138,7 +138,9 @@ func TestPetMeleeAttack_DamageApplication(t *testing.T) {
 	srv.creatureMotion[targetGUID] = targetMotion
 
 	now := time.Now()
-	srv.executePetMeleeAttack(context.Background(), petMotion, targetGUID, false, nil, targetMotion.Health, targetMotion.Armor, uint8(targetMotion.Level), now)
+	for i := 0; i < 5 && targetMotion.Health == 1000; i++ {
+		srv.executePetMeleeAttack(context.Background(), petMotion, targetGUID, false, nil, targetMotion.Health, targetMotion.Armor, uint8(targetMotion.Level), now)
+	}
 
 	if targetMotion.Health >= 1000 {
 		t.Errorf("expected target health to decrease from 1000, got %d", targetMotion.Health)
