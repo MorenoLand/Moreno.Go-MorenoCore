@@ -282,6 +282,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bo
 	}
 	if s.server != nil {
 		s.server.handleWSGPlayerLeave(s)
+		s.server.handleEOTSPlayerLeave(s)
 	}
 	for slot := 0; slot < len(s.bgQueues); slot++ {
 		if s.bgQueues[slot].Active {
@@ -345,7 +346,8 @@ func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload
 
 		var flagCarriers []*session
 		if s.server != nil {
-			flagCarriers = s.server.getWSGFlagCarriers(s.player.Map)
+			flagCarriers = append(flagCarriers, s.server.getWSGFlagCarriers(s.player.Map)...)
+			flagCarriers = append(flagCarriers, s.server.getEOTSFlagCarriers(s.player.Map)...)
 		}
 
 		buf := protocol.NewBuffer(8 + len(teammates)*16 + len(flagCarriers)*16)
