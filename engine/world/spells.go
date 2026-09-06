@@ -588,6 +588,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if isTauntSpell(spellID) {
 			s.handleEffectTaunt(effCtx, targetGUID, spellID)
 		}
+		if isTotemSpell(spellID) {
+			s.summonTotem(effCtx, spellID)
+		} else if spellID == 36936 { // Totemic Recall
+			s.destroyAllTotems()
+		}
 		if !interruptHandled && isInterruptSpell(spellID) {
 			s.handleEffectInterruptCast(effCtx, targetGUID, spell, wotlk.SpellEffect{})
 		}
@@ -2309,15 +2314,7 @@ func (s *session) handleTotemDestroyed(ctx context.Context, payload []byte) bool
 	if slotID >= 4 {
 		return true
 	}
-	s.player.TotemSlots[slotID] = 0
-
-	// Broadcast SMSG_TOTEM_CREATED with duration 0 and empty GUID to clear client totem frame
-	resp := protocol.NewBuffer(17)
-	resp.WriteU8(slotID)
-	resp.WriteU64(0)
-	resp.WriteU32(0)
-	resp.WriteU32(0)
-	_ = s.write(uint16(protocol.OpcodeSMSG_TOTEM_CREATED), resp.Bytes(), true)
+	s.destroyTotem(slotID)
 	s.debug("totem destroyed", "account", s.accountName, "slot", slotID)
 	return true
 }
