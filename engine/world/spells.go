@@ -329,10 +329,30 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				targetLevel = tgt.Level
 			}
 			isPlayerVictim := targetSess != nil
-			missInfo := magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim)
+			bonusHit := 0.0
+			if s.player != nil {
+				bonusHit = s.getSpellHitPct()
+			}
+			missInfo := magicSpellHitResult(s.player.Level, targetLevel, isPlayerVictim, bonusHit)
 			if missInfo != protocol.SpellMissNone {
 				hitTargets = nil
 				missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: missInfo}}
+			} else if isBinarySpell(spell) {
+				resIndex := schoolMaskToResistanceIndex(uint8(spell.SchoolMask))
+				victimRes := uint32(0)
+				if targetSess != nil && targetSess.player != nil && resIndex < 7 {
+					victimRes = targetSess.player.Resistances[resIndex]
+				} else if tgt, ok := s.getCombatTarget(ctx, targetGUID); ok && resIndex < 7 {
+					victimRes = tgt.Resistances[resIndex]
+				}
+				pen := uint32(0)
+				if s.player != nil {
+					pen = s.player.SpellPenetration
+				}
+				if checkBinarySpellResist(victimRes, pen, s.player.Level, targetLevel) {
+					hitTargets = nil
+					missStatus = []protocol.SpellMissStatus{{TargetGUID: targetGUID, Reason: protocol.SpellMissResist}}
+				}
 			}
 		}
 	} else if targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
@@ -666,7 +686,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 	if schoolMask > 1 && s.player != nil && s.player.Level > 0 {
 		resIdx := schoolMaskToResistanceIndex(schoolMask)
 		victimRes := target.Resistances[resIdx]
-		resisted, damage = calcMagicSpellResistance(damage, schoolMask, victimRes, s.player.Level, target.Level)
+		resisted, damage = calcMagicSpellResistance(damage, schoolMask, victimRes, s.player.Level, target.Level, s.player.SpellPenetration)
 	}
 
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
@@ -1059,28 +1079,92 @@ func isHarmfulSpell(spell wotlk.Spell) bool {
 	return false
 }
 
-func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool) uint8 {
+func magicSpellHitResult(casterLevel, victimLevel uint8, isPlayerVictim bool, bonusHit ...float64) uint8 {
 	lchance := int32(11)
 	if isPlayerVictim {
 		lchance = 7
 	}
 	leveldif := int32(victimLevel) - int32(casterLevel)
-	var modHitChance int32
+	var modHitChance float64
 	if leveldif < 3 {
-		modHitChance = 96 - leveldif
+		modHitChance = float64(96 - leveldif)
 	} else {
-		modHitChance = 94 - (leveldif-2)*lchance
+		modHitChance = float64(94 - (leveldif-2)*lchance)
 	}
-	if modHitChance < 1 {
-		modHitChance = 1
-	} else if modHitChance > 100 {
-		modHitChance = 100
+	if len(bonusHit) > 0 {
+		modHitChance += bonusHit[0]
 	}
-	roll := rand.IntN(100)
-	if roll >= int(modHitChance) {
+	if modHitChance < 1.0 {
+		modHitChance = 1.0
+	} else if modHitChance > 100.0 {
+		modHitChance = 100.0
+	}
+	roll := rand.Float64() * 100.0
+	if roll >= modHitChance {
 		return protocol.SpellMissMiss
 	}
 	return protocol.SpellMissNone
+}
+
+// isBinarySpell checks whether a spell is binary (i.e. does not deal direct damage,
+// but applies harmful magic debuffs or crowd control that can be fully resisted).
+// Mirrors TrinityCore SpellInfo::IsBinary (SpellInfo.cpp:3200).
+func isBinarySpell(spell wotlk.Spell) bool {
+	// Physical (1) and Holy (2) spells are never resisted by magic resistance
+	if spell.SchoolMask == 0 || spell.SchoolMask&1 != 0 || spell.SchoolMask&2 != 0 {
+		return false
+	}
+	if !isHarmfulSpell(spell) {
+		return false
+	}
+	// Direct damage spells suffer partial resistance rather than binary full resist
+	for _, eff := range spell.Effects {
+		if eff.Effect == 2 || eff.Effect == 17 || eff.Effect == 31 || eff.Effect == 58 || eff.Effect == 87 {
+			return false
+		}
+	}
+	return true
+}
+
+// checkBinarySpellResist calculates whether a binary spell is fully resisted by the victim.
+// Effective resistance is reduced by caster spell penetration (level difference resistance cannot be penetrated).
+// Mirrors TrinityCore Unit::CalculateAverageResistReduction & Unit::MagicSpellHitResult (Unit.cpp:1721-1775).
+func checkBinarySpellResist(victimResistance, casterPenetration uint32, casterLevel, victimLevel uint8) bool {
+	effectiveRes := victimResistance
+	if casterPenetration >= effectiveRes {
+		effectiveRes = 0
+	} else {
+		effectiveRes -= casterPenetration
+	}
+
+	res := float64(effectiveRes)
+	// Level-based resistance: 5 resistance per level difference if victim is higher level (cannot be penetrated)
+	if victimLevel > casterLevel {
+		res += float64(victimLevel-casterLevel) * 5.0
+	}
+	if res <= 0 {
+		return false
+	}
+
+	const bossLevel = 83
+	const bossResistanceConstant = 510.0
+	resConstant := float64(victimLevel) * 5.0
+	if victimLevel >= bossLevel {
+		resConstant = bossResistanceConstant
+	}
+	if resConstant < 5.0 {
+		resConstant = 5.0
+	}
+
+	averageResist := res / (res + resConstant)
+	if averageResist <= 0.0 {
+		return false
+	}
+	if averageResist > 1.0 {
+		averageResist = 1.0
+	}
+
+	return rand.Float64() < averageResist
 }
 
 // schoolMaskToResistanceIndex converts SpellSchoolMask to resistance index:
@@ -1106,9 +1190,9 @@ func schoolMaskToResistanceIndex(schoolMask uint8) uint8 {
 	}
 }
 
-// calcMagicSpellResistance computes magic damage resisted based on target resistance and caster/victim levels,
+// calcMagicSpellResistance computes magic damage resisted based on target resistance, caster penetration, and levels,
 // matching TrinityCore Unit::CalculateAverageResistReduction and Unit::CalcSpellResistance (Unit.cpp:1721-1775).
-func calcMagicSpellResistance(damage uint32, schoolMask uint8, victimResistance uint32, casterLevel, victimLevel uint8) (resisted uint32, remainingDamage uint32) {
+func calcMagicSpellResistance(damage uint32, schoolMask uint8, victimResistance uint32, casterLevel, victimLevel uint8, casterPenetration ...uint32) (resisted uint32, remainingDamage uint32) {
 	if damage == 0 || schoolMask == 0 || schoolMask&1 != 0 {
 		return 0, damage
 	}
@@ -1117,8 +1201,20 @@ func calcMagicSpellResistance(damage uint32, schoolMask uint8, victimResistance 
 		return 0, damage
 	}
 
-	res := float64(victimResistance)
-	// Level-based resistance: 5 resistance per level difference if victim is higher level
+	pen := uint32(0)
+	if len(casterPenetration) > 0 {
+		pen = casterPenetration[0]
+	}
+
+	effectiveRes := victimResistance
+	if pen >= effectiveRes {
+		effectiveRes = 0
+	} else {
+		effectiveRes -= pen
+	}
+
+	res := float64(effectiveRes)
+	// Level-based resistance: 5 resistance per level difference if victim is higher level (cannot be penetrated)
 	if victimLevel > casterLevel {
 		res += float64(victimLevel-casterLevel) * 5.0
 	}
@@ -1589,7 +1685,13 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		} else if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
 			resIdx := schoolMaskToResistanceIndex(uint8(aura.SchoolMask))
 			vRes := ts.player.Resistances[resIdx]
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), vRes, aura.CasterLevel, ts.player.Level)
+			pen := uint32(0)
+			if ts.server != nil {
+				if cs := ts.server.findSessionByGUID(aura.CasterGUID); cs != nil && cs.player != nil {
+					pen = cs.player.SpellPenetration
+				}
+			}
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), vRes, aura.CasterLevel, ts.player.Level, pen)
 		}
 		if aura.CasterGUID != aura.TargetGUID {
 			ts.applyResilienceToDamage(true, &dmg, false, CombatRatingCritTakenSpell)
@@ -1735,7 +1837,13 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 		} else if aura.SchoolMask > 1 && aura.CasterLevel > 0 {
 			resIdx := schoolMaskToResistanceIndex(uint8(aura.SchoolMask))
 			vRes := target.Resistances[resIdx]
-			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), vRes, aura.CasterLevel, target.Level)
+			pen := uint32(0)
+			if s.server != nil {
+				if cs := s.server.findSessionByGUID(aura.CasterGUID); cs != nil && cs.player != nil {
+					pen = cs.player.SpellPenetration
+				}
+			}
+			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), vRes, aura.CasterLevel, target.Level, pen)
 		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
