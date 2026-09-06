@@ -230,6 +230,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// Interrupt any existing spell cast (TC: Unit::InterruptNonMeleeSpells)
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
+	s.procCastAuras()
 
 	castTime := uint32(0)
 	s.lastCastTime = time.Now()
@@ -676,6 +677,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 				playerSess.player.Health -= damage
 				playerSess.delayCurrentCast()
 				playerSess.delayCurrentChannel()
+				playerSess.procDamageAuras(true)
 				playerSess.sendPlayerUpdate()
 			}
 			return
@@ -1579,6 +1581,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			ts.clearActiveAuras()
 		} else {
 			ts.player.Health -= dmg
+			ts.procDamageAuras(false)
 			ts.sendPlayerUpdate()
 		}
 

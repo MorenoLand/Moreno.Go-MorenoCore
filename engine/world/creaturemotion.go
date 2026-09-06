@@ -525,6 +525,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
 					target.Sess.delayCurrentCast()
 					target.Sess.delayCurrentChannel()
+					target.Sess.procDamageAuras(true)
 				}
 				logPkt := buildSpellNonMeleeDamageLog(target.GUID, motion.GUID, spellID, damage, overkill, schoolMask)
 				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
@@ -680,6 +681,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 					// Reference Unit::DealDamage -> Spell::Delayed / DelayedChannel
 					target.Sess.delayCurrentCast()
 					target.Sess.delayCurrentChannel()
+					target.Sess.procDamageAuras(true)
 				}
 				target.Sess.lastCombatTime = now
 				if target.Sess.player != nil && target.Sess.player.UnitFlags&unitFlagInCombat == 0 {
