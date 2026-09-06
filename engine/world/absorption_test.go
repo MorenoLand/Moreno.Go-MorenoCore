@@ -1,4 +1,4 @@
-﻿package world
+package world
 
 import (
 	"testing"
@@ -157,5 +157,139 @@ func TestCreatureAbsorptionShield(t *testing.T) {
 	}
 	if srv.activeCreatureAuras[creatureGUID][shieldSpellID].Amount != 600 {
 		t.Errorf("expected 600 remaining shield pool on creature, got %d", srv.activeCreatureAuras[creatureGUID][shieldSpellID].Amount)
+	}
+}
+
+func TestAbsorptionShield_SpecificSchoolPriorityOverGeneric(t *testing.T) {
+	sess := &session{
+		player: &playerState{
+			GUID:   1,
+			Health: 1000,
+		},
+		activeAuras: make(map[uint32]*activeAura),
+	}
+
+	// Specific Fire Ward (SchoolMask = 4, 500 absorb)
+	fireWardID := uint32(543)
+	sess.activeAuras[fireWardID] = &activeAura{
+		SpellID:    fireWardID,
+		AuraType:   SpellAuraSchoolAbsorb,
+		Amount:     500,
+		SchoolMask: 4, // Fire only
+	}
+
+	// Generic Power Word: Shield (SchoolMask = 0, 500 absorb)
+	pwsID := uint32(17)
+	sess.activeAuras[pwsID] = &activeAura{
+		SpellID:    pwsID,
+		AuraType:   SpellAuraSchoolAbsorb,
+		Amount:     500,
+		SchoolMask: 0, // All schools
+	}
+
+	// Fire damage 300 (schoolMask = 4)
+	absorbed, remaining := sess.applyAbsorptionShields(300, 4)
+	if absorbed != 300 || remaining != 0 {
+		t.Fatalf("expected 300 absorbed 0 remaining, got %d, %d", absorbed, remaining)
+	}
+
+	// Fire Ward MUST absorb first (reduced to 200)
+	if sess.activeAuras[fireWardID].Amount != 200 {
+		t.Fatalf("expected Fire Ward reduced to 200, got %d", sess.activeAuras[fireWardID].Amount)
+	}
+	// Power Word: Shield MUST remain untouched at 500
+	if sess.activeAuras[pwsID].Amount != 500 {
+		t.Fatalf("expected PW:S to remain at 500, got %d", sess.activeAuras[pwsID].Amount)
+	}
+}
+
+func TestAbsorptionShield_GenericPriorityOverManaShield(t *testing.T) {
+	sess := &session{
+		player: &playerState{
+			GUID:   1,
+			Health: 1000,
+			Powers: [7]uint32{1000}, // 1000 mana
+		},
+		activeAuras: make(map[uint32]*activeAura),
+	}
+
+	// Generic Power Word: Shield (500 absorb)
+	pwsID := uint32(17)
+	sess.activeAuras[pwsID] = &activeAura{
+		SpellID:    pwsID,
+		AuraType:   SpellAuraSchoolAbsorb,
+		Amount:     500,
+		SchoolMask: 0,
+	}
+
+	// Mana Shield (500 absorb)
+	manaShieldID := uint32(1463)
+	sess.activeAuras[manaShieldID] = &activeAura{
+		SpellID:    manaShieldID,
+		AuraType:   SpellAuraManaShield,
+		Amount:     500,
+		SchoolMask: 1,
+	}
+
+	// Physical damage 300 (schoolMask = 1)
+	absorbed, remaining := sess.applyAbsorptionShields(300, 1)
+	if absorbed != 300 || remaining != 0 {
+		t.Fatalf("expected 300 absorbed 0 remaining, got %d, %d", absorbed, remaining)
+	}
+
+	// Power Word: Shield MUST absorb first (reduced to 200)
+	if sess.activeAuras[pwsID].Amount != 200 {
+		t.Fatalf("expected PW:S reduced to 200, got %d", sess.activeAuras[pwsID].Amount)
+	}
+	// Mana Shield MUST remain untouched at 500
+	if sess.activeAuras[manaShieldID].Amount != 500 {
+		t.Fatalf("expected Mana Shield untouched at 500, got %d", sess.activeAuras[manaShieldID].Amount)
+	}
+	// Player mana MUST remain untouched at 1000
+	if sess.player.Powers[0] != 1000 {
+		t.Fatalf("expected player mana untouched at 1000, got %d", sess.player.Powers[0])
+	}
+}
+
+func TestAbsorptionShield_AMSPriorityOverGeneric(t *testing.T) {
+	sess := &session{
+		player: &playerState{
+			GUID:   1,
+			Health: 1000,
+		},
+		activeAuras: make(map[uint32]*activeAura),
+	}
+
+	// Anti-Magic Shell (1000 absorb)
+	amsID := uint32(48707)
+	sess.activeAuras[amsID] = &activeAura{
+		SpellID:    amsID,
+		AuraType:   SpellAuraMagicAbsorb,
+		Amount:     1000,
+		SchoolMask: 0,
+	}
+
+	// Power Word: Shield (500 absorb)
+	pwsID := uint32(17)
+	sess.activeAuras[pwsID] = &activeAura{
+		SpellID:    pwsID,
+		AuraType:   SpellAuraSchoolAbsorb,
+		Amount:     500,
+		SchoolMask: 0,
+	}
+
+	// Shadow damage 400 (schoolMask = 32)
+	absorbed, remaining := sess.applyAbsorptionShields(400, 32)
+	if absorbed != 400 || remaining != 0 {
+		t.Fatalf("expected 400 absorbed 0 remaining, got %d, %d", absorbed, remaining)
+	}
+
+	// AMS MUST absorb first (reduced to 600)
+	if sess.activeAuras[amsID].Amount != 600 {
+		t.Fatalf("expected AMS reduced to 600, got %d", sess.activeAuras[amsID].Amount)
+	}
+	// PW:S MUST remain untouched at 500
+	if sess.activeAuras[pwsID].Amount != 500 {
+		t.Fatalf("expected PW:S untouched at 500, got %d", sess.activeAuras[pwsID].Amount)
 	}
 }

@@ -1,7 +1,8 @@
-﻿package world
+package world
 
 import (
 	"math"
+	"sort"
 )
 
 // Absorption aura types from TrinityCore SharedDefines.h:600-750
@@ -11,8 +12,33 @@ const (
 	SpellAuraMagicAbsorb  uint32 = 256 // SPELL_AURA_MAGIC_ABSORB (Anti-Magic Shell)
 )
 
+// getAbsorptionPriority returns the priority order for damage absorption shields.
+// Mirrors TrinityCore Unit::CalcAbsorbResist (Unit.cpp:2000-2080):
+// 1. Specific school shields (Fire Ward, Frost Ward, Shadow Ward)
+// 2. Anti-Magic Shell / Magic Absorb (Aura 256)
+// 3. Generic school shields (Power Word: Shield, Ice Barrier, Sacred Shield)
+// 4. Mana Shield (Aura 72) - absorbs last to protect player mana
+func getAbsorptionPriority(aura *activeAura) int {
+	if aura == nil {
+		return 99
+	}
+	switch aura.AuraType {
+	case SpellAuraSchoolAbsorb:
+		if aura.SchoolMask != 0 && aura.SchoolMask != 127 {
+			return 1
+		}
+		return 3
+	case SpellAuraMagicAbsorb:
+		return 2
+	case SpellAuraManaShield:
+		return 4
+	default:
+		return 5
+	}
+}
+
 // applyAbsorptionShields applies active absorption shields (Power Word: Shield, Ice Barrier, etc.)
-// to mitigate incoming damage of the given school mask.
+// to mitigate incoming damage of the given school mask according to TrinityCore priority order.
 // Returns absorbed damage and remaining unabsorbed damage.
 // Reference: TrinityCore Unit::CalcAbsorbResist (Unit.cpp:2000-2080).
 func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absorbed uint32, remainingDamage uint32) {
@@ -25,9 +51,24 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 
 	s.castMu.Lock()
 	if s.activeAuras != nil {
-		for spellID, aura := range s.activeAuras {
-			if aura == nil || aura.Stopped || aura.Amount == 0 {
-				continue
+		var shieldList []*activeAura
+		for _, aura := range s.activeAuras {
+			if aura != nil && !aura.Stopped && aura.Amount > 0 {
+				shieldList = append(shieldList, aura)
+			}
+		}
+		sort.SliceStable(shieldList, func(i, j int) bool {
+			pI := getAbsorptionPriority(shieldList[i])
+			pJ := getAbsorptionPriority(shieldList[j])
+			if pI != pJ {
+				return pI < pJ
+			}
+			return shieldList[i].SpellID < shieldList[j].SpellID
+		})
+
+		for _, aura := range shieldList {
+			if remainingDamage == 0 {
+				break
 			}
 
 			// 1. School Absorb (SPELL_AURA_SCHOOL_ABSORB = 69)
@@ -42,16 +83,31 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 					remainingDamage -= absorbThis
 					absorbed += absorbThis
 					if aura.Amount == 0 {
-						exhaustedSpells = append(exhaustedSpells, spellID)
-					}
-					if remainingDamage == 0 {
-						break
+						exhaustedSpells = append(exhaustedSpells, aura.SpellID)
 					}
 				}
 				continue
 			}
 
-			// 2. Mana Shield (SPELL_AURA_MANA_SHIELD = 72)
+			// 2. Magic Absorb (SPELL_AURA_MAGIC_ABSORB = 256)
+			// Absorbs non-physical magical damage (Anti-Magic Shell)
+			if aura.AuraType == SpellAuraMagicAbsorb && schoolMask&1 == 0 {
+				if aura.SchoolMask == 0 || (aura.SchoolMask&uint32(schoolMask)) != 0 {
+					absorbThis := aura.Amount
+					if absorbThis > remainingDamage {
+						absorbThis = remainingDamage
+					}
+					aura.Amount -= absorbThis
+					remainingDamage -= absorbThis
+					absorbed += absorbThis
+					if aura.Amount == 0 {
+						exhaustedSpells = append(exhaustedSpells, aura.SpellID)
+					}
+				}
+				continue
+			}
+
+			// 3. Mana Shield (SPELL_AURA_MANA_SHIELD = 72)
 			// In WotLK, Mana Shield absorbs all damage and drains 1.5 mana per point absorbed
 			if aura.AuraType == SpellAuraManaShield && s.player.Powers[0] > 0 {
 				currMana := s.player.Powers[0]
@@ -74,31 +130,7 @@ func (s *session) applyAbsorptionShields(damage uint32, schoolMask uint8) (absor
 					remainingDamage -= absorbPossible
 					absorbed += absorbPossible
 					if aura.Amount == 0 {
-						exhaustedSpells = append(exhaustedSpells, spellID)
-					}
-				}
-				if remainingDamage == 0 {
-					break
-				}
-				continue
-			}
-
-			// 3. Magic Absorb (SPELL_AURA_MAGIC_ABSORB = 256)
-			// Absorbs non-physical magical damage (Anti-Magic Shell)
-			if aura.AuraType == SpellAuraMagicAbsorb && schoolMask&1 == 0 {
-				if aura.SchoolMask == 0 || (aura.SchoolMask&uint32(schoolMask)) != 0 {
-					absorbThis := aura.Amount
-					if absorbThis > remainingDamage {
-						absorbThis = remainingDamage
-					}
-					aura.Amount -= absorbThis
-					remainingDamage -= absorbThis
-					absorbed += absorbThis
-					if aura.Amount == 0 {
-						exhaustedSpells = append(exhaustedSpells, spellID)
-					}
-					if remainingDamage == 0 {
-						break
+						exhaustedSpells = append(exhaustedSpells, aura.SpellID)
 					}
 				}
 				continue
@@ -127,9 +159,24 @@ func (s *Server) applyCreatureAbsorptionShields(creatureGUID uint64, damage uint
 	s.auraMu.Lock()
 	if s.activeCreatureAuras != nil {
 		if auras, ok := s.activeCreatureAuras[creatureGUID]; ok && auras != nil {
-			for spellID, aura := range auras {
-				if aura == nil || aura.Stopped || aura.Amount == 0 {
-					continue
+			var shieldList []*activeAura
+			for _, aura := range auras {
+				if aura != nil && !aura.Stopped && aura.Amount > 0 {
+					shieldList = append(shieldList, aura)
+				}
+			}
+			sort.SliceStable(shieldList, func(i, j int) bool {
+				pI := getAbsorptionPriority(shieldList[i])
+				pJ := getAbsorptionPriority(shieldList[j])
+				if pI != pJ {
+					return pI < pJ
+				}
+				return shieldList[i].SpellID < shieldList[j].SpellID
+			})
+
+			for _, aura := range shieldList {
+				if remainingDamage == 0 {
+					break
 				}
 				if aura.AuraType == SpellAuraSchoolAbsorb || (aura.AuraType == SpellAuraMagicAbsorb && schoolMask&1 == 0) {
 					if aura.SchoolMask == 0 || (aura.SchoolMask&uint32(schoolMask)) != 0 {
@@ -141,10 +188,7 @@ func (s *Server) applyCreatureAbsorptionShields(creatureGUID uint64, damage uint
 						remainingDamage -= absorbThis
 						absorbed += absorbThis
 						if aura.Amount == 0 {
-							exhaustedSpells = append(exhaustedSpells, spellID)
-						}
-						if remainingDamage == 0 {
-							break
+							exhaustedSpells = append(exhaustedSpells, aura.SpellID)
 						}
 					}
 				}
