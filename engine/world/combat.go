@@ -704,6 +704,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					vicSess.player.Health = 0
 					vicSess.sendPlayerUpdate()
 					vicSess.killPlayer(ctx)
+					s.server.handleWGPlayerDeath(vicSess, s)
 					s.autoRepeatSpell = 0
 					s.autoRepeatTarget = 0
 					buf := protocol.NewBuffer(9)

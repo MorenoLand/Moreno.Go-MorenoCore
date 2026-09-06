@@ -1806,6 +1806,16 @@ func buildInitWorldStates(state playerState) []byte {
 			[2]int32{2730, 1},    // Blood Elf Tower neutral
 			[2]int32{2733, 1},    // Fel Reaver Ruins neutral
 		)
+	} else if state.Map == 571 && state.Zone == 4197 {
+		worldStates = append(worldStates,
+			[2]int32{3801, 1}, // WS_BATTLEFIELD_WG_ACTIVE (1 = peace)
+			[2]int32{3803, 0}, // WS_BATTLEFIELD_WG_DEFENDER (0 = Alliance)
+			[2]int32{3802, 1}, // WS_BATTLEFIELD_WG_ATTACKER (1 = Horde)
+			[2]int32{3490, 0}, // WS_BATTLEFIELD_WG_VEHICLE_A
+			[2]int32{3491, 8}, // WS_BATTLEFIELD_WG_MAX_VEHICLE_A
+			[2]int32{3680, 0}, // WS_BATTLEFIELD_WG_VEHICLE_H
+			[2]int32{3681, 8}, // WS_BATTLEFIELD_WG_MAX_VEHICLE_H
+		)
 	}
 	packet := protocol.NewBuffer(16 + len(worldStates)*8)
 	packet.WriteI32(int32(state.Map))

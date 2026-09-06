@@ -74,6 +74,8 @@ type Server struct {
 	icState             map[uint32]*icBattlegroundState
 	arenaMu             sync.RWMutex
 	arenaState          map[uint32]*arenaBattlegroundState
+	wgMu                sync.RWMutex
+	wgState             *wgBattlegroundState
 	totemMu             sync.RWMutex
 	activeTotems        map[uint64][4]*activeTotem
 	nextDynamicCreatureGUID uint32

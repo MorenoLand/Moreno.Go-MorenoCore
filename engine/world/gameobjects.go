@@ -344,6 +344,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.server.handleArenaGameObjectUse(ctx, s, guid, entry)
 	}
 
+	// Delegate Wintergrasp objects to WG state machine
+	if s.server != nil && isWGGameObject(entry) {
+		return s.server.handleWGGameObjectUse(ctx, s, guid, entry)
+	}
+
 	if s.server == nil {
 		return true
 	}
