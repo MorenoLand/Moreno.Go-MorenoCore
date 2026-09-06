@@ -706,7 +706,10 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 		_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, 0, schoolMask, 0, 0, hitInfo), true)
 		return
 	}
-	isHit := s.rollSpellHit(target.Level, isPlayerVictim)
+	isHit := true
+	if targetGUID != s.playerGUID {
+		isHit = s.rollSpellHit(target.Level, isPlayerVictim)
+	}
 	hitInfo := uint32(0)
 	resisted := uint32(0)
 	absorbed := uint32(0)
