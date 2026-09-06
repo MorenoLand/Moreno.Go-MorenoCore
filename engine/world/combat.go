@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"time"
@@ -991,6 +992,9 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 
 func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarget, error) {
 	var target combatTarget
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return target, fmt.Errorf("world store DB not initialized")
+	}
 	var low, entry, mapID int64
 	var curHealth sql.NullInt64
 	lowGUID := uint32(guid & 0x00FFFFFF)

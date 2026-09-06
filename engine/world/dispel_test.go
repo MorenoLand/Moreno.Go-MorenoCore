@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"math"
 	"net"
 	"testing"
 	"time"
@@ -696,3 +697,262 @@ func TestDispel_MechanicDispel(t *testing.T) {
 		t.Fatal("expected Fear (5782) to be dispelled by Dispel Mechanic")
 	}
 }
+
+func TestDispel_BacklashUnstableAffliction(t *testing.T) {
+	srv := &Server{
+		sessions: make(map[*session]struct{}),
+	}
+
+	// Dispeller (Paladin / Priest)
+	dispeller := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   1001,
+		player: &playerState{
+			GUID:      1001,
+			Race:      1, // Human
+			Level:     80,
+			Health:    10000,
+			MaxHealth: 10000,
+		},
+		activeAuras: make(map[uint32]*activeAura),
+		auras:       make(map[uint32]struct{}),
+		auraSlots:   make(map[uint32]uint8),
+	}
+
+	// Target ally afflicted by Unstable Affliction (Rank 5, 47843)
+	target := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   1002,
+		player: &playerState{
+			GUID:      1002,
+			Race:      3, // Dwarf (Ally)
+			Level:     80,
+			Health:    5000,
+			MaxHealth: 5000,
+		},
+		activeAuras: make(map[uint32]*activeAura),
+		auras:       make(map[uint32]struct{}),
+		auraSlots:   make(map[uint32]uint8),
+	}
+
+	srv.sessions[dispeller] = struct{}{}
+	srv.sessions[target] = struct{}{}
+
+	// Place Unstable Affliction on target (tick amount = 500)
+	target.auras[47843] = struct{}{}
+	target.auraSlots[47843] = 0
+	target.activeAuras[47843] = &activeAura{
+		SpellID:    47843,
+		DispelType: 1, // Magic
+		Positive:   false,
+		Amount:     500,
+		Slot:       0,
+	}
+
+	// Cleanse / Dispel Magic spell (dispel magic)
+	dispelSpell := wotlk.Spell{
+		ID: 4987, // Cleanse
+		Effects: [3]wotlk.SpellEffect{
+			{
+				Effect:     38, // SPELL_EFFECT_DISPEL
+				MiscValue:  1,  // DISPEL_MAGIC
+				BasePoints: 0,
+			},
+		},
+	}
+
+	dispeller.handleEffectDispel(context.Background(), target.playerGUID, dispelSpell, dispelSpell.Effects[0])
+
+	// 1. Unstable Affliction should be dispelled from target
+	if _, hasUA := target.activeAuras[47843]; hasUA {
+		t.Fatal("expected Unstable Affliction to be dispelled from target")
+	}
+
+	// 2. Dispeller should have taken 500 * 9 = 4500 damage (10000 - 4500 = 5500)
+	expectedHP := uint32(10000 - 4500)
+	if dispeller.player.Health != expectedHP {
+		t.Fatalf("expected dispeller health to be %d, got %d", expectedHP, dispeller.player.Health)
+	}
+
+	// 3. Dispeller should have 5s silence aura applied (spell 31117)
+	silenceAura, hasSilence := dispeller.activeAuras[31117]
+	if !hasSilence || silenceAura == nil {
+		t.Fatal("expected dispeller to have silence aura 31117 applied")
+	}
+	if silenceAura.AuraType != 18 { // SPELL_AURA_MOD_SILENCE
+		t.Fatalf("expected silence aura type 18, got %d", silenceAura.AuraType)
+	}
+	if silenceAura.DurationMs != 5000 {
+		t.Fatalf("expected silence duration 5000ms, got %d", silenceAura.DurationMs)
+	}
+}
+
+func TestDispel_BacklashVampiricTouch(t *testing.T) {
+	srv := &Server{
+		sessions: make(map[*session]struct{}),
+	}
+
+	// Dispeller
+	dispeller := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   1001,
+		player: &playerState{
+			GUID:      1001,
+			Race:      1, // Human
+			Level:     80,
+			Health:    10000,
+			MaxHealth: 10000,
+		},
+		activeAuras: make(map[uint32]*activeAura),
+		auras:       make(map[uint32]struct{}),
+		auraSlots:   make(map[uint32]uint8),
+	}
+
+	// Target ally afflicted by Vampiric Touch (Rank 5, 48160)
+	target := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   1002,
+		player: &playerState{
+			GUID:      1002,
+			Race:      3, // Dwarf (Ally)
+			Level:     80,
+			Health:    5000,
+			MaxHealth: 5000,
+		},
+		activeAuras: make(map[uint32]*activeAura),
+		auras:       make(map[uint32]struct{}),
+		auraSlots:   make(map[uint32]uint8),
+	}
+
+	srv.sessions[dispeller] = struct{}{}
+	srv.sessions[target] = struct{}{}
+
+	// Place Vampiric Touch on target (tick amount = 400)
+	target.auras[48160] = struct{}{}
+	target.auraSlots[48160] = 0
+	target.activeAuras[48160] = &activeAura{
+		SpellID:    48160,
+		DispelType: 1, // Magic
+		Positive:   false,
+		Amount:     400,
+		Slot:       0,
+	}
+
+	dispelSpell := wotlk.Spell{
+		ID: 4987,
+		Effects: [3]wotlk.SpellEffect{
+			{
+				Effect:     38,
+				MiscValue:  1,
+				BasePoints: 0,
+			},
+		},
+	}
+
+	dispeller.handleEffectDispel(context.Background(), target.playerGUID, dispelSpell, dispelSpell.Effects[0])
+
+	// 1. Vampiric Touch should be dispelled
+	if _, hasVT := target.activeAuras[48160]; hasVT {
+		t.Fatal("expected Vampiric Touch to be dispelled from target")
+	}
+
+	// 2. Dispeller should take 400 * 2 = 800 damage (10000 - 800 = 9200)
+	expectedHP := uint32(10000 - 800)
+	if dispeller.player.Health != expectedHP {
+		t.Fatalf("expected dispeller health to be %d, got %d", expectedHP, dispeller.player.Health)
+	}
+}
+
+func TestDispel_SilencePreventsCasting(t *testing.T) {
+	sConn, cConn := net.Pipe()
+	defer sConn.Close()
+	defer cConn.Close()
+
+	srv := &Server{
+		sessions:       make(map[*session]struct{}),
+		creatureMotion: make(map[uint64]*creatureMotion),
+		Data:           wotlk.NewStore("../../data/dbc"),
+	}
+
+	targetGUID := creatureWorldGUID(1, 100)
+	srv.creatureMotion[targetGUID] = &creatureMotion{
+		GUID:        targetGUID,
+		Map:         0,
+		X:           10.0,
+		Y:           0.0,
+		Z:           0.0,
+		Orientation: float32(math.Pi),
+		Health:      10000,
+		MaxHealth:   10000,
+		CombatReach: 1.5,
+	}
+
+	sess := &session{
+		server:       srv,
+		conn:         sConn,
+		playerLoaded: true,
+		playerGUID:   2001,
+		player: &playerState{
+			GUID:        2001,
+			Level:       80,
+			Class:       8, // Mage
+			Map:         0,
+			X:           0.0,
+			Y:           0.0,
+			Z:           0.0,
+			Orientation: 0.0,
+			Powers:      [7]uint32{10000, 10000, 10000, 10000, 10000, 10000, 10000},
+			Spells:      []learnedSpell{{ID: 133, Active: true}}, // Fireball
+		},
+		auras:       make(map[uint32]struct{}),
+		auraSlots:   make(map[uint32]uint8),
+		activeAuras: make(map[uint32]*activeAura),
+	}
+	srv.sessions[sess] = struct{}{}
+
+	// Apply silence aura (AuraType 18)
+	sess.activeAuras[31117] = &activeAura{
+		SpellID:  31117,
+		AuraType: 18, // SPELL_AURA_MOD_SILENCE
+	}
+
+	frames := make(chan testPacket, 20)
+	go func() {
+		for {
+			op, data, err := readServerFrame(cConn, nil)
+			if err != nil {
+				return
+			}
+			frames <- testPacket{op: op, data: data}
+		}
+	}()
+
+	ctx := context.Background()
+
+	// Attempt to cast Fireball (133, magic spell) while silenced -> should fail with SPELL_FAILED_SILENCED (48)
+	castPkt := protocol.NewBuffer(32)
+	castPkt.WriteU8(1)
+	castPkt.WriteU32(133)
+	castPkt.WriteU8(0)
+	protocol.WriteSpellTargetData(castPkt, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID})
+
+	sess.handleCastSpell(ctx, castPkt.Bytes())
+
+	pktFail := readPacketTimeout(t, frames)
+	if pktFail.op != uint16(protocol.OpcodeSMSG_CAST_FAILED) {
+		t.Fatalf("expected SMSG_CAST_FAILED while silenced, got 0x%04X", pktFail.op)
+	}
+	r := protocol.NewReader(pktFail.data)
+	_, _ = r.ReadU8()  // castID
+	_, _ = r.ReadU32() // spellID
+	failReason, _ := r.ReadU8()
+	if failReason != 48 { // SPELL_FAILED_SILENCED = 48
+		t.Fatalf("expected fail reason SPELL_FAILED_SILENCED (48), got %d", failReason)
+	}
+}
+
+

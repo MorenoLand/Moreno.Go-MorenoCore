@@ -109,6 +109,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "school lockout active")
 		return true
 	}
+	if s.hasAuraType(18) && (spell.SchoolMask > 1 || spell.SchoolMask == 0) && spell.PreventionType != spellPreventionTypePacify {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 48), true) // SPELL_FAILED_SILENCED = 48
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "silenced")
+		return true
+	}
 	if s.isGCDActive(spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_NOT_READY = 47
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
@@ -678,7 +683,17 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 	crit := s.rollSpellCrit(target.GUID, schoolMask)
 	hitInfo := uint32(0)
 	if crit {
-		damage = uint32(float64(damage) * 1.5)
+		mult := 1.5
+		if s.server != nil && s.server.Data != nil {
+			if sp, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				mult = s.getSpellCritMultiplier(sp)
+			} else {
+				mult = s.getSpellCritMultiplier(wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)})
+			}
+		} else {
+			mult = s.getSpellCritMultiplier(wotlk.Spell{ID: spellID, SchoolMask: uint32(schoolMask)})
+		}
+		damage = uint32(math.Round(float64(damage) * mult))
 		hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
 	}
 
@@ -848,10 +863,11 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 		heal += uint32(math.Round(float64(s.player.SpellPower) * coeff))
 	}
 
-	// Roll healing critical strike (TrinityCore: 150% healing on crit)
+	// Roll healing critical strike (TrinityCore: 150% healing on crit, modified by metagem)
 	isCrit := s.rollSpellCrit(0, 2)
 	if isCrit {
-		heal = uint32(float64(heal) * 1.5)
+		mult := s.getSpellCritMultiplier(wotlk.Spell{ID: spellID, SchoolMask: 2})
+		heal = uint32(math.Round(float64(heal) * mult))
 	}
 
 	effectiveHeal := heal
@@ -2560,6 +2576,16 @@ func (s *session) startChannel(castID uint8, spellID uint32, spell wotlk.Spell, 
 	for _, effect := range spell.Effects {
 		if effect.Effect != 0 && effect.AuraPeriod > period {
 			period = effect.AuraPeriod
+		}
+	}
+
+	// In WotLK 3.3.5, channeled spells scale with spell haste: duration and tick interval are compressed
+	// Mirrors TrinityCore Spell::Prepare (Spell.cpp:650-700):
+	hastePct := s.getSpellHastePct()
+	if hastePct > 0 {
+		durationMs = int32(math.Round(float64(durationMs) / (1.0 + hastePct/100.0)))
+		if period > 0 {
+			period = uint32(math.Round(float64(period) / (1.0 + hastePct/100.0)))
 		}
 	}
 	channel := &activeChannelState{
