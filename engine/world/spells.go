@@ -657,7 +657,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 	// Apply Spell Power bonus (TrinityCore Unit::SpellDamageBonusDone)
 	if s.player != nil && s.player.SpellPower > 0 {
 		coeff := 0.857 // standard 3.0s cast (~85.7%)
-		if s.server.Data != nil {
+		if s.server != nil && s.server.Data != nil {
 			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
 				if spell.CastingTimeIndex > 0 {
 					if ct, ok, _ := s.server.Data.SpellCastTime(spell.CastingTimeIndex); ok && ct > 0 {
@@ -676,10 +676,22 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 
 	// Use the school mask from the Spell DBC (field 17). Fallback to physical (1).
 	schoolMask := uint8(1)
-	if s.server.Data != nil {
+	if s.server != nil && s.server.Data != nil {
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.SchoolMask != 0 {
 			schoolMask = uint8(spell.SchoolMask)
 		}
+	}
+
+	s.executeDirectSpellDamage(ctx, targetGUID, spellID, damage, schoolMask)
+}
+
+func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32, schoolMask uint8) {
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	target, ok := s.getCombatTarget(ctx, targetGUID)
+	if !ok || target.Health == 0 {
+		return
 	}
 
 	// Spell crit roll
@@ -835,6 +847,107 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
 		s.server.procCreatureDamageAuras(target.GUID, true, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+	}
+}
+
+// castSpellDirect triggers an immediate, instant cast of a spell without cast time or resource cost.
+// Mirrors TrinityCore Unit::CastSpell (Spell.cpp: triggered = true).
+func (s *session) castSpellDirect(ctx context.Context, spellID uint32, targetGUID uint64) {
+	if s == nil || s.player == nil || spellID == 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	var spell wotlk.Spell
+	found := false
+	if s.server != nil && s.server.Data != nil {
+		var err error
+		spell, found, err = s.server.Data.Spell(spellID)
+		if err != nil || !found {
+			found = false
+		}
+	}
+	if !found {
+		spell = wotlk.Spell{ID: spellID}
+	}
+
+	castID := uint8(1)
+	now := time.Now()
+	castTimeStamp := uint32(now.UnixMilli())
+	hitTargets := []uint64{targetGUID}
+	spellTarget := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
+	goPkt := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, nil, spellTarget)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+	}
+
+	durationMs := uint32(0)
+	if s.server != nil && s.server.Data != nil && spell.DurationIndex > 0 {
+		lvl := uint32(80)
+		if s.player != nil && s.player.Level > 0 {
+			lvl = uint32(s.player.Level)
+		}
+		if dur, ok, err := s.server.Data.SpellDuration(spell.DurationIndex, lvl); err == nil && ok && dur > 0 {
+			durationMs = uint32(dur)
+		}
+	}
+	if durationMs == 0 {
+		switch spellID {
+		case ProcSpellBerserking:
+			durationMs = 12000
+		case ProcSpellMongoose:
+			durationMs = 15000
+		case ProcSpellExecutioner:
+			durationMs = 15000
+		case ProcSpellCrusader:
+			durationMs = 15000
+		case ProcSpellCrippling:
+			durationMs = 12000
+		case ProcSpellDeadlyPois:
+			durationMs = 12000
+		case ProcSpellWoundPois:
+			durationMs = 15000
+		}
+	}
+
+	hasExplicitEffects := false
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 && eff.Aura == 0 {
+			continue
+		}
+		hasExplicitEffects = true
+		if eff.Effect == 2 { // SPELL_EFFECT_SCHOOL_DAMAGE
+			baseDmg := uint32(eff.BasePoints + 1)
+			if baseDmg == 0 {
+				if spellID == ProcSpellFieryWeapon {
+					baseDmg = 40
+				} else if spellID == ProcSpellInstantPois {
+					baseDmg = 280
+				}
+			}
+			s.executeDirectSpellDamage(ctx, targetGUID, spellID, baseDmg, uint8(spell.SchoolMask))
+		} else if eff.Effect == 6 || eff.Aura != 0 { // SPELL_EFFECT_APPLY_AURA
+			amount := uint32(eff.BasePoints + 1)
+			schoolMask := spell.SchoolMask
+			if schoolMask == 0 {
+				schoolMask = 1
+			}
+			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask)
+		} else if eff.Effect == 10 || eff.Effect == 67 { // SPELL_EFFECT_HEAL
+			healAmount := uint32(eff.BasePoints + 1)
+			if healAmount == 0 && spellID == ProcSpellCrusader {
+				healAmount = 100
+			}
+			s.executeSpellHeal(ctx, targetGUID, spellID, healAmount)
+		}
+	}
+
+	if !hasExplicitEffects {
+		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
+		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1)
 	}
 }
 
