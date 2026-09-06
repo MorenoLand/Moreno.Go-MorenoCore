@@ -232,11 +232,8 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	s.interruptCurrentChannel()
 	s.procCastAuras()
 
-	castTime := uint32(0)
 	s.lastCastTime = time.Now()
-	if value, ok, castErr := s.server.Data.SpellCastTime(spell.CastingTimeIndex); castErr == nil && ok && value > 0 {
-		castTime = uint32(value)
-	}
+	castTime := s.calculateSpellCastTime(spell)
 	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_START), protocol.BuildSpellStart(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagStart, castTime, target), true); err != nil {
 		return false
 	}
@@ -643,20 +640,20 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		damage += uint32(math.Round(float64(s.player.SpellPower) * coeff))
 	}
 
-	// Spell crit roll (5% base crit)
-	crit := rand.Float64() < 0.05
-	hitInfo := uint32(0)
-	if crit {
-		damage = uint32(float64(damage) * 1.5)
-		hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
-	}
-
 	// Use the school mask from the Spell DBC (field 17). Fallback to physical (1).
 	schoolMask := uint8(1)
 	if s.server.Data != nil {
 		if spell, found, err := s.server.Data.Spell(spellID); err == nil && found && spell.SchoolMask != 0 {
 			schoolMask = uint8(spell.SchoolMask)
 		}
+	}
+
+	// Spell crit roll
+	crit := s.rollSpellCrit(target.GUID, schoolMask)
+	hitInfo := uint32(0)
+	if crit {
+		damage = uint32(float64(damage) * 1.5)
+		hitInfo = 0x02 // SPELL_HIT_TYPE_CRIT
 	}
 
 	resisted := uint32(0)
@@ -825,6 +822,12 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 		heal += uint32(math.Round(float64(s.player.SpellPower) * coeff))
 	}
 
+	// Roll healing critical strike (TrinityCore: 150% healing on crit)
+	isCrit := s.rollSpellCrit(0, 2)
+	if isCrit {
+		heal = uint32(float64(heal) * 1.5)
+	}
+
 	effectiveHeal := heal
 	if targetSess.player.Health+heal > targetSess.player.MaxHealth {
 		effectiveHeal = targetSess.player.MaxHealth - targetSess.player.Health
@@ -835,7 +838,7 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	overheal := heal - effectiveHeal
 
 	// TC Unit.cpp:6550: packet = packed(target), packed(healer), spellID, heal, overheal, absorb, crit, unused
-	healPkt := buildSpellHealLog(targetGUID, s.playerGUID, spellID, heal, overheal, 0, false)
+	healPkt := buildSpellHealLog(targetGUID, s.playerGUID, spellID, heal, overheal, 0, isCrit)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), healPkt, true)
 	if targetSess != s {
 		_ = targetSess.write(uint16(protocol.OpcodeSMSG_SPELLHEALLOG), healPkt, true)

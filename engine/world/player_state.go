@@ -488,12 +488,36 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 						state.CombatRatings[2] += uint32(val)
 					case 15: // Block rating
 						state.CombatRatings[3] += uint32(val)
-					case 16, 17, 18, 31: // Hit rating
+					case 16: // Melee hit
 						state.CombatRatings[5] += uint32(val)
-					case 19, 20, 21, 32: // Crit rating
+					case 17: // Ranged hit
+						state.CombatRatings[6] += uint32(val)
+					case 18: // Spell hit
+						state.CombatRatings[7] += uint32(val)
+					case 31: // Universal hit
+						state.CombatRatings[5] += uint32(val)
+						state.CombatRatings[6] += uint32(val)
+						state.CombatRatings[7] += uint32(val)
+					case 19: // Melee crit
 						state.CombatRatings[8] += uint32(val)
-					case 28, 29, 30, 36: // Haste rating
+					case 20: // Ranged crit
+						state.CombatRatings[9] += uint32(val)
+					case 21: // Spell crit
+						state.CombatRatings[10] += uint32(val)
+					case 32: // Universal crit
+						state.CombatRatings[8] += uint32(val)
+						state.CombatRatings[9] += uint32(val)
+						state.CombatRatings[10] += uint32(val)
+					case 28: // Melee haste
 						state.CombatRatings[17] += uint32(val)
+					case 29: // Ranged haste
+						state.CombatRatings[18] += uint32(val)
+					case 30: // Spell haste
+						state.CombatRatings[19] += uint32(val)
+					case 36: // Universal haste
+						state.CombatRatings[17] += uint32(val)
+						state.CombatRatings[18] += uint32(val)
+						state.CombatRatings[19] += uint32(val)
 					case 35: // Resilience rating (ITEM_MOD_RESILIENCE_RATING)
 						state.CombatRatings[14] += uint32(val)
 						state.CombatRatings[15] += uint32(val)
