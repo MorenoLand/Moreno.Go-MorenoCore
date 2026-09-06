@@ -1780,6 +1780,19 @@ func buildInitWorldStates(state playerState) []byte {
 			[2]int32{2338, 1}, // WS_FLAG_STATE_HORDE (1 = base)
 			[2]int32{2339, 1}, // WS_FLAG_STATE_ALLIANCE (1 = base)
 		)
+	} else if state.Map == 529 {
+		worldStates = append(worldStates,
+			[2]int32{1776, 0},    // Resources Ally
+			[2]int32{1777, 0},    // Resources Horde
+			[2]int32{1778, 1600}, // Resources Max
+			[2]int32{1779, 0},    // Occupied Bases Ally
+			[2]int32{1780, 0},    // Occupied Bases Horde
+			[2]int32{1771, 1},    // Stables neutral
+			[2]int32{1781, 1},    // Blacksmith neutral
+			[2]int32{1786, 1},    // Farm neutral
+			[2]int32{1791, 1},    // Lumber Mill neutral
+			[2]int32{1796, 1},    // Gold Mine neutral
+		)
 	}
 	packet := protocol.NewBuffer(16 + len(worldStates)*8)
 	packet.WriteI32(int32(state.Map))
