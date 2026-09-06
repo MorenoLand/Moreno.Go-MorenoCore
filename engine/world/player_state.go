@@ -494,6 +494,10 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 						state.CombatRatings[8] += uint32(val)
 					case 28, 29, 30, 36: // Haste rating
 						state.CombatRatings[17] += uint32(val)
+					case 35: // Resilience rating (ITEM_MOD_RESILIENCE_RATING)
+						state.CombatRatings[14] += uint32(val)
+						state.CombatRatings[15] += uint32(val)
+						state.CombatRatings[16] += uint32(val)
 					case 38: // Attack power
 						state.AttackPower += uint32(val)
 					case 39: // Ranged attack power

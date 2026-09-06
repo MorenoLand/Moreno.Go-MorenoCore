@@ -280,14 +280,18 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	isDualWielding := s.haveOffhandWeapon()
 	canBlock := false
 	canParry := target.Level >= 10 || isPlayerVictim
+	var critReductionBP int32
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
 			canBlock = vicSess.player.Block > 0
+			critChanceBP := int32(500)
+			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenMelee, &critChanceBP)
+			critReductionBP = 500 - critChanceBP
 		}
 	}
 
 	if s.player.Level > 0 {
-		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry)
+		outcome, hitInfo, targetState = rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, isDualWielding, canBlock, canParry, critReductionBP)
 	}
 	if attType == protocol.OffAttack {
 		hitInfo |= protocol.HitInfoOffHand
@@ -312,6 +316,12 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		}
 	case protocol.MeleeHitCrushing:
 		damage = uint32(float64(damage) * 1.5)
+	}
+
+	if isPlayerVictim && s.server != nil {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+			vicSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
+		}
 	}
 
 	// Handle parry haste: if defender parried, haste defender's next attack!
@@ -387,6 +397,8 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					s.attackTarget = 0
 				} else {
 					playerSess.player.Health -= damage
+					playerSess.delayCurrentCast()
+					playerSess.delayCurrentChannel()
 					playerSess.sendPlayerUpdate()
 				}
 			}
@@ -432,7 +444,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		_ = s.sendAttackStop(target.GUID, true)
 		s.attackTarget = 0
 		s.onCreatureKilled(ctx, target)
-		s.debug("target slain", "account", s.accountName, "guid", target.GUID)
+		s.debug("target slain by auto-attack", "account", s.accountName, "guid", target.GUID)
 	} else {
 		newHealth := target.Health - damage
 		s.server.motionMu.Lock()
@@ -450,7 +462,8 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 			}
 			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 			inMelee := dist <= meleeAttackRange
-			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, float32(damage), inMelee)
+			threat := float32(damage) * s.getThreatMultiplier(1)
+			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries := motion.ThreatMgr.SortedEntries()
@@ -513,12 +526,16 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	// Outcome: ranged attacks can be dodged or blocked, but cannot be parried (TC rollMeleeOutcome)
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
 	canBlock := false
+	var critReductionBP int32
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil && vicSess.player != nil {
 			canBlock = vicSess.player.Block > 0
+			critChanceBP := int32(500)
+			vicSess.applyResilienceToMeleeCritChance(true, CombatRatingCritTakenRanged, &critChanceBP)
+			critReductionBP = 500 - critChanceBP
 		}
 	}
-	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false)
+	outcome, _, _ := rollMeleeOutcome(s.player.Level, target.Level, true, isPlayerVictim, false, canBlock, false, critReductionBP)
 
 	minDmg := s.player.MinRangedDamage
 	maxDmg := s.player.MaxRangedDamage
@@ -542,6 +559,12 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		damage -= blocked
 	case protocol.MeleeHitCrit:
 		damage *= 2
+	}
+
+	if isPlayerVictim && s.server != nil {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+			vicSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenRanged)
+		}
 	}
 
 	overkill := uint32(0)
@@ -644,7 +667,8 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 			if motion.BossAI == nil {
 				motion.BossAI = getBossAIForCreature(motion, motion.ScriptName)
 			}
-			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, float32(damage), false)
+			threat := float32(damage) * s.getThreatMultiplier(uint32(schoolMask))
+			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, false)
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries := motion.ThreatMgr.SortedEntries()
@@ -1019,7 +1043,7 @@ func distance3D(x1, y1, z1, x2, y2, z2 float32) float64 {
 // rollMeleeOutcome implements TrinityCore's single-roll melee attack table:
 // MISS > DODGE > PARRY > GLANCING > BLOCK > CRIT > CRUSHING > HIT
 // Reference: Unit::RollMeleeOutcomeAgainst (Unit.cpp:2189-2320).
-func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry bool) (protocol.MeleeHitOutcome, uint32, uint8) {
+func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlayerVictim bool, isDualWielding bool, canBlock, canParry bool, critReductionBP ...int32) (protocol.MeleeHitOutcome, uint32, uint8) {
 	if attackerLevel == 0 {
 		attackerLevel = 1
 	}
@@ -1100,6 +1124,9 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 		critChance -= (leveldif - 2) * 100
 	} else if leveldif > 0 {
 		critChance -= leveldif * 20
+	}
+	if len(critReductionBP) > 0 {
+		critChance -= critReductionBP[0]
 	}
 	if critChance < 0 {
 		critChance = 0

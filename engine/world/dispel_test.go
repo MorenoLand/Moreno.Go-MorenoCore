@@ -460,11 +460,11 @@ func TestDispel_DispelResistAura(t *testing.T) {
 		Positive:   true,
 	}
 
-	// Target has 99% dispel resistance via SPELL_AURA_MOD_DISPEL_RESIST (235) (1% dispel chance)
+	// Target has 100% dispel resistance via SPELL_AURA_MOD_DISPEL_RESIST (235) (0% dispel chance)
 	sessB.activeAuras[99999] = &activeAura{
 		SpellID:  99999,
 		AuraType: 235, // SPELL_AURA_MOD_DISPEL_RESIST
-		Amount:   99,  // 99% resistance -> 1% chance -> failure emits SMSG_DISPEL_FAILED
+		Amount:   100, // 100% resistance -> 0% chance -> failure emits SMSG_DISPEL_FAILED
 		Positive: true,
 	}
 
