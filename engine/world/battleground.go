@@ -280,6 +280,9 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bo
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	if s.server != nil {
+		s.server.handleWSGPlayerLeave(s)
+	}
 	for slot := 0; slot < len(s.bgQueues); slot++ {
 		if s.bgQueues[slot].Active {
 			s.bgQueues[slot].Active = false
@@ -340,14 +343,24 @@ func (s *session) handleBattlegroundPlayerPositions(ctx context.Context, payload
 			s.server.sessionsMu.RUnlock()
 		}
 
-		buf := protocol.NewBuffer(8 + len(teammates)*16)
+		var flagCarriers []*session
+		if s.server != nil {
+			flagCarriers = s.server.getWSGFlagCarriers(s.player.Map)
+		}
+
+		buf := protocol.NewBuffer(8 + len(teammates)*16 + len(flagCarriers)*16)
 		buf.WriteU32(uint32(len(teammates))) // numPlayerPositions
 		for _, mate := range teammates {
 			buf.WriteU64(mate.playerGUID)
 			buf.WriteF32(mate.player.X)
 			buf.WriteF32(mate.player.Y)
 		}
-		buf.WriteU32(0) // flagCarrierCount
+		buf.WriteU32(uint32(len(flagCarriers))) // flagCarrierCount
+		for _, carrier := range flagCarriers {
+			buf.WriteU64(carrier.playerGUID)
+			buf.WriteF32(carrier.player.X)
+			buf.WriteF32(carrier.player.Y)
+		}
 		_ = s.write(uint16(protocol.OpcodeMSG_BATTLEGROUND_PLAYER_POSITIONS), buf.Bytes(), true)
 	}
 	return true
