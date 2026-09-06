@@ -445,7 +445,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					playerSess.player.Health -= damage
 					playerSess.delayCurrentCast()
 					playerSess.delayCurrentChannel()
-					playerSess.procDamageAuras(true)
+					playerSess.procDamageAuras(true, damage)
 					playerSess.sendPlayerUpdate()
 				}
 			}
@@ -525,6 +525,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{
 			unitFieldHealth: newHealth,
 		})
+		s.server.procCreatureDamageAuras(target.GUID, true, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 	}
 }
@@ -689,7 +690,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					vicSess.player.Health -= damage
 					vicSess.delayCurrentCast()
 					vicSess.delayCurrentChannel()
-					vicSess.procDamageAuras(true)
+					vicSess.procDamageAuras(true, damage)
 					vicSess.sendPlayerUpdate()
 				}
 			}

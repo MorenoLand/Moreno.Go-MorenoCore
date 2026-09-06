@@ -53,13 +53,124 @@ func getSpellAuraInterruptFlags(spellID uint32, dbcFlags uint32) uint32 {
 }
 
 // procDamageAuras removes CC and break-on-damage auras (e.g. Gouge, Sap, Blind, Polymorph, Stealth)
-// when the player takes damage. Mirrors TrinityCore Unit::ProcDamageAndSpellFor and RemoveAurasWithInterruptFlags.
-func (s *session) procDamageAuras(isDirectDamage bool) {
+// when the player takes damage. Also tracks damage threshold breaks for Root and Fear mechanics.
+// Mirrors TrinityCore Unit::ProcDamageAndSpellFor and RemoveAurasWithInterruptFlags.
+func (s *session) procDamageAuras(isDirectDamage bool, damage ...uint32) {
 	flags := auraInterruptFlagTakeDamage | auraInterruptFlagHitBySpell
 	if isDirectDamage {
 		flags |= auraInterruptFlagDirectDamage
 	}
 	s.removeAurasWithInterruptFlags(flags)
+
+	dmg := uint32(0)
+	if len(damage) > 0 {
+		dmg = damage[0]
+	}
+	if dmg == 0 {
+		return
+	}
+
+	maxHP := uint32(1000)
+	if s.player != nil && s.player.MaxHealth > 0 {
+		maxHP = s.player.MaxHealth
+	}
+
+	// Root threshold: ~15% of max HP (TrinityCore Unit::ProcDamageAndSpellFor)
+	rootThreshold := uint32(float64(maxHP) * 0.15)
+	if rootThreshold < 100 {
+		rootThreshold = 100
+	}
+
+	// Fear threshold: ~10% of max HP
+	fearThreshold := uint32(float64(maxHP) * 0.10)
+	if fearThreshold < 100 {
+		fearThreshold = 100
+	}
+
+	var toRemove []uint32
+	s.castMu.Lock()
+	if s.activeAuras != nil {
+		for spellID, aura := range s.activeAuras {
+			if aura == nil || aura.Stopped {
+				continue
+			}
+
+			// Root (SPELL_AURA_MOD_ROOT = 26 or MechanicRoot = 7)
+			if aura.AuraType == 26 || aura.Mechanic == 7 {
+				aura.DamageTaken += dmg
+				if aura.DamageTaken >= rootThreshold {
+					toRemove = append(toRemove, spellID)
+				} else if isDirectDamage && float64(dmg)/float64(rootThreshold) >= 1.0 {
+					toRemove = append(toRemove, spellID)
+				}
+				continue
+			}
+
+			// Fear (SPELL_AURA_MOD_FEAR = 7 or MechanicFear = 5)
+			if aura.AuraType == 7 || aura.Mechanic == 5 {
+				aura.DamageTaken += dmg
+				if aura.DamageTaken >= fearThreshold {
+					toRemove = append(toRemove, spellID)
+				} else if isDirectDamage && float64(dmg)/float64(fearThreshold) >= 1.0 {
+					toRemove = append(toRemove, spellID)
+				}
+				continue
+			}
+		}
+	}
+	s.castMu.Unlock()
+
+	for _, spellID := range toRemove {
+		s.removeAura(spellID)
+	}
+}
+
+// procCreatureDamageAuras breaks root and fear auras on creatures after exceeding damage thresholds.
+func (s *Server) procCreatureDamageAuras(creatureGUID uint64, isDirectDamage bool, damage uint32, maxHealth uint32) {
+	if s == nil || creatureGUID == 0 || damage == 0 {
+		return
+	}
+
+	maxHP := maxHealth
+	if maxHP == 0 {
+		maxHP = 1000
+	}
+	rootThreshold := uint32(float64(maxHP) * 0.15)
+	if rootThreshold < 100 {
+		rootThreshold = 100
+	}
+	fearThreshold := uint32(float64(maxHP) * 0.10)
+	if fearThreshold < 100 {
+		fearThreshold = 100
+	}
+
+	var toRemove []uint32
+	s.auraMu.Lock()
+	if s.activeCreatureAuras != nil {
+		if auras, ok := s.activeCreatureAuras[creatureGUID]; ok && auras != nil {
+			for spellID, aura := range auras {
+				if aura == nil || aura.Stopped {
+					continue
+				}
+				if aura.AuraType == 26 || aura.Mechanic == 7 {
+					aura.DamageTaken += damage
+					if aura.DamageTaken >= rootThreshold {
+						toRemove = append(toRemove, spellID)
+					}
+				} else if aura.AuraType == 7 || aura.Mechanic == 5 {
+					aura.DamageTaken += damage
+					if aura.DamageTaken >= fearThreshold {
+						toRemove = append(toRemove, spellID)
+					}
+				}
+			}
+		}
+	}
+	s.auraMu.Unlock()
+
+	for _, spellID := range toRemove {
+		s.removeCreatureAura(creatureGUID, spellID)
+	}
 }
 
 // procCastAuras removes auras broken by casting an active spell (e.g. Food, Drink, Stealth).
