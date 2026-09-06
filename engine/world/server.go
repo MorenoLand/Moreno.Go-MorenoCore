@@ -171,6 +171,7 @@ type session struct {
 	summonerGUID       uint64
 	activeChannel      *activeChannelState
 	castMu             sync.Mutex
+	schoolLockouts     map[uint32]int64
 	pendingBindInstanceID uint64
 	pendingBindMapID      uint32
 	pendingBindDiff       uint32
@@ -548,7 +549,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		}
 	}()
 	defer close(closed)
-	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), scale: 1, breathTimer: -1, fatigueTimer: -1}
+	state := &session{server: s, conn: conn, legitimate: make(map[uint64]struct{}), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8), channels: make(map[string]struct{}), scale: 1, breathTimer: -1, fatigueTimer: -1, schoolLockouts: make(map[uint32]int64)}
 	s.addSession(state)
 	defer s.removeSession(state)
 	defer state.logout()

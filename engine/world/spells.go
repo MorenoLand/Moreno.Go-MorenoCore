@@ -104,6 +104,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	nowUnix := time.Now().Unix()
+	if s.isSchoolLocked(spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_NOT_READY = 47
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "school lockout active")
+		return true
+	}
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell == spellID && cd.End > nowUnix {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_NOT_READY = 47
@@ -395,6 +400,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 
 	// Apply spell effects
 	applyEffects := func(effCtx context.Context) {
+		interruptHandled := false
 		for _, eff := range spell.Effects {
 			if eff.Effect == 0 {
 				continue
@@ -509,10 +515,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectTaunt(effCtx, targetGUID, spellID)
 			case 126: // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
 				s.handleEffectSpellsteal(effCtx, targetGUID, spell, eff)
+			case spellEffectInterruptCast: // 68: SPELL_EFFECT_INTERRUPT_CAST
+				s.handleEffectInterruptCast(effCtx, targetGUID, spell, eff)
+				interruptHandled = true
 			}
 		}
 		if isTauntSpell(spellID) {
 			s.handleEffectTaunt(effCtx, targetGUID, spellID)
+		}
+		if !interruptHandled && isInterruptSpell(spellID) {
+			s.handleEffectInterruptCast(effCtx, targetGUID, spell, wotlk.SpellEffect{})
 		}
 		if spellID == 2641 { // Dismiss Pet
 			s.handleDismissPet(effCtx)
