@@ -133,3 +133,68 @@ func TestMapLoading(t *testing.T) {
 	}
 }
 
+func TestVehicleAndVehicleSeatLoading(t *testing.T) {
+	dbcDir := t.TempDir()
+
+	// 1. Vehicle.dbc (40 fields)
+	const vehFieldCount = 40
+	vehRec := make([]uint32, vehFieldCount)
+	vehRec[0] = 335 // Salvaged Chopper
+	vehRec[1] = VehicleFlagNoStrafe | VehicleFlagFullSpeedTurning
+	vehRec[6] = 3005 // seat 0
+	vehRec[7] = 3004 // seat 1
+
+	vehBytes := make([]byte, vehFieldCount*4)
+	for i, val := range vehRec {
+		binary.LittleEndian.PutUint32(vehBytes[i*4:(i+1)*4], val)
+	}
+	vehHeader := make([]byte, 20)
+	copy(vehHeader, "WDBC")
+	binary.LittleEndian.PutUint32(vehHeader[4:8], 1)
+	binary.LittleEndian.PutUint32(vehHeader[8:12], vehFieldCount)
+	binary.LittleEndian.PutUint32(vehHeader[12:16], vehFieldCount*4)
+	binary.LittleEndian.PutUint32(vehHeader[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "Vehicle.dbc"), append(vehHeader, append(vehBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. VehicleSeat.dbc (58 fields)
+	const seatFieldCount = 58
+	seatRec := make([]uint32, seatFieldCount)
+	seatRec[0] = 3005
+	seatRec[1] = VehicleSeatFlagCanControl | VehicleSeatFlagCanEnterOrExit | VehicleSeatFlagCanSwitch
+	seatRec[45] = VehicleSeatFlagBEjectable
+
+	seatBytes := make([]byte, seatFieldCount*4)
+	for i, val := range seatRec {
+		binary.LittleEndian.PutUint32(seatBytes[i*4:(i+1)*4], val)
+	}
+	seatHeader := make([]byte, 20)
+	copy(seatHeader, "WDBC")
+	binary.LittleEndian.PutUint32(seatHeader[4:8], 1)
+	binary.LittleEndian.PutUint32(seatHeader[8:12], seatFieldCount)
+	binary.LittleEndian.PutUint32(seatHeader[12:16], seatFieldCount*4)
+	binary.LittleEndian.PutUint32(seatHeader[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "VehicleSeat.dbc"), append(seatHeader, append(seatBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(dbcDir)
+	veh, found, err := store.Vehicle(335)
+	if err != nil || !found {
+		t.Fatalf("expected vehicle 335 found, err: %v", err)
+	}
+	if veh.ID != 335 || veh.SeatIDs[0] != 3005 || veh.SeatIDs[1] != 3004 {
+		t.Fatalf("unexpected vehicle 335 data: %+v", veh)
+	}
+
+	seat, found, err := store.VehicleSeat(3005)
+	if err != nil || !found {
+		t.Fatalf("expected seat 3005 found, err: %v", err)
+	}
+	if !seat.CanControl() || !seat.CanEnterOrExit() || !seat.CanSwitchFromSeat() || !seat.IsEjectable() {
+		t.Fatalf("unexpected seat 3005 flags: %+v", seat)
+	}
+}
+
+
