@@ -109,6 +109,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "school lockout active")
 		return true
 	}
+	if s.isGCDActive(spell) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_NOT_READY = 47
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
+		return true
+	}
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell == spellID && cd.End > nowUnix {
 			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_NOT_READY = 47
@@ -231,6 +236,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
 	s.procCastAuras()
+	s.triggerGlobalCooldown(spell)
 
 	s.lastCastTime = time.Now()
 	castTime := s.calculateSpellCastTime(spell)
