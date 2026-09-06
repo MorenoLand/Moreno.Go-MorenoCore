@@ -474,6 +474,7 @@ func (s *session) removeFromGroup(g *groupState, target *session) bool {
 	}
 	target.groupID = 0
 	target.pendingGroupLeader = 0
+	srv.onPlayerLeaveGroupRolls(target.playerGUID, g.ID)
 
 	// Send SMSG_GROUP_UNINVITE to the kicked player
 	_ = target.write(uint16(protocol.OpcodeSMSG_GROUP_UNINVITE), nil, true)
@@ -617,6 +618,7 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 			}
 		}
 		s.groupID = 0
+		srv.onPlayerLeaveGroupRolls(s.playerGUID, g.ID)
 		if len(g.Members) <= 1 {
 			var lastGUID uint64
 			if len(g.Members) == 1 {

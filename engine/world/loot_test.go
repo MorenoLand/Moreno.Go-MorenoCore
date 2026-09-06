@@ -1182,5 +1182,75 @@ func TestGroupLoot_Disenchant_LootDelivery(t *testing.T) {
 	}
 }
 
+func TestGroupLootRoll_PlayerLeavesEarlyResolvesRoll(t *testing.T) {
+	srv := &Server{
+		groups:       make(map[uint64]*groupState),
+		creatureLoot: make(map[uint64]*activeLootState),
+		groupRolls:   make(map[string]*activeGroupRoll),
+		sessions:     make(map[*session]struct{}),
+		Config:       config.Default(),
+	}
+
+	sess1 := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   10,
+		groupID:      500,
+		player:       &playerState{GUID: 10, Map: 0},
+	}
+	sess2 := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   20,
+		groupID:      500,
+		player:       &playerState{GUID: 20, Map: 0},
+	}
+	srv.sessions[sess1] = struct{}{}
+	srv.sessions[sess2] = struct{}{}
+	srv.groups[500] = &groupState{
+		ID:            500,
+		LootMethod:    3,
+		LootThreshold: 2,
+		Members:       []groupMember{{GUID: 10}, {GUID: 20}},
+	}
+
+	targetGUID := uint64(999)
+	srv.creatureLoot[targetGUID] = &activeLootState{
+		TargetGUID: targetGUID,
+		Items: map[uint8]lootItem{
+			0: {Slot: 0, ItemEntry: 12345, Count: 1},
+		},
+	}
+
+	srv.startGroupLootRoll(targetGUID, 0, 12345, 1, 0, 500)
+
+	// Sess1 votes NEED (1)
+	p1 := protocol.NewBuffer(13)
+	p1.WriteU64(targetGUID)
+	p1.WriteU32(0)
+	p1.WriteU8(1)
+	sess1.handleLootRoll(context.Background(), p1.Bytes())
+
+	// Player 20 hasn't voted yet. Roll should still be active in groupRolls.
+	rollKey := fmt.Sprintf("%d:%d", targetGUID, 0)
+	srv.lootMu.Lock()
+	roll := srv.groupRolls[rollKey]
+	srv.lootMu.Unlock()
+	if roll == nil {
+		t.Fatalf("expected active roll before player 20 leaves")
+	}
+
+	// Player 20 leaves group (or disconnects)
+	srv.onPlayerLeaveGroupRolls(20, 500)
+
+	// Roll should now be resolved immediately because player 20's vote was counted as pass
+	srv.lootMu.Lock()
+	rollAfter := srv.groupRolls[rollKey]
+	srv.lootMu.Unlock()
+	if rollAfter != nil {
+		t.Fatalf("expected roll to be resolved immediately upon player 20 leaving, but it is still active")
+	}
+}
+
 
 

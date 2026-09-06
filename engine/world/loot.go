@@ -1107,3 +1107,30 @@ func (s *session) handleOptOutOfLoot(ctx context.Context, payload []byte) bool {
 	s.player.PassOnGroupLoot = (passOnLoot != 0)
 	return true
 }
+
+// onPlayerLeaveGroupRolls automatically records a pass vote for a player who leaves,
+// gets kicked from, or disbands a group during active loot rolls, preventing stalled roll countdowns.
+// Mirrors TrinityCore Group::CountRollVote and Group::RemoveMember (Group.cpp:780-810, 1450-1490).
+func (s *Server) onPlayerLeaveGroupRolls(leavingGUID uint64, groupID uint64) {
+	if s == nil || leavingGUID == 0 || groupID == 0 {
+		return
+	}
+	s.lootMu.Lock()
+	var keysToResolve []string
+	for key, roll := range s.groupRolls {
+		if roll != nil && roll.GroupID == groupID {
+			if _, voted := roll.Votes[leavingGUID]; !voted {
+				roll.Votes[leavingGUID] = rollPass
+				roll.TotalPass++
+			}
+			if (roll.TotalPass + roll.TotalNeed + roll.TotalGreed) >= roll.TotalPlayersRolling {
+				keysToResolve = append(keysToResolve, key)
+			}
+		}
+	}
+	s.lootMu.Unlock()
+
+	for _, key := range keysToResolve {
+		s.resolveGroupLootRoll(key)
+	}
+}
