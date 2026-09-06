@@ -791,6 +791,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 					playerSess.player.Health = 0
 					playerSess.sendPlayerUpdate()
 					playerSess.killPlayer(ctx)
+					s.server.handleWGPlayerDeath(playerSess, s)
 				}
 			} else if damage > 0 {
 				playerSess.player.Health -= damage
