@@ -214,8 +214,8 @@ func (s *session) getDispellableAuraListForPlayer(targetSess *session, dispelMas
 
 		// Calculate dispel chance: 100 - resistChance (SpellAuras.cpp:1218-1236)
 		chance := targetSess.calcDispelChanceLocked(!isFriendly)
-		if chance <= 0 {
-			continue
+		if chance < 0 {
+			chance = 0
 		}
 
 		candidates = append(candidates, dispelCandidate{

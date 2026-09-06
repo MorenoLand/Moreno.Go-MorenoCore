@@ -469,9 +469,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				s.handleEffectDispel(effCtx, targetGUID, spell, eff)
 			case 108: // SPELL_EFFECT_DISPEL_MECHANIC
 				s.handleEffectDispelMechanic(effCtx, targetGUID, spell, eff)
+			case 114: // SPELL_EFFECT_ATTACK_ME (EffectTaunt)
+				s.handleEffectTaunt(effCtx, targetGUID, spellID)
 			case 126: // SPELL_EFFECT_STEAL_BENEFICIAL_BUFF
 				s.handleEffectSpellsteal(effCtx, targetGUID, spell, eff)
 			}
+		}
+		if isTauntSpell(spellID) {
+			s.handleEffectTaunt(effCtx, targetGUID, spellID)
 		}
 		if spellID == 2641 { // Dismiss Pet
 			s.handleDismissPet(effCtx)
@@ -579,6 +584,14 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		resisted, damage = calcMagicSpellResistance(damage, schoolMask, victimRes, s.player.Level, target.Level)
 	}
 
+	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
+	if isPlayerVictim {
+		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
+			isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
+			playerSess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
+		}
+	}
+
 	overkill := uint32(0)
 	if damage >= target.Health && target.Health > 0 {
 		overkill = damage - target.Health
@@ -613,6 +626,8 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 				}
 			} else {
 				playerSess.player.Health -= damage
+				playerSess.delayCurrentCast()
+				playerSess.delayCurrentChannel()
 				playerSess.sendPlayerUpdate()
 			}
 			return
@@ -669,7 +684,8 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 			}
 			dist := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z)
 			inMelee := dist <= meleeAttackRange
-			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, float32(damage), inMelee)
+			threat := float32(damage) * s.getThreatMultiplier(uint32(schoolMask))
+			switched, newVictim := motion.ThreatMgr.AddThreat(s.playerGUID, threat, inMelee)
 			if switched && newVictim != motion.TargetGUID {
 				motion.TargetGUID = newVictim
 				entries := motion.ThreatMgr.SortedEntries()
@@ -1477,6 +1493,9 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 			vRes := ts.player.Resistances[resIdx]
 			resisted, dmg = calcMagicSpellResistance(dmg, uint8(aura.SchoolMask), vRes, aura.CasterLevel, ts.player.Level)
 		}
+		if aura.CasterGUID != aura.TargetGUID {
+			ts.applyResilienceToDamage(true, &dmg, false, CombatRatingCritTakenSpell)
+		}
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
 		}
@@ -2280,12 +2299,13 @@ func (s *session) activateSpec(ctx context.Context, targetSpec uint8) {
 //     (movement.go), matching reference movement-cast interruption.
 
 const (
-	spellAttr1Channeled1   uint32 = 0x04
-	spellAttr1Channeled2   uint32 = 0x40
-	spellInterruptPushBack uint32 = 0x02
-	channelFlagDelay       uint32 = 0x4000
-	maxSpellPushbacks      int    = 2
-	defaultCastPushbackMs  uint32 = 500
+	spellAttr1Channeled1     uint32 = 0x04
+	spellAttr1Channeled2     uint32 = 0x40
+	spellInterruptPushBack   uint32 = 0x02
+	spellInterruptAbortOnDmg uint32 = 0x10
+	channelFlagDelay         uint32 = 0x4000
+	maxSpellPushbacks        int    = 2
+	defaultCastPushbackMs    uint32 = 500
 )
 
 // activeChannelState tracks one running channeled spell.
@@ -2462,17 +2482,62 @@ func (s *session) channelTick() {
 	s.castMu.Unlock()
 }
 
+// getPushbackReductionLocked returns total percent pushback reduction from active auras (SPELL_AURA_REDUCE_PUSHBACK = 149).
+// Assumes s.castMu is held.
+// Reference: TrinityCore Spell::Delayed / Spell::DelayedChannel: delayReduce += playerCaster->GetTotalAuraModifier(SPELL_AURA_REDUCE_PUSHBACK) - 100.
+func (s *session) getPushbackReductionLocked() int32 {
+	if s == nil {
+		return 0
+	}
+	var reduction int32
+	for _, a := range s.activeAuras {
+		if a != nil && !a.Stopped && a.AuraType == 149 { // SPELL_AURA_REDUCE_PUSHBACK
+			reduction += int32(a.Amount)
+		}
+	}
+	if reduction > 100 {
+		reduction = 100
+	}
+	return reduction
+}
+
+func (s *session) getPushbackReduction() int32 {
+	if s == nil {
+		return 0
+	}
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	return s.getPushbackReductionLocked()
+}
+
 // delayCurrentCast mirrors Spell::Delayed: called when the player takes
 // damage during a timed cast. Requires SPELL_INTERRUPT_FLAG_PUSH_BACK, at
 // most two pushbacks per cast, 500ms each clamped to remaining time, and
-// announces SMSG_SPELL_DELAYED.
+// announces SMSG_SPELL_DELAYED. Spells with SPELL_INTERRUPT_FLAG_ABORT_ON_DMG
+// are aborted entirely on direct damage.
 func (s *session) delayCurrentCast() {
 	if s.player == nil {
 		return
 	}
 	s.castMu.Lock()
 	cast := s.activeCast
-	if cast == nil || cast.CastTimeMs == 0 || cast.InterruptFlg&spellInterruptPushBack == 0 || cast.Pushbacks >= maxSpellPushbacks {
+	if cast == nil || cast.CastTimeMs == 0 {
+		s.castMu.Unlock()
+		return
+	}
+	// Direct damage completely aborts spells with SPELL_INTERRUPT_FLAG_ABORT_ON_DMG (0x10).
+	// Reference: TrinityCore Unit.cpp:944-945.
+	if cast.InterruptFlg&spellInterruptAbortOnDmg != 0 {
+		s.castMu.Unlock()
+		s.interruptCurrentCast()
+		return
+	}
+	if cast.InterruptFlg&spellInterruptPushBack == 0 || cast.Pushbacks >= maxSpellPushbacks {
+		s.castMu.Unlock()
+		return
+	}
+	reduction := s.getPushbackReductionLocked()
+	if reduction >= 100 {
 		s.castMu.Unlock()
 		return
 	}
@@ -2482,7 +2547,11 @@ func (s *session) delayCurrentCast() {
 		s.castMu.Unlock()
 		return
 	}
-	delay := time.Duration(defaultCastPushbackMs) * time.Millisecond
+	delayMs := defaultCastPushbackMs
+	if reduction > 0 {
+		delayMs = uint32(float64(delayMs) * float64(100-reduction) / 100.0)
+	}
+	delay := time.Duration(delayMs) * time.Millisecond
 	if delay > remaining {
 		delay = remaining
 	}
@@ -2517,7 +2586,15 @@ func (s *session) delayCurrentChannel() {
 		s.castMu.Unlock()
 		return
 	}
+	reduction := s.getPushbackReductionLocked()
+	if reduction >= 100 {
+		s.castMu.Unlock()
+		return
+	}
 	delayMs := channel.DurationMs / 4 // 25% of total duration per hit
+	if reduction > 0 {
+		delayMs = uint32(float64(delayMs) * float64(100-reduction) / 100.0)
+	}
 	if delayMs == 0 {
 		s.castMu.Unlock()
 		return

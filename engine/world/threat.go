@@ -1,6 +1,7 @@
 package world
 
 import (
+	"context"
 	"sort"
 	"sync"
 	"time"
@@ -72,6 +73,31 @@ func (tm *ThreatManager) SetThreat(victim uint64, amount float32) (switched bool
 		return true, victim
 	}
 	return false, tm.currentVictim
+}
+
+// MatchUnitThreatToHighestThreat sets the victim's threat equal to the highest threat currently on the creature.
+// Reference: TrinityCore ThreatManager::MatchUnitThreatToHighestThreat (ThreatManager.cpp:419-437).
+func (tm *ThreatManager) MatchUnitThreatToHighestThreat(victim uint64) (switched bool, newVictim uint64) {
+	if victim == 0 {
+		return false, tm.currentVictim
+	}
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	var highestThreat float32
+	for _, threat := range tm.entries {
+		if threat > highestThreat {
+			highestThreat = threat
+		}
+	}
+	current := tm.entries[victim]
+	if highestThreat > current {
+		tm.entries[victim] = highestThreat
+	} else if highestThreat == 0 {
+		tm.entries[victim] = 100.0
+	}
+	tm.currentVictim = victim
+	return true, victim
 }
 
 // RemoveThreat removes a victim from the threat table and re-evaluates top victim.
@@ -177,4 +203,93 @@ func (s *Server) broadcastThreatClear(mapID uint32, creatureGUID uint64) {
 	}
 	payload := protocol.BuildThreatClear(creatureGUID)
 	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_THREAT_CLEAR), payload, nil)
+}
+
+// getThreatMultiplier calculates the session's current threat multiplier based on active stances and auras.
+// Reference: TrinityCore Unit::GetTotalAuraMultiplierByMiscMask(SPELL_AURA_MOD_THREAT, mask).
+func (s *session) getThreatMultiplier(schoolMask uint32) float32 {
+	if s == nil || s.player == nil {
+		return 1.0
+	}
+	mult := float32(1.0)
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+
+	for _, a := range s.activeAuras {
+		if a == nil || a.Stopped {
+			continue
+		}
+		// Generic SPELL_AURA_MOD_THREAT (AuraType 10)
+		if a.AuraType == 10 {
+			mult *= (1.0 + float32(int32(a.Amount))/100.0)
+			continue
+		}
+		// Specific stance / aura threat modifiers
+		switch a.SpellID {
+		case 71: // Warrior: Defensive Stance (+45% threat)
+			mult *= 1.45
+		case 2457, 2458: // Warrior: Battle / Berserker Stance (-20% threat)
+			mult *= 0.80
+		case 5487, 9634: // Druid: Bear Form / Dire Bear Form (+30% threat)
+			mult *= 1.30
+		case 25780: // Paladin: Righteous Fury (+80% threat on Holy spells, schoolMask & 0x02 != 0)
+			if schoolMask&0x02 != 0 {
+				mult *= 1.80
+			}
+		case 1038: // Paladin: Hand of Salvation (-20% threat)
+			mult *= 0.80
+		}
+	}
+	if mult < 0.1 {
+		mult = 0.1
+	}
+	return mult
+}
+
+// isTauntSpell returns true if the spell is a Taunt ability.
+// Reference: TrinityCore SPELL_EFFECT_ATTACK_ME (114) and SPELL_AURA_MOD_TAUNT (11).
+func isTauntSpell(spellID uint32) bool {
+	switch spellID {
+	case 355,   // Warrior: Taunt
+		694,   // Warrior: Mocking Blow
+		1161,  // Warrior: Challenging Shout
+		6795,  // Druid: Growl
+		5209,  // Druid: Challenging Roar
+		56222, // Death Knight: Dark Command
+		62124, // Paladin: Hand of Reckoning
+		31789: // Paladin: Righteous Defense
+		return true
+	}
+	return false
+}
+
+// handleEffectTaunt processes SPELL_EFFECT_ATTACK_ME (114) and Taunt spells against creature targets.
+// Reference: TrinityCore Spell::EffectTaunt (SpellEffects.cpp:3131-3169).
+func (s *session) handleEffectTaunt(ctx context.Context, targetGUID uint64, spellID uint32) {
+	if s == nil || s.server == nil || targetGUID == 0 {
+		return
+	}
+	s.server.motionMu.Lock()
+	defer s.server.motionMu.Unlock()
+
+	motion := s.server.creatureMotion[targetGUID]
+	if motion == nil {
+		low := uint32(targetGUID & 0x00FFFFFF)
+		entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+		motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
+	}
+	if motion == nil {
+		return
+	}
+	if motion.ThreatMgr == nil {
+		motion.ThreatMgr = NewThreatManager(targetGUID)
+	}
+	switched, newVictim := motion.ThreatMgr.MatchUnitThreatToHighestThreat(s.playerGUID)
+	if switched || newVictim != motion.TargetGUID {
+		motion.TargetGUID = newVictim
+		entries := motion.ThreatMgr.SortedEntries()
+		s.server.broadcastHighestThreatUpdate(motion.Map, motion.GUID, newVictim, entries)
+	}
+	motion.InCombat = true
+	motion.Moving = true
 }
