@@ -284,6 +284,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bo
 		s.server.handleWSGPlayerLeave(s)
 		s.server.handleEOTSPlayerLeave(s)
 		s.server.handleSAPlayerLeave(s)
+		s.server.handleICPlayerLeave(s)
 	}
 	for slot := 0; slot < len(s.bgQueues); slot++ {
 		if s.bgQueues[slot].Active {

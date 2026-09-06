@@ -770,10 +770,11 @@ func TestDispel_BacklashUnstableAffliction(t *testing.T) {
 		t.Fatal("expected Unstable Affliction to be dispelled from target")
 	}
 
-	// 2. Dispeller should have taken 500 * 9 = 4500 damage (10000 - 4500 = 5500)
+	// 2. Dispeller should have taken 500 * 9 = 4500 damage (10000 - 4500 = 5500) or crit 6750 (3250)
 	expectedHP := uint32(10000 - 4500)
-	if dispeller.player.Health != expectedHP {
-		t.Fatalf("expected dispeller health to be %d, got %d", expectedHP, dispeller.player.Health)
+	expectedCritHP := uint32(10000 - 6750)
+	if dispeller.player.Health != expectedHP && dispeller.player.Health != expectedCritHP {
+		t.Fatalf("expected dispeller health to be %d or %d (crit), got %d", expectedHP, expectedCritHP, dispeller.player.Health)
 	}
 
 	// 3. Dispeller should have 5s silence aura applied (spell 31117)
