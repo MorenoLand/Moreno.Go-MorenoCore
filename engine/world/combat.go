@@ -415,6 +415,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					playerSess.player.Health -= damage
 					playerSess.delayCurrentCast()
 					playerSess.delayCurrentChannel()
+					playerSess.procDamageAuras(true)
 					playerSess.sendPlayerUpdate()
 				}
 			}
@@ -634,6 +635,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					vicSess.player.Health -= damage
 					vicSess.delayCurrentCast()
 					vicSess.delayCurrentChannel()
+					vicSess.procDamageAuras(true)
 					vicSess.sendPlayerUpdate()
 				}
 			}

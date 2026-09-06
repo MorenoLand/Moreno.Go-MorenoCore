@@ -778,7 +778,6 @@ const (
 	damageSlime              uint8  = 4
 	damageFire               uint8  = 5
 	damageFallToVoid         uint8  = 6
-	auraInterruptFlagLanding uint32 = 0x02000000
 )
 
 // updateFallInformationIfNeed mirrors Player::UpdateFallInformationIfNeed (Player.cpp:25704-25708).
@@ -853,6 +852,7 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 		s.player.Health = 0
 	} else {
 		s.player.Health -= damage
+		s.procDamageAuras(true)
 	}
 
 	packet := protocol.NewBuffer(21)
@@ -993,19 +993,31 @@ func (s *session) getTotalAuraModifier(auraType uint32) int32 {
 // Mirrors Unit::RemoveAurasWithInterruptFlags.
 func (s *session) removeAurasWithInterruptFlags(flags uint32) {
 	var toRemove []uint32
+	seen := make(map[uint32]struct{})
 	s.castMu.Lock()
 	for _, aura := range s.activeAuras {
-		if aura != nil && aura.AuraInterruptFlags&flags != 0 {
-			toRemove = append(toRemove, aura.SpellID)
+		if aura != nil {
+			flg := getSpellAuraInterruptFlags(aura.SpellID, aura.AuraInterruptFlags)
+			if flg&flags != 0 {
+				if _, ok := seen[aura.SpellID]; !ok {
+					seen[aura.SpellID] = struct{}{}
+					toRemove = append(toRemove, aura.SpellID)
+				}
+			}
 		}
 	}
-	if s.server != nil && s.server.Data != nil {
-		for spellID := range s.auras {
-			spell, found, err := s.server.Data.Spell(spellID)
-			if err == nil && found {
-				if spell.AuraInterruptFlags&flags != 0 {
-					toRemove = append(toRemove, spellID)
-				}
+	for spellID := range s.auras {
+		dbcFlags := uint32(0)
+		if s.server != nil && s.server.Data != nil {
+			if spell, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				dbcFlags = spell.AuraInterruptFlags
+			}
+		}
+		flg := getSpellAuraInterruptFlags(spellID, dbcFlags)
+		if flg&flags != 0 {
+			if _, ok := seen[spellID]; !ok {
+				seen[spellID] = struct{}{}
+				toRemove = append(toRemove, spellID)
 			}
 		}
 	}
