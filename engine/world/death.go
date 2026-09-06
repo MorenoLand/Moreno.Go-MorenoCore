@@ -112,6 +112,7 @@ func (s *session) killPlayer(ctx context.Context) {
 	s.deathTimer = time.Now().Add(autoRepopDelay)
 	if s.server != nil {
 		s.server.handleWSGPlayerDeath(s)
+		s.server.handleEOTSPlayerDeath(s)
 	}
 	s.clearActiveAuras()
 	s.clearDiminishings()

@@ -1793,6 +1793,19 @@ func buildInitWorldStates(state playerState) []byte {
 			[2]int32{1791, 1},    // Lumber Mill neutral
 			[2]int32{1796, 1},    // Gold Mine neutral
 		)
+	} else if state.Map == 566 {
+		worldStates = append(worldStates,
+			[2]int32{2749, 0},    // Resources Ally
+			[2]int32{2750, 0},    // Resources Horde
+			[2]int32{2751, 1600}, // Resources Max
+			[2]int32{2752, 0},    // Occupied Bases Ally
+			[2]int32{2753, 0},    // Occupied Bases Horde
+			[2]int32{2757, 1},    // Flag state (1 = center)
+			[2]int32{2724, 1},    // Mage Tower neutral
+			[2]int32{2727, 1},    // Draenei Ruins neutral
+			[2]int32{2730, 1},    // Blood Elf Tower neutral
+			[2]int32{2733, 1},    // Fel Reaver Ruins neutral
+		)
 	}
 	packet := protocol.NewBuffer(16 + len(worldStates)*8)
 	packet.WriteI32(int32(state.Map))

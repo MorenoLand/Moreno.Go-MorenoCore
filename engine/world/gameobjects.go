@@ -319,6 +319,11 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		return s.server.handleABBannerUse(ctx, s, guid, entry)
 	}
 
+	// Delegate Eye of the Storm flags and banners to EotS state machine
+	if s.server != nil && isEOTSGameObject(entry) {
+		return s.server.handleEOTSGameObjectUse(ctx, s, guid, entry)
+	}
+
 	if s.server == nil {
 		return true
 	}
