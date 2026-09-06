@@ -424,8 +424,9 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 	s.lastCombatTime = time.Now()
 
-	// Trigger weapon enchantment procs on hit (TrinityCore Unit::ProcDamageAndSpellFor)
+	// Trigger weapon enchantment and trinket procs on hit (TrinityCore Unit::ProcDamageAndSpellFor)
 	s.procWeaponEnchantments(ctx, target, attType, outcome)
+	s.procItemAndTrinketEffects(ctx, target, attType, outcome)
 
 	if s.server != nil {
 		s.server.triggerPetDefensive(s.playerGUID, target.GUID)
