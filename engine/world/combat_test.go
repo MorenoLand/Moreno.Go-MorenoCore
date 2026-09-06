@@ -1144,7 +1144,7 @@ func TestCreatureClassLevelStatsAndArmorScaling(t *testing.T) {
 func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 1. High level player vs level 1 mob: miss chance is 0
 	for i := 0; i < 200; i++ {
-		outcome, hitInfo, targetState := rollMeleeOutcome(80, 1, true, false, false, false, false)
+		outcome, hitInfo, targetState := rollMeleeOutcome(80, 1, true, false, false, false, false, true)
 		if outcome == protocol.MeleeHitMiss {
 			t.Fatalf("expected 0%% miss chance for level 80 vs 1 mob, got miss")
 		}
@@ -1156,7 +1156,7 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 2. Glancing blow: player vs higher level mob (e.g. 70 vs 73)
 	glancingFound := false
 	for i := 0; i < 1000; i++ {
-		outcome, hitInfo, _ := rollMeleeOutcome(70, 73, true, false, false, false, false)
+		outcome, hitInfo, _ := rollMeleeOutcome(70, 73, true, false, false, false, false, true)
 		if outcome == protocol.MeleeHitGlancing {
 			glancingFound = true
 			if hitInfo&protocol.HitInfoGlancing == 0 {
@@ -1172,7 +1172,7 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 3. Crushing blow: mob 4+ levels higher attacking player (e.g. 74 vs 70)
 	crushingFound := false
 	for i := 0; i < 1000; i++ {
-		outcome, hitInfo, _ := rollMeleeOutcome(74, 70, false, true, false, false, false)
+		outcome, hitInfo, _ := rollMeleeOutcome(74, 70, false, true, false, false, false, true)
 		if outcome == protocol.MeleeHitCrushing {
 			crushingFound = true
 			if hitInfo&protocol.HitInfoCrushing == 0 {
@@ -1188,7 +1188,7 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 4. Block: target can block
 	blockFound := false
 	for i := 0; i < 1000; i++ {
-		outcome, hitInfo, _ := rollMeleeOutcome(70, 70, true, true, false, true, false)
+		outcome, hitInfo, _ := rollMeleeOutcome(70, 70, true, true, false, true, false, true)
 		if outcome == protocol.MeleeHitBlock {
 			blockFound = true
 			if hitInfo&protocol.HitInfoBlock == 0 {
@@ -1204,7 +1204,7 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 5. Parry: target can parry
 	parryFound := false
 	for i := 0; i < 1000; i++ {
-		outcome, _, targetState := rollMeleeOutcome(70, 70, true, true, false, false, true)
+		outcome, _, targetState := rollMeleeOutcome(70, 70, true, true, false, false, true, true)
 		if outcome == protocol.MeleeHitParry {
 			parryFound = true
 			if targetState != protocol.VictimStateParry {
@@ -1220,7 +1220,7 @@ func TestRollMeleeOutcome_Formulas(t *testing.T) {
 	// 6. Crit: crit outcome
 	critFound := false
 	for i := 0; i < 1000; i++ {
-		outcome, hitInfo, _ := rollMeleeOutcome(70, 70, true, true, false, false, false)
+		outcome, hitInfo, _ := rollMeleeOutcome(70, 70, true, true, false, false, false, true)
 		if outcome == protocol.MeleeHitCrit {
 			critFound = true
 			if hitInfo&protocol.HitInfoCriticalHit == 0 {
@@ -1240,11 +1240,11 @@ func TestRollMeleeOutcome_DualWieldPenalty(t *testing.T) {
 	missCountSingle := 0
 	trials := 5000
 	for i := 0; i < trials; i++ {
-		outDW, _, _ := rollMeleeOutcome(80, 80, true, true, true, false, false)
+		outDW, _, _ := rollMeleeOutcome(80, 80, true, true, true, false, false, true)
 		if outDW == protocol.MeleeHitMiss {
 			missCountDW++
 		}
-		outSingle, _, _ := rollMeleeOutcome(80, 80, true, true, false, false, false)
+		outSingle, _, _ := rollMeleeOutcome(80, 80, true, true, false, false, false, true)
 		if outSingle == protocol.MeleeHitMiss {
 			missCountSingle++
 		}

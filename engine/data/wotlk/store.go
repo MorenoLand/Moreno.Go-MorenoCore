@@ -81,6 +81,7 @@ type Spell struct {
 	AttributesEx1    uint32
 	SchoolMask       uint32
 	Targets          uint32
+	FacingCasterFlags uint32 // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
 	CastingTimeIndex uint32
 	RecoveryTime     uint32
 	PowerType        uint32
@@ -415,6 +416,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{4, &spell.Attributes},
 		{225, &spell.SchoolMask}, // Spell.dbc field 225 = SchoolMask (DBCStructure.h:1492)
 		{16, &spell.Targets},
+		{19, &spell.FacingCasterFlags}, // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
 		{28, &spell.CastingTimeIndex},
 		{29, &spell.RecoveryTime},
 		{41, &spell.PowerType},

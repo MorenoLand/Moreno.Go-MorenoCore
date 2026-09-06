@@ -175,6 +175,42 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 					return true
 				}
 			}
+
+			// Positional and facing checks (TrinityCore Spell::CheckCast, Spell.cpp:5200-5300)
+			customAttr := s.server.getSpellCustomAttr(spellID)
+			// 1. Behind target requirement (SPELL_ATTR0_CU_REQ_CASTER_BEHIND_TARGET = 0x20000):
+			// If target has caster in frontal 180° arc, caster is NOT behind target!
+			// Returns SPELL_FAILED_NOT_BEHIND = 57 ("You must be behind your target.").
+			if customAttr&SpellCustomAttrReqCasterBehindTarget != 0 {
+				if hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 57), true) // SPELL_FAILED_NOT_BEHIND = 57
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not behind target")
+					return true
+				}
+			}
+
+			// 2. Target facing caster requirement (SPELL_ATTR0_CU_REQ_TARGET_FACING_CASTER = 0x10000):
+			// Target must have caster in its frontal 180° arc (e.g. Gouge).
+			// Returns SPELL_FAILED_NOT_INFRONT = 58 ("You must be in front of your target.").
+			if customAttr&SpellCustomAttrReqTargetFacingCaster != 0 {
+				if !hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 58), true) // SPELL_FAILED_NOT_INFRONT = 58
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not facing caster")
+					return true
+				}
+			}
+
+			// 3. Caster facing target requirement:
+			// If spell has SPELL_FACING_FLAG_INFRONT (0x1) from Spell.dbc field 19 (or Auto Shot / Shoot Wand):
+			// Target must be within caster's 120° frontal cone (2*pi/3).
+			// Returns SPELL_FAILED_UNIT_NOT_INFRONT = 81 ("Target needs to be in front of you.").
+			if (spell.FacingCasterFlags&SpellFacingFlagInfront != 0) || spellID == 75 || spellID == 5019 {
+				if !hasInArc(s.player.Orientation, s.player.X, s.player.Y, tgt.X, tgt.Y, 2.0*math.Pi/3.0) {
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 81), true) // SPELL_FAILED_UNIT_NOT_INFRONT = 81
+					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not in front")
+					return true
+				}
+			}
 		}
 	}
 

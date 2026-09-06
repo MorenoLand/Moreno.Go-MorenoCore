@@ -31,23 +31,6 @@ func (s *session) getStealthDetectValue() int32 {
 	return s.getTotalAuraModifier(17)
 }
 
-// hasInArc checks if the target position is within the observer's frontal arc.
-// Mirrors TrinityCore Position::HasInArc (Position.cpp:120).
-// An arc of math.Pi corresponds to a 180-degree frontal hemisphere.
-func hasInArc(observerOri, observerX, observerY, targetX, targetY float32, arc float64) bool {
-	dx := float64(targetX - observerX)
-	dy := float64(targetY - observerY)
-	angleToTarget := math.Atan2(dy, dx)
-	diff := angleToTarget - float64(observerOri)
-	for diff > math.Pi {
-		diff -= 2 * math.Pi
-	}
-	for diff < -math.Pi {
-		diff += 2 * math.Pi
-	}
-	halfArc := arc / 2.0
-	return diff >= -halfArc && diff <= halfArc
-}
 
 // canDetectStealthOf determines if the observer player can detect the target stealthed player.
 // Mirrors TrinityCore WorldObject::CanDetectStealthOf (Object.cpp:1719-1790).

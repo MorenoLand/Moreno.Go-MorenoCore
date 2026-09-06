@@ -81,6 +81,9 @@ type Server struct {
 	spellChainMu      sync.RWMutex
 	spellChainLoaded  bool
 	prevSpellInChain  map[uint32]uint32
+	spellCustomAttrMu     sync.RWMutex
+	spellCustomAttrLoaded bool
+	spellCustomAttr       map[uint32]uint32
 }
 
 type session struct {

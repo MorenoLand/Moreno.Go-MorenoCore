@@ -90,7 +90,7 @@ func TestResilience_RollMeleeOutcomeWithResilience(t *testing.T) {
 	// With 500 bp critReductionBP, crit chance should drop to 0%
 	// Running 2000 iterations to verify no crits occur
 	for i := 0; i < 2000; i++ {
-		outcome, _, _ := rollMeleeOutcome(80, 80, true, true, false, false, false, 500)
+		outcome, _, _ := rollMeleeOutcome(80, 80, true, true, false, false, false, true, 500)
 		if outcome == 6 { // protocol.MeleeHitCrit = 6
 			t.Fatalf("unexpected crit with 100%% resilience crit reduction at iteration %d", i)
 		}

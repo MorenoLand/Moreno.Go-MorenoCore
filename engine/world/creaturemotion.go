@@ -624,7 +624,17 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 			canBlock := isPlayerVictim && target.Sess.player.Block > 0
 			canParry := isPlayerVictim && (target.Sess.player.Level >= 10 || target.Sess.player.Level == 0)
-			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, canBlock, canParry)
+			canDodge := true
+			if isPlayerVictim {
+				// Player defender cannot block, parry, or dodge if creature is attacking from behind
+				attackerInFront := hasInArc(target.Sess.player.Orientation, target.Sess.player.X, target.Sess.player.Y, motion.X, motion.Y, math.Pi)
+				if !attackerInFront {
+					canBlock = false
+					canParry = false
+					canDodge = false
+				}
+			}
+			outcome, hitInfo, targetState := rollMeleeOutcome(uint8(motion.Level), targetLevel, false, isPlayerVictim, false, canBlock, canParry, canDodge)
 			blocked := uint32(0)
 
 			switch outcome {
