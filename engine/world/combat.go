@@ -423,6 +423,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	// Trigger weapon enchantment procs on hit (TrinityCore Unit::ProcDamageAndSpellFor)
 	s.procWeaponEnchantments(ctx, target, attType, outcome)
 
+	if s.server != nil {
+		s.server.triggerPetDefensive(s.playerGUID, target.GUID)
+	}
+
 	// If target is an online player (e.g. duel opponent or PvP)
 	if s.server != nil {
 		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil && playerSess.player != nil {
@@ -572,6 +576,7 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, s)
+		s.server.triggerPetDefensive(s.playerGUID, target.GUID)
 	}
 
 	// Outcome: ranged attacks can be dodged or blocked, but cannot be parried (TC rollMeleeOutcome)

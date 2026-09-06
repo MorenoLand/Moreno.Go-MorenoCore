@@ -71,6 +71,11 @@ type creatureMotion struct {
 	ScriptName string
 	Name       string
 
+	OwnerGUID      uint64
+	PetCommand     uint8 // 0: stay, 1: follow, 2: attack
+	PetReact       uint8 // 0: passive, 1: defensive, 2: aggressive
+	AutocastSpells []uint32
+
 	PathID  uint32
 	Points  []waypointPoint
 	NextIdx int
@@ -384,6 +389,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.Moving = false
 		return
 	}
+
+	// Pet AI handling if this creature is a player pet
+	if motion.OwnerGUID != 0 {
+		s.updatePetMotion(ctx, motion, players, now)
+		return
+	}
+
 	// 1. If currently in combat with a target:
 	if motion.InCombat && motion.TargetGUID != 0 {
 		var target *playerPos
@@ -710,6 +722,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, target.Sess)
 			}
 			target.Sess.sendPlayerUpdate()
+			if s != nil {
+				s.triggerPetDefensive(target.GUID, motion.GUID)
+			}
 			motion.LastAttack = now
 		}
 		return

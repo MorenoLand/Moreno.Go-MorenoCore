@@ -847,6 +847,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 		s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{unitFieldHealth: newHealth})
 		s.server.procCreatureDamageAuras(target.GUID, true, damage, target.MaxHealth)
 		s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
+		s.server.triggerPetDefensive(s.playerGUID, targetGUID)
 	}
 }
 
