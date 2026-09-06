@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 
 	protocol "github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -70,6 +71,32 @@ func TestGetEquipmentEnchant_SlotParsing(t *testing.T) {
 	}
 }
 
+func TestGetEquipmentItem_SlotParsing(t *testing.T) {
+	parts := make([]string, 19*2)
+	for i := 0; i < 19*2; i++ {
+		parts[i] = "0"
+	}
+	parts[equipSlotTrinket1*2] = "50362" // DBW Normal
+	parts[equipSlotTrinket2*2] = "50343" // WFS Heroic
+	parts[equipSlotFinger1*2] = "50402"  // Ashen Band Might
+
+	sess := &session{
+		player: &playerState{
+			Equipment: strings.Join(parts, " "),
+		},
+	}
+
+	if sess.getEquipmentItem(equipSlotTrinket1) != 50362 {
+		t.Errorf("expected trinket 1 item 50362, got %d", sess.getEquipmentItem(equipSlotTrinket1))
+	}
+	if sess.getEquipmentItem(equipSlotTrinket2) != 50343 {
+		t.Errorf("expected trinket 2 item 50343, got %d", sess.getEquipmentItem(equipSlotTrinket2))
+	}
+	if sess.getEquipmentItem(equipSlotFinger1) != 50402 {
+		t.Errorf("expected finger 1 item 50402, got %d", sess.getEquipmentItem(equipSlotFinger1))
+	}
+}
+
 func TestProcWeaponEnchantments_TriggerOnHitOnly(t *testing.T) {
 	// Build equipment with 1000 PPM (guaranteed proc) Berserking on main hand
 	parts := make([]string, 19*2)
@@ -113,5 +140,168 @@ func TestProcWeaponEnchantments_TriggerOnHitOnly(t *testing.T) {
 	sess.procWeaponEnchantments(context.Background(), target, protocol.BaseAttack, protocol.MeleeHitNormal)
 	if _, exists := sess.activeAuras[ProcSpellBerserking]; !exists {
 		t.Fatalf("expected Berserking to proc on normal hit with 100%% PPM chance")
+	}
+}
+
+func TestInternalCooldown_EnchantBlackMagic(t *testing.T) {
+	parts := make([]string, 19*2)
+	for i := 0; i < 19*2; i++ {
+		parts[i] = "0"
+	}
+	parts[15*2] = "49623"
+	parts[15*2+1] = fmt.Sprintf("%d", EnchantIDBlackMagic)
+
+	sess := &session{
+		playerGUID: 1,
+		player: &playerState{
+			GUID:       1,
+			Level:      80,
+			Health:     10000,
+			MaxHealth:  10000,
+			AttackTime: 60000, // 100% PPM proc chance
+			Equipment:  strings.Join(parts, " "),
+		},
+		activeAuras: make(map[uint32]*activeAura),
+		procICD:     make(map[uint32]time.Time),
+	}
+
+	target := combatTarget{
+		GUID:   2,
+		Health: 10000,
+	}
+
+	// First hit should proc Black Magic and activate 35s ICD
+	sess.procWeaponEnchantments(context.Background(), target, protocol.BaseAttack, protocol.MeleeHitNormal)
+	if _, exists := sess.activeAuras[ProcSpellBlackMagic]; !exists {
+		t.Fatalf("expected Black Magic to proc on first hit")
+	}
+	if !sess.isProcOnCooldown(ProcSpellBlackMagic) {
+		t.Fatalf("expected Black Magic to be on ICD after proc")
+	}
+	rem := sess.getProcRemainingCooldown(ProcSpellBlackMagic)
+	if rem <= 30*time.Second || rem > 36*time.Second {
+		t.Errorf("expected ~35s remaining ICD, got %v", rem)
+	}
+
+	// Clear active aura to test if it re-procs while on ICD
+	delete(sess.activeAuras, ProcSpellBlackMagic)
+
+	// Second hit while on ICD MUST NOT proc
+	sess.procWeaponEnchantments(context.Background(), target, protocol.BaseAttack, protocol.MeleeHitNormal)
+	if _, exists := sess.activeAuras[ProcSpellBlackMagic]; exists {
+		t.Fatalf("expected Black Magic NOT to proc while on internal cooldown")
+	}
+
+	// Expire the ICD manually
+	sess.procICD[ProcSpellBlackMagic] = time.Now().Add(-1 * time.Second)
+	if sess.isProcOnCooldown(ProcSpellBlackMagic) {
+		t.Fatalf("expected ICD to be expired")
+	}
+
+	// Third hit after ICD expired MUST proc again
+	sess.procWeaponEnchantments(context.Background(), target, protocol.BaseAttack, protocol.MeleeHitNormal)
+	if _, exists := sess.activeAuras[ProcSpellBlackMagic]; !exists {
+		t.Fatalf("expected Black Magic to proc again after ICD expired")
+	}
+}
+
+func TestInternalCooldown_TrinketWFS(t *testing.T) {
+	parts := make([]string, 19*2)
+	for i := 0; i < 19*2; i++ {
+		parts[i] = "0"
+	}
+	parts[equipSlotTrinket1*2] = fmt.Sprintf("%d", ItemWhisperingFangedSkullNorm)
+
+	sess := &session{
+		playerGUID: 1,
+		player: &playerState{
+			GUID:      1,
+			Level:     80,
+			Health:    10000,
+			Equipment: strings.Join(parts, " "),
+		},
+		activeAuras: make(map[uint32]*activeAura),
+		procICD:     make(map[uint32]time.Time),
+	}
+
+	target := combatTarget{
+		GUID:   2,
+		Health: 10000,
+	}
+
+	// Trigger attacks until WFS procs (35% chance)
+	procced := false
+	for attempt := 0; attempt < 50; attempt++ {
+		sess.procItemAndTrinketEffects(context.Background(), target, protocol.BaseAttack, protocol.MeleeHitNormal)
+		if _, exists := sess.activeAuras[ProcSpellWFSNorm]; exists {
+			procced = true
+			break
+		}
+	}
+	if !procced {
+		t.Fatalf("expected WFS to proc within 50 attempts")
+	}
+
+	// Verify 45s ICD is active
+	if !sess.isProcOnCooldown(ProcSpellWFSNorm) {
+		t.Fatalf("expected WFS to be on ICD")
+	}
+
+	// Clear aura and verify it does NOT re-proc while on ICD
+	delete(sess.activeAuras, ProcSpellWFSNorm)
+	for attempt := 0; attempt < 20; attempt++ {
+		sess.procItemAndTrinketEffects(context.Background(), target, protocol.BaseAttack, protocol.MeleeHitNormal)
+	}
+	if _, exists := sess.activeAuras[ProcSpellWFSNorm]; exists {
+		t.Fatalf("expected WFS NOT to proc while on ICD")
+	}
+}
+
+func TestInternalCooldown_CasterSundial(t *testing.T) {
+	parts := make([]string, 19*2)
+	for i := 0; i < 19*2; i++ {
+		parts[i] = "0"
+	}
+	parts[equipSlotTrinket1*2] = fmt.Sprintf("%d", ItemSundialOfTheExiled)
+
+	sess := &session{
+		playerGUID: 1,
+		player: &playerState{
+			GUID:      1,
+			Level:     80,
+			Health:    10000,
+			Equipment: strings.Join(parts, " "),
+		},
+		activeAuras: make(map[uint32]*activeAura),
+		procICD:     make(map[uint32]time.Time),
+	}
+
+	target := combatTarget{
+		GUID:   2,
+		Health: 10000,
+	}
+
+	procced := false
+	for attempt := 0; attempt < 50; attempt++ {
+		sess.procSpellCastAndHitEffects(context.Background(), target, 133)
+		if _, exists := sess.activeAuras[ProcSpellSundialOfTheExiled]; exists {
+			procced = true
+			break
+		}
+	}
+	if !procced {
+		t.Fatalf("expected Sundial of the Exiled to proc within 50 attempts")
+	}
+
+	if !sess.isProcOnCooldown(ProcSpellSundialOfTheExiled) {
+		t.Fatalf("expected Sundial to have 45s ICD")
+	}
+
+	delete(sess.activeAuras, ProcSpellSundialOfTheExiled)
+	for attempt := 0; attempt < 20; attempt++ {
+		sess.procSpellCastAndHitEffects(context.Background(), target, 133)
+	}
+	if _, exists := sess.activeAuras[ProcSpellSundialOfTheExiled]; exists {
+		t.Fatalf("expected Sundial NOT to proc while on ICD")
 	}
 }

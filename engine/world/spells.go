@@ -761,6 +761,9 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
 
+	// Trigger spell cast/hit procs (TrinityCore Unit::ProcDamageAndSpellFor)
+	s.procSpellCastAndHitEffects(ctx, target, spellID)
+
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
 		s.player.UnitFlags |= unitFlagInCombat
