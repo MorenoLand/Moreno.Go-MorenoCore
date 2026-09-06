@@ -505,11 +505,14 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						amount = uint32(15 + int(s.player.Level)*3)
 					}
 				}
-				// Spell power bonus for periodic effects (TrinityCore Unit::SpellDamageBonusDone / SpellHealingBonusDone)
-				if s.player != nil && s.player.SpellPower > 0 && periodMs > 0 {
-					if eff.Aura == 3 || eff.Aura == 89 || eff.Aura == 8 || eff.Aura == 20 {
+				// Spell power bonus for periodic effects and absorption shields (TrinityCore Unit::SpellDamageBonusDone / SpellHealingBonusDone)
+				if s.player != nil && s.player.SpellPower > 0 {
+					if periodMs > 0 && (eff.Aura == 3 || eff.Aura == 89 || eff.Aura == 8 || eff.Aura == 20) {
 						tickBonus := uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
 						amount += tickBonus
+					} else if eff.Aura == SpellAuraSchoolAbsorb || eff.Aura == SpellAuraManaShield || eff.Aura == SpellAuraMagicAbsorb {
+						shieldBonus := uint32(math.Round(float64(s.player.SpellPower) * 0.8068))
+						amount += shieldBonus
 					}
 				}
 				schoolMask := spell.SchoolMask
@@ -704,6 +707,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		resisted, damage = calcMagicSpellResistance(damage, schoolMask, victimRes, s.player.Level, target.Level, s.player.SpellPenetration)
 	}
 
+	absorbed := uint32(0)
 	isPlayerVictim := s.server != nil && s.server.findSessionByGUID(target.GUID) != nil
 	if isPlayerVictim {
 		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
@@ -712,7 +716,12 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 			}
 			isCrit := (hitInfo & 0x02) != 0 // SPELL_HIT_TYPE_CRIT
 			playerSess.applyResilienceToDamage(true, &damage, isCrit, CombatRatingCritTakenSpell)
+			if damage > 0 {
+				absorbed, damage = playerSess.applyAbsorptionShields(damage, schoolMask)
+			}
 		}
+	} else if s.server != nil && damage > 0 {
+		absorbed, damage = s.server.applyCreatureAbsorptionShields(target.GUID, damage, schoolMask)
 	}
 
 	overkill := uint32(0)
@@ -720,7 +729,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		overkill = damage - target.Health
 	}
 
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, 0, resisted, hitInfo), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
 
 	s.lastCombatTime = time.Now()
 	if s.player != nil && s.player.UnitFlags&unitFlagInCombat == 0 {
@@ -735,7 +744,7 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
 				playerSess.player.UnitFlags |= unitFlagInCombat
 			}
-			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, 0, resisted, hitInfo), true)
+			_ = playerSess.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
 			if damage > 0 && damage >= playerSess.player.Health {
 				if s.duelPartner == target.GUID && s.player.DuelTeam != 0 {
 					// Duel defeat: loser drops to 1 HP and duel completes
@@ -1715,13 +1724,17 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 		if dmg < 1 && resisted == 0 {
 			dmg = 1
 		}
+		absorbed := uint32(0)
+		if dmg > 0 {
+			absorbed, dmg = ts.applyAbsorptionShields(dmg, uint8(aura.SchoolMask))
+		}
 		targetHealth := ts.player.Health
 		overkill := uint32(0)
 		if dmg >= targetHealth && targetHealth > 0 {
 			overkill = dmg - targetHealth
 		}
 
-		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, 0, resisted, false)
+		logPkt := protocol.BuildPeriodicAuraLogDamage(aura.TargetGUID, aura.CasterGUID, aura.SpellID, aura.AuraType, dmg, overkill, aura.SchoolMask, absorbed, resisted, false)
 		_ = ts.write(uint16(protocol.OpcodeSMSG_PERIODICAURALOG), logPkt, true)
 		if ts.server != nil {
 			if casterSess := ts.server.findSessionByGUID(aura.CasterGUID); casterSess != nil && casterSess != ts {
@@ -1999,6 +2012,38 @@ func (s *session) expireCreatureAura(creatureGUID uint64, spellID uint32, slot u
 	removePkt := protocol.BuildAuraUpdate(creatureGUID, s.playerGUID, slot, 0, true, false, 0, 0, 1)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, true)
 	s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, s)
+}
+
+func (s *Server) removeCreatureAura(creatureGUID uint64, spellID uint32) {
+	if s == nil || creatureGUID == 0 || spellID == 0 {
+		return
+	}
+	s.auraMu.Lock()
+	var slot uint8
+	if s.activeCreatureAuras != nil {
+		if auras, ok := s.activeCreatureAuras[creatureGUID]; ok {
+			if aura, exists := auras[spellID]; exists && aura != nil {
+				aura.Stopped = true
+				slot = aura.Slot
+				if aura.Timer != nil {
+					aura.Timer.Stop()
+				}
+				if aura.TickTimer != nil {
+					aura.TickTimer.Stop()
+				}
+				delete(auras, spellID)
+			}
+		}
+	}
+	if s.creatureAuras != nil {
+		if auras, ok := s.creatureAuras[creatureGUID]; ok {
+			delete(auras, spellID)
+		}
+	}
+	s.auraMu.Unlock()
+
+	removePkt := protocol.BuildAuraUpdate(creatureGUID, 0, slot, 0, true, false, 0, 0, 1)
+	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_AURA_UPDATE), removePkt, nil)
 }
 
 // handleCancelMountAura processes CMSG_CANCEL_MOUNT_AURA (0x375).

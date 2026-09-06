@@ -350,6 +350,23 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	if isPlayerVictim && s.server != nil {
 		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
 			vicSess.applyResilienceToDamage(true, &damage, outcome == protocol.MeleeHitCrit, CombatRatingCritTakenMelee)
+			if damage > 0 {
+				absorbed, remaining := vicSess.applyAbsorptionShields(damage, 1)
+				damage = remaining
+				if remaining == 0 && absorbed > 0 {
+					hitInfo |= protocol.HitInfoFullAbsorb
+				} else if absorbed > 0 {
+					hitInfo |= protocol.HitInfoPartialAbsorb
+				}
+			}
+		}
+	} else if !isPlayerVictim && s.server != nil && damage > 0 {
+		absorbed, remaining := s.server.applyCreatureAbsorptionShields(target.GUID, damage, 1)
+		damage = remaining
+		if remaining == 0 && absorbed > 0 {
+			hitInfo |= protocol.HitInfoFullAbsorb
+		} else if absorbed > 0 {
+			hitInfo |= protocol.HitInfoPartialAbsorb
 		}
 	}
 
@@ -627,11 +644,20 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		damage = calcArmorReducedDamage(float64(target.Armor), s.player.Level, damage, s.getArmorPenPct())
 	}
 
+	absorbed := uint32(0)
+	if isPlayerVictim && s.server != nil && damage > 0 {
+		if vicSess := s.server.findSessionByGUID(target.GUID); vicSess != nil {
+			absorbed, damage = vicSess.applyAbsorptionShields(damage, schoolMask)
+		}
+	} else if !isPlayerVictim && s.server != nil && damage > 0 {
+		absorbed, damage = s.server.applyCreatureAbsorptionShields(target.GUID, damage, schoolMask)
+	}
+
 	overkill := uint32(0)
 	if damage >= target.Health && target.Health > 0 {
 		overkill = damage - target.Health
 	}
-	logPkt := buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask)
+	logPkt := buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, true)
 	if s.server != nil {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), logPkt, s)
