@@ -81,6 +81,7 @@ type creatureMotion struct {
 	NextIdx int
 
 	Moving    bool
+	Evading   bool
 	MoveEnds  time.Time
 	WaitUntil time.Time
 	Refreshed time.Time
@@ -225,6 +226,9 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		}
 	}
 	if motion != nil && motion.Health > 0 {
+		if motion.Evading {
+			return
+		}
 		if motion.ThreatMgr == nil {
 			motion.ThreatMgr = NewThreatManager(creatureGUID)
 		}
@@ -248,6 +252,77 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 		motion.TargetGUID = motion.ThreatMgr.GetCurrentVictim()
 		motion.InCombat = true
 		motion.Moving = false
+	}
+}
+
+// isCreatureEvading returns true if the creature is currently evading back to spawn.
+// During evade mode, the creature is immune to all attacks, spells, and threat.
+func (s *Server) isCreatureEvading(guid uint64) bool {
+	if s == nil {
+		return false
+	}
+	s.motionMu.Lock()
+	defer s.motionMu.Unlock()
+	if s.creatureMotion == nil {
+		return false
+	}
+	if motion, ok := s.creatureMotion[guid]; ok && motion != nil {
+		return motion.Evading
+	}
+	low := uint32(guid & 0x00FFFFFF)
+	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	stdKey := creatureWorldGUID(low, entry)
+	if motion, ok := s.creatureMotion[stdKey]; ok && motion != nil {
+		return motion.Evading
+	}
+	return false
+}
+
+// triggerCreatureEvade resets a creature's combat state, clears threat & auras,
+// restores health to max, and routes it back to its spawn position with Evading = true.
+// Reference: TrinityCore Creature::EnterEvadeMode (Creature.cpp).
+func (s *Server) triggerCreatureEvade(ctx context.Context, motion *creatureMotion, now time.Time) {
+	if motion == nil {
+		return
+	}
+	if motion.ThreatMgr != nil {
+		motion.ThreatMgr.ClearThreat()
+	}
+	stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
+	s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
+	s.broadcastThreatClear(motion.Map, motion.GUID)
+	if motion.BossAI != nil {
+		motion.BossAI.OnEvade(ctx, s, motion)
+	}
+	motion.InCombat = false
+	motion.TargetGUID = 0
+	motion.Health = motion.MaxHealth
+	if s != nil {
+		s.clearCreatureAuras(motion.GUID)
+		s.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{
+			unitFieldHealth: motion.MaxHealth,
+		})
+	}
+	homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
+	if homeDist > 0.5 {
+		speed := motion.RunSpeed
+		if speed <= 0 {
+			speed = creatureBaseRunSpeed
+		}
+		duration := uint32((homeDist / speed) * 1000)
+		if duration < 500 {
+			duration = 500
+		}
+		s.broadcastMonsterMove(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration)
+		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+		motion.Moving = true
+		motion.Evading = true
+		motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
+		motion.WaitUntil = motion.MoveEnds
+	} else {
+		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+		motion.Moving = false
+		motion.Evading = false
 	}
 }
 
@@ -417,27 +492,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				s.broadcastHighestThreatUpdate(motion.Map, motion.GUID, nextVictim, entries)
 				return
 			}
-			stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
-			if target != nil && target.Sess != nil {
-				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
-				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, target.Sess)
-			} else {
-				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
-			}
-			s.broadcastThreatClear(motion.Map, motion.GUID)
-			if motion.BossAI != nil {
-				motion.BossAI.OnEvade(ctx, s, motion)
-			}
-			motion.InCombat = false
-			motion.TargetGUID = 0
-			motion.Health = motion.MaxHealth
-			if s != nil {
-				s.clearCreatureAuras(motion.GUID)
-				s.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{
-					unitFieldHealth: motion.MaxHealth,
-				})
-			}
-			motion.Moving = false
+			s.triggerCreatureEvade(ctx, motion, now)
 			return
 		}
 		dist := float32(math.Hypot(float64(target.X-motion.X), float64(target.Y-motion.Y)))
@@ -453,36 +508,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				s.broadcastHighestThreatUpdate(motion.Map, motion.GUID, nextVictim, entries)
 				return
 			}
-			stopPkt := buildAttackStop(motion.GUID, motion.TargetGUID, false)
-			if target.Sess != nil {
-				_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, true)
-				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, target.Sess)
-			} else {
-				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_STOP), stopPkt, nil)
-			}
-			s.broadcastThreatClear(motion.Map, motion.GUID)
-			if motion.BossAI != nil {
-				motion.BossAI.OnEvade(ctx, s, motion)
-			}
-			motion.InCombat = false
-			motion.TargetGUID = 0
-			motion.Health = motion.MaxHealth
-			if s != nil {
-				s.clearCreatureAuras(motion.GUID)
-				s.broadcastCreatureValuesUpdate(motion.Map, motion.GUID, map[int]uint32{
-					unitFieldHealth: motion.MaxHealth,
-				})
-			}
-			homeDist := float32(math.Hypot(float64(motion.HomeX-motion.X), float64(motion.HomeY-motion.Y)))
-			duration := uint32((homeDist / motion.RunSpeed) * 1000)
-			if duration < 500 {
-				duration = 500
-			}
-			s.broadcastMonsterMove(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, motion.HomeX, motion.HomeY, motion.HomeZ, duration)
-			motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
-			motion.Moving = true
-			motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
-			motion.WaitUntil = motion.MoveEnds
+			s.triggerCreatureEvade(ctx, motion, now)
 			return
 		}
 
@@ -730,7 +756,20 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		return
 	}
 
-	// 2. Check for nearby hostile aggro
+	// 2. If creature is currently in Evade mode returning home:
+	// maintain attack/spell immunity, ignore aggro, and finish return when reached
+	if motion.Evading {
+		if now.Before(motion.MoveEnds) {
+			return
+		}
+		motion.Evading = false
+		motion.Moving = false
+		motion.X, motion.Y, motion.Z = motion.HomeX, motion.HomeY, motion.HomeZ
+		motion.WaitUntil = motion.MoveEnds
+		return
+	}
+
+	// 3. Check for nearby hostile aggro
 	for _, p := range players {
 		if p.Map != motion.Map || p.IsGM || p.IsDead || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
 			continue
@@ -909,6 +948,7 @@ func (s *Server) stopCreatureMotion(mapID uint32, guid uint64, x, y, z float32) 
 	if s.creatureMotion != nil {
 		if motion, ok := s.creatureMotion[guid]; ok && motion != nil {
 			motion.Moving = false
+			motion.Evading = false
 			motion.InCombat = false
 			motion.TargetGUID = 0
 			if motion.X != 0 || motion.Y != 0 {

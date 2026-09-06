@@ -321,6 +321,10 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 				targetState = protocol.VictimStateIsImmune
 			}
 		}
+	} else if !isPlayerVictim && s.server != nil && s.server.isCreatureEvading(target.GUID) {
+		outcome = protocol.MeleeHitEvade
+		hitInfo = protocol.HitInfoMiss
+		targetState = protocol.VictimStateEvades
 	}
 	if attType == protocol.OffAttack {
 		hitInfo |= protocol.HitInfoOffHand
@@ -461,7 +465,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 	}
 
 	if damage == 0 {
-		if s.server != nil {
+		if s.server != nil && (isPlayerVictim || !s.server.isCreatureEvading(target.GUID)) {
 			s.server.triggerCreatureAggro(ctx, target.GUID, s.playerGUID)
 		}
 		return
@@ -609,6 +613,8 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 				outcome = protocol.MeleeHitImmune
 			}
 		}
+	} else if !isPlayerVictim && s.server != nil && s.server.isCreatureEvading(target.GUID) {
+		outcome = protocol.MeleeHitEvade
 	}
 
 	minDmg := s.player.MinRangedDamage
@@ -742,6 +748,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 		s.onCreatureKilled(ctx, target)
 		s.debug("target slain", "account", s.accountName, "guid", target.GUID)
 	} else {
+		if !isPlayerVictim && s.server != nil && s.server.isCreatureEvading(target.GUID) {
+			return
+		}
 		newHealth := target.Health - damage
 		s.server.motionMu.Lock()
 		motion := s.server.creatureMotion[target.GUID]
