@@ -449,6 +449,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 					} else {
 						playerSess.player.Health = 0
 						playerSess.sendPlayerUpdate()
+						s.server.creditHonorableKill(s, playerSess)
 						playerSess.killPlayer(ctx)
 					}
 					_ = s.sendAttackStop(target.GUID, true)

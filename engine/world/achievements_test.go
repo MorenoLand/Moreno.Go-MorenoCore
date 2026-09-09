@@ -405,3 +405,42 @@ func TestTimedAchievementNoDoubleStart(t *testing.T) {
 		timer.Stop()
 	}
 }
+
+func TestHonorableKillAndBGObjectiveCriteria(t *testing.T) {
+	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100, Race: 1, Class: 1}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+
+	victim := &session{server: state.server, authed: true, playerLoaded: true, playerGUID: 20, player: &playerState{GUID: 20, Level: 10, Race: 2, Class: 8}}
+
+	achievementIndex.mu.Lock()
+	hk := achievementCriteriaEntry{ID: 9700, AchievementID: 5700, Type: criteriaTypeHonorableKill, Asset: 0, Quantity: 1}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeHonorableKill, 0)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeHonorableKill, 0)], hk)
+	achievementIndex.byAchieve[5700] = append(achievementIndex.byAchieve[5700], hk)
+	achievementIndex.achieveByID[5700] = achievementEntry{ID: 5700, Faction: -1}
+	obj := achievementCriteriaEntry{ID: 9800, AchievementID: 5800, Type: criteriaTypeBGObjective, Asset: 3, Quantity: 1}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeBGObjective, 3)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeBGObjective, 3)], obj)
+	achievementIndex.byAchieve[5800] = append(achievementIndex.byAchieve[5800], obj)
+	achievementIndex.achieveByID[5800] = achievementEntry{ID: 5800, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	// Duel kills do not credit honorable kills.
+	state.duelPartner = 20
+	state.server.creditHonorableKill(state, victim)
+	if len(state.criteriaProgress) != 0 {
+		t.Fatal("duel kill credited an honorable kill")
+	}
+	state.duelPartner = 0
+
+	state.server.creditHonorableKill(state, victim)
+	if _, earned := state.earnedAchievements[5700]; !earned {
+		t.Fatal("honorable kill achievement not completed")
+	}
+
+	// BG objective credit goes to the assaulting session by GUID.
+	state.server.sessions = map[*session]struct{}{state: {}}
+	state.server.creditBGObjectiveCapture(9, 3)
+	if _, earned := state.earnedAchievements[5800]; !earned {
+		t.Fatal("BG objective achievement not completed")
+	}
+}

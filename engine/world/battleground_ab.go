@@ -106,6 +106,7 @@ type abNodeState struct {
 	NodeID       uint32
 	State        uint32
 	PrevState    uint32 // Prior controlled state for defending return
+	AssaultedBy  uint64 // player GUID credited with the objective capture
 	CaptureTimer *time.Timer
 	BannerGUID   uint64
 	BannerEntry  uint32
@@ -238,6 +239,7 @@ func (s *Server) handleABBannerUse(ctx context.Context, sess *session, guid uint
 	}
 
 	node := &ab.Nodes[nodeID]
+	node.AssaultedBy = sess.playerGUID
 
 	// Range check (10.0 yards standard interaction distance)
 	if distance3D(sess.player.X, sess.player.Y, sess.player.Z, node.X, node.Y, node.Z) > 10.0 {
@@ -380,6 +382,7 @@ func (s *Server) completeABNodeCapture(mapID, nodeID uint32, team uint32) {
 		node.State = ABNodeStateControlledAlliance
 		node.PrevState = ABNodeStateControlledAlliance
 		ab.AllianceBasesCount++
+		s.creditBGObjectiveCapture(node.AssaultedBy, nodeID)
 		ab.AllianceAccumMs = 0
 		s.broadcastWorldState(ab.MapID, ABWorldStateBasesAlliance, ab.AllianceBasesCount)
 		s.updateABNodeBanner(ab, nodeID)
@@ -389,6 +392,7 @@ func (s *Server) completeABNodeCapture(mapID, nodeID uint32, team uint32) {
 		node.State = ABNodeStateControlledHorde
 		node.PrevState = ABNodeStateControlledHorde
 		ab.HordeBasesCount++
+		s.creditBGObjectiveCapture(node.AssaultedBy, nodeID)
 		ab.HordeAccumMs = 0
 		s.broadcastWorldState(ab.MapID, ABWorldStateBasesHorde, ab.HordeBasesCount)
 		s.updateABNodeBanner(ab, nodeID)

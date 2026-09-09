@@ -308,6 +308,7 @@ func (s *Server) handleEOTSGameObjectUse(ctx context.Context, sess *session, gui
 }
 
 func (s *Server) captureEOTSFlag(eots *eotsBattlegroundState, sess *session, team uint32) {
+	s.creditBGObjectiveCapture(sess.playerGUID, 0xFFFFFFFF) // flag capture objective
 	sess.removeAura(EOTSSpellNetherstormFlag)
 	eots.FlagCarrierGUID = 0
 	eots.FlagState = EOTSFlagStateAtCenter

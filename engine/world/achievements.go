@@ -53,6 +53,10 @@ const (
 	criteriaTypeMoneyFromVendor  = 59 // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_VENDORS
 	criteriaTypeMoneyFromQuest   = 62 // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_QUEST_REWARD
 	criteriaTypeGoldSpentForMail = 66 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_MAIL
+	criteriaTypeBGObjective      = 30 // ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE
+	criteriaTypeHonorableKill    = 35 // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL
+	criteriaTypeHKClass          = 52 // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS
+	criteriaTypeHKRace           = 53 // ACHIEVEMENT_CRITERIA_TYPE_HK_RACE
 )
 
 type achievementEntry struct {
@@ -594,4 +598,41 @@ func achievementCriteriaCount() int {
 	achievementIndex.mu.RLock()
 	defer achievementIndex.mu.RUnlock()
 	return len(achievementIndex.byID)
+}
+
+// creditBGObjectiveCapture mirrors the reference BG_OBJECTIVE_CAPTURE
+// achievement credit (AchievementMgr::UpdateAchievementCriteria with
+// ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE): the player whose assault
+// completed the objective gains progress for that objective id.
+func (s *Server) creditBGObjectiveCapture(playerGUID uint64, objectiveID uint32) {
+	if playerGUID == 0 {
+		return
+	}
+	sess := s.findSessionByGUID(playerGUID)
+	if sess == nil || sess.player == nil {
+		return
+	}
+	sess.updateAchievementCriteria(criteriaTypeBGObjective, objectiveID, 1)
+}
+
+// creditHonorableKill mirrors the reference honorable-kill achievement chain
+// (Unit::Kill -> UpdateAchievementCriteria HONORABLE_KILL, HK_CLASS, HK_RACE):
+// the killer gains one honorable kill plus per-class and per-race credit for
+// the victim. Duel kills are excluded, matching the reference honor rules.
+func (s *Server) creditHonorableKill(killer, victim *session) {
+	if killer == nil || victim == nil || killer == victim {
+		return
+	}
+	if killer.player == nil || victim.player == nil {
+		return
+	}
+	if killer.duelPartner != 0 && killer.duelPartner == victim.playerGUID {
+		return // duels are not honorable kills
+	}
+	if victim.player.Race == 0 || victim.player.Class == 0 {
+		return
+	}
+	killer.updateAchievementCriteria(criteriaTypeHonorableKill, 0, 1)
+	killer.updateAchievementCriteria(criteriaTypeHKClass, uint32(victim.player.Class), 1)
+	killer.updateAchievementCriteria(criteriaTypeHKRace, uint32(victim.player.Race), 1)
 }
