@@ -1713,9 +1713,9 @@ func TestAutoShot_RangeAndAmmoValidation(t *testing.T) {
 
 	// 1. Cast Auto Shot (75) while in melee range (3 yards) -> SPELL_FAILED_TOO_CLOSE (128)
 	payload := protocol.NewBuffer(32)
-	payload.WriteU8(1) // castID
+	payload.WriteU8(1)   // castID
 	payload.WriteU32(75) // spellID Auto Shot
-	payload.WriteU8(0) // castFlags
+	payload.WriteU8(0)   // castFlags
 	protocol.WriteSpellTargetData(payload, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID})
 
 	sess.player.AmmoID = 2512 // Has ammo
@@ -1878,7 +1878,3 @@ func TestAutoShot_ExecutionAndAmmoConsumption(t *testing.T) {
 		t.Fatalf("expected remaining ammo count 9, got %d", remainingCount)
 	}
 }
-
-
-
-

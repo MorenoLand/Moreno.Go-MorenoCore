@@ -268,7 +268,7 @@ func TestRequestRaidInfoAndExtend(t *testing.T) {
 		"CREATE TABLE instance (id INTEGER PRIMARY KEY, map INTEGER, resettime INTEGER, difficulty INTEGER, completedEncounters INTEGER, data TEXT)",
 		"CREATE TABLE character_instance (guid INTEGER, instance INTEGER, permanent INTEGER, extendState INTEGER, PRIMARY KEY (guid, instance))",
 		"INSERT INTO instance VALUES (10, 534, 2000000000, 1, 0, '')", // Map 534 (Hyjal), 25-man
-		"INSERT INTO character_instance VALUES (1, 10, 1, 0)",          // bound to player 1
+		"INSERT INTO character_instance VALUES (1, 10, 1, 0)",         // bound to player 1
 	} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -699,4 +699,3 @@ func TestRaidReadyCheck_InitiateAndRespond(t *testing.T) {
 		t.Fatal("expected Bob to receive MSG_RAID_READY_CHECK_FINISHED")
 	}
 }
-

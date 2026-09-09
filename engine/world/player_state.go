@@ -133,97 +133,97 @@ type playerSkill struct {
 }
 
 type playerState struct {
-	GUID             uint64
-	PetGUID          uint64
-	Name             string
-	Race             uint8
-	Class            uint8
-	Gender           uint8
-	Skin             uint8
-	Face             uint8
-	HairStyle        uint8
-	HairColor        uint8
-	FacialStyle      uint8
-	BankBagSlots     uint8
-	Level            uint8
-	XP               uint32
-	Money            uint32
-	PlayerFlags      uint32
-	GuildID          uint32
-	GuildRank        uint8
-	Map              uint32
-	X                float32
-	Y                float32
-	Z                float32
-	Orientation      float32
-	LfgEntryPointMap uint32
-	LfgEntryPointX   float32
-	LfgEntryPointY   float32
-	LfgEntryPointZ   float32
-	LfgEntryPointO   float32
-	ExtraFlags       uint32
-	AtLogin          uint32
-	Zone             uint32
-	Health           uint32
-	MaxHealth        uint32
-	BaseMana         uint32
-	Powers           [7]uint32
-	MaxPowers        [7]uint32
-	Cinematic        uint32
-	Movie            uint32
-	KnownCurrency    uint32
-	WatchedFaction   uint32
-	AmmoID           uint32
-	ChosenTitle      uint32
-	KnownTitles      [6]uint32
-	ActionBars       uint32
-	PassOnGroupLoot  bool
-	Skills           []playerSkill
-	Spells           []learnedSpell
-	Actions          [144]uint32
-	Cooldowns        []spellCooldown
-	Equipment        string
-	SheathState      uint8
-	TaxiMask         [taxiMaskSize]uint32
-	QuestLog         [playerQuestLogSlots]questLogEntry
-	MountDisplayID   uint32
-	StandState       uint8
-	TotemSlots       [4]uint64
-	PlayerFieldBytes uint32
-	SelfResSpell     uint32
-	DuelArbiter      uint64
-	DuelTeam         uint32
-	UnitFlags        uint32
-	HomebindMap      uint32
-	HomebindZone     uint32
-	HomebindX        float32
-	HomebindY        float32
-	HomebindZ        float32
-	Reputations       []playerReputation
-	Talents           map[uint32]uint8
-	TalentGroupsCount uint8
-	ActiveTalentGroup uint8
-	Glyphs            [2][6]uint16
-	Stats             [5]uint32
-	Armor             uint32
-	Resistances       [7]uint32
-	Block             uint32
-	AttackPower       uint32
-	RangedAttackPower uint32
-	MinDamage         float32
-	MaxDamage         float32
-	AttackTime        uint32
-	MinOffhandDamage  float32
-	MaxOffhandDamage  float32
-	OffhandAttackTime uint32
-	MinRangedDamage   float32
-	MaxRangedDamage   float32
-	RangedAttackTime  uint32
-	CombatRatings     [25]uint32
-	SpellPower        uint32
-	SpellPenetration  uint32
-	CombatReach       float32
-	AmmoDPS           float32
+	GUID                 uint64
+	PetGUID              uint64
+	Name                 string
+	Race                 uint8
+	Class                uint8
+	Gender               uint8
+	Skin                 uint8
+	Face                 uint8
+	HairStyle            uint8
+	HairColor            uint8
+	FacialStyle          uint8
+	BankBagSlots         uint8
+	Level                uint8
+	XP                   uint32
+	Money                uint32
+	PlayerFlags          uint32
+	GuildID              uint32
+	GuildRank            uint8
+	Map                  uint32
+	X                    float32
+	Y                    float32
+	Z                    float32
+	Orientation          float32
+	LfgEntryPointMap     uint32
+	LfgEntryPointX       float32
+	LfgEntryPointY       float32
+	LfgEntryPointZ       float32
+	LfgEntryPointO       float32
+	ExtraFlags           uint32
+	AtLogin              uint32
+	Zone                 uint32
+	Health               uint32
+	MaxHealth            uint32
+	BaseMana             uint32
+	Powers               [7]uint32
+	MaxPowers            [7]uint32
+	Cinematic            uint32
+	Movie                uint32
+	KnownCurrency        uint32
+	WatchedFaction       uint32
+	AmmoID               uint32
+	ChosenTitle          uint32
+	KnownTitles          [6]uint32
+	ActionBars           uint32
+	PassOnGroupLoot      bool
+	Skills               []playerSkill
+	Spells               []learnedSpell
+	Actions              [144]uint32
+	Cooldowns            []spellCooldown
+	Equipment            string
+	SheathState          uint8
+	TaxiMask             [taxiMaskSize]uint32
+	QuestLog             [playerQuestLogSlots]questLogEntry
+	MountDisplayID       uint32
+	StandState           uint8
+	TotemSlots           [4]uint64
+	PlayerFieldBytes     uint32
+	SelfResSpell         uint32
+	DuelArbiter          uint64
+	DuelTeam             uint32
+	UnitFlags            uint32
+	HomebindMap          uint32
+	HomebindZone         uint32
+	HomebindX            float32
+	HomebindY            float32
+	HomebindZ            float32
+	Reputations          []playerReputation
+	Talents              map[uint32]uint8
+	TalentGroupsCount    uint8
+	ActiveTalentGroup    uint8
+	Glyphs               [2][6]uint16
+	Stats                [5]uint32
+	Armor                uint32
+	Resistances          [7]uint32
+	Block                uint32
+	AttackPower          uint32
+	RangedAttackPower    uint32
+	MinDamage            float32
+	MaxDamage            float32
+	AttackTime           uint32
+	MinOffhandDamage     float32
+	MaxOffhandDamage     float32
+	OffhandAttackTime    uint32
+	MinRangedDamage      float32
+	MaxRangedDamage      float32
+	RangedAttackTime     uint32
+	CombatRatings        [25]uint32
+	SpellPower           uint32
+	SpellPenetration     uint32
+	CombatReach          float32
+	AmmoDPS              float32
 	DungeonDifficulty    uint8
 	RaidDifficulty       uint8
 	VehicleGUID          uint64
@@ -584,11 +584,11 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	var baseAP int32
 	switch state.Class {
 	case 1, 2, 6: // Warrior, Paladin, Death Knight
-		baseAP = int32(totalStr*2 + uint32(lvl)*3) - 20
+		baseAP = int32(totalStr*2+uint32(lvl)*3) - 20
 	case 3, 4: // Hunter, Rogue
-		baseAP = int32(totalStr + totalAgi + uint32(lvl)*2) - 20
+		baseAP = int32(totalStr+totalAgi+uint32(lvl)*2) - 20
 	case 7, 11: // Shaman, Druid
-		baseAP = int32(totalStr*2 + uint32(lvl)*2) - 20
+		baseAP = int32(totalStr*2+uint32(lvl)*2) - 20
 	default:
 		baseAP = int32(totalStr) - 10
 	}
@@ -599,9 +599,9 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 
 	var baseRAP int32
 	if state.Class == 3 { // Hunter
-		baseRAP = int32(uint32(lvl)*2 + totalAgi*2) - 10
+		baseRAP = int32(uint32(lvl)*2+totalAgi*2) - 10
 	} else if state.Class == 4 || state.Class == 1 { // Rogue, Warrior
-		baseRAP = int32(uint32(lvl) + totalAgi) - 10
+		baseRAP = int32(uint32(lvl)+totalAgi) - 10
 	}
 	if baseRAP < 0 {
 		baseRAP = 0
@@ -1464,6 +1464,7 @@ func (s *session) sendItemCreate(itemGUID uint64, itemEntry, count uint32, bag, 
 	if err != nil {
 		return err
 	}
+	s.updateAchievementCriteria(criteriaTypeOwnItem, itemEntry, count)
 	return s.write(packet.Opcode, packet.Payload.Bytes(), true)
 }
 

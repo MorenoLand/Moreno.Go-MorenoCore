@@ -407,6 +407,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if isChanneledSpell(spell) {
 		s.startChannel(castID, spellID, spell, targetGUID)
 	}
+	s.updateAchievementCriteria(criteriaTypeCastSpell, spellID, 1)
 	if spell.RecoveryTime > 0 {
 		nowUnix := time.Now().Unix()
 		cooldownEnd := nowUnix + int64((spell.RecoveryTime+999)/1000)
@@ -1070,13 +1071,13 @@ func buildSpellNonMeleeDamageLog(targetGUID, attackerGUID uint64, spellID, damag
 	buf.WriteU32(damage)
 	buf.WriteU32(overkill)
 	buf.WriteU8(schoolMask)
-	buf.WriteU32(absorb) // Absorbed
-	buf.WriteU32(resist) // Resist
-	buf.WriteU8(0)       // periodicLog (0 = show spell name prefix)
-	buf.WriteU8(0)       // unused
+	buf.WriteU32(absorb)  // Absorbed
+	buf.WriteU32(resist)  // Resist
+	buf.WriteU8(0)        // periodicLog (0 = show spell name prefix)
+	buf.WriteU8(0)        // unused
 	buf.WriteU32(0)       // blocked
 	buf.WriteU32(hitInfo) // HitInfo flags (0 = normal hit, 2 = SPELL_HIT_TYPE_CRIT)
-	buf.WriteU8(0)       // HitInfo & debugMask (always 0, no crit/hit debug)
+	buf.WriteU8(0)        // HitInfo & debugMask (always 0, no crit/hit debug)
 	return buf.Bytes()
 }
 

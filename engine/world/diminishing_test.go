@@ -17,42 +17,42 @@ func TestDiminishing_GroupResolution(t *testing.T) {
 		expected DiminishingGroup
 	}{
 		{33786, 0, DiminishingCyclone},
-		{1833, 0, DiminishingOpeningStun},    // Cheap Shot
-		{9005, 0, DiminishingOpeningStun},    // Pounce
-		{408, 0, DiminishingControlledStun},  // Kidney Shot
-		{853, 0, DiminishingControlledStun},  // Hammer of Justice
-		{5211, 0, DiminishingControlledStun}, // Bash
+		{1833, 0, DiminishingOpeningStun},     // Cheap Shot
+		{9005, 0, DiminishingOpeningStun},     // Pounce
+		{408, 0, DiminishingControlledStun},   // Kidney Shot
+		{853, 0, DiminishingControlledStun},   // Hammer of Justice
+		{5211, 0, DiminishingControlledStun},  // Bash
 		{44572, 0, DiminishingControlledStun}, // Deep Freeze
-		{100, 0, DiminishingCharge},          // Charge
-		{5782, 0, DiminishingFear},           // Fear
-		{2094, 0, DiminishingFear},           // Blind
-		{8122, 0, DiminishingFear},           // Psychic Scream
-		{6789, 0, DiminishingHorror},         // Death Coil
-		{118, 0, DiminishingDisorient},       // Polymorph
-		{6770, 0, DiminishingDisorient},      // Sap
-		{1776, 0, DiminishingDisorient},      // Gouge
-		{122, 0, DiminishingControlledRoot},  // Frost Nova
-		{339, 0, DiminishingControlledRoot},  // Entangling Roots
-		{15487, 0, DiminishingSilence},       // Silence
-		{47476, 0, DiminishingSilence},       // Strangulate
-		{676, 0, DiminishingDisarm},          // Disarm
-		{605, 0, DiminishingMindControl},     // Mind Control
-		{710, 0, DiminishingBanish},          // Banish
-		{355, 0, DiminishingTaunt},           // Taunt
-		{1715, 0, DiminishingLimitOnly},      // Hamstring
-		{31661, 0, DiminishingDragonsBreath}, // Dragon's Breath
-		{19503, 0, DiminishingScatterShot},   // Scatter Shot
-		{0, 1, DiminishingMindControl},       // MECHANIC_CHARM
-		{0, 2, DiminishingDisorient},         // MECHANIC_DISORIENTED
-		{0, 3, DiminishingDisarm},            // MECHANIC_DISARM
-		{0, 5, DiminishingFear},              // MECHANIC_FEAR
-		{0, 7, DiminishingControlledRoot},    // MECHANIC_ROOT
-		{0, 9, DiminishingSilence},           // MECHANIC_SILENCE
-		{0, 10, DiminishingSleep},            // MECHANIC_SLEEP
-		{0, 11, DiminishingLimitOnly},        // MECHANIC_SNARE
-		{0, 12, DiminishingControlledStun},   // MECHANIC_STUN
-		{0, 18, DiminishingBanish},           // MECHANIC_BANISH
-		{0, 24, DiminishingHorror},           // MECHANIC_HORROR
+		{100, 0, DiminishingCharge},           // Charge
+		{5782, 0, DiminishingFear},            // Fear
+		{2094, 0, DiminishingFear},            // Blind
+		{8122, 0, DiminishingFear},            // Psychic Scream
+		{6789, 0, DiminishingHorror},          // Death Coil
+		{118, 0, DiminishingDisorient},        // Polymorph
+		{6770, 0, DiminishingDisorient},       // Sap
+		{1776, 0, DiminishingDisorient},       // Gouge
+		{122, 0, DiminishingControlledRoot},   // Frost Nova
+		{339, 0, DiminishingControlledRoot},   // Entangling Roots
+		{15487, 0, DiminishingSilence},        // Silence
+		{47476, 0, DiminishingSilence},        // Strangulate
+		{676, 0, DiminishingDisarm},           // Disarm
+		{605, 0, DiminishingMindControl},      // Mind Control
+		{710, 0, DiminishingBanish},           // Banish
+		{355, 0, DiminishingTaunt},            // Taunt
+		{1715, 0, DiminishingLimitOnly},       // Hamstring
+		{31661, 0, DiminishingDragonsBreath},  // Dragon's Breath
+		{19503, 0, DiminishingScatterShot},    // Scatter Shot
+		{0, 1, DiminishingMindControl},        // MECHANIC_CHARM
+		{0, 2, DiminishingDisorient},          // MECHANIC_DISORIENTED
+		{0, 3, DiminishingDisarm},             // MECHANIC_DISARM
+		{0, 5, DiminishingFear},               // MECHANIC_FEAR
+		{0, 7, DiminishingControlledRoot},     // MECHANIC_ROOT
+		{0, 9, DiminishingSilence},            // MECHANIC_SILENCE
+		{0, 10, DiminishingSleep},             // MECHANIC_SLEEP
+		{0, 11, DiminishingLimitOnly},         // MECHANIC_SNARE
+		{0, 12, DiminishingControlledStun},    // MECHANIC_STUN
+		{0, 18, DiminishingBanish},            // MECHANIC_BANISH
+		{0, 24, DiminishingHorror},            // MECHANIC_HORROR
 	}
 
 	for _, c := range cases {
@@ -247,8 +247,8 @@ func TestDiminishing_AuraApplicationAndImmunePacket(t *testing.T) {
 		t.Fatalf("expected SMSG_CAST_FAILED, got 0x%04X", op)
 	}
 	r := protocol.NewReader(data)
-	_, _ = r.ReadU8()          // castID
-	spID, _ := r.ReadU32()     // spellID
+	_, _ = r.ReadU8()           // castID
+	spID, _ := r.ReadU32()      // spellID
 	failReason, _ := r.ReadU8() // result
 	if spID != 5782 {
 		t.Fatalf("expected spell 5782, got %d", spID)

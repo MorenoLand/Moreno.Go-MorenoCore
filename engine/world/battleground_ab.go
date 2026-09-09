@@ -192,11 +192,11 @@ func (s *Server) getOrCreateABState(mapID uint32) *abBattlegroundState {
 		}
 		// Initialize the 5 nodes in neutral state
 		nodeCoords := [ABNodeMax][3]float32{
-			{1166.7, 1200.1, -56.7},  // Stables
-			{977.0, 1046.6, -44.8},   // Blacksmith
-			{806.2, 874.3, -55.5},    // Farm
-			{775.7, 1206.4, 15.7},    // Lumber Mill
-			{1147.0, 843.5, -110.9},  // Gold Mine
+			{1166.7, 1200.1, -56.7}, // Stables
+			{977.0, 1046.6, -44.8},  // Blacksmith
+			{806.2, 874.3, -55.5},   // Farm
+			{775.7, 1206.4, 15.7},   // Lumber Mill
+			{1147.0, 843.5, -110.9}, // Gold Mine
 		}
 		for i := uint32(0); i < ABNodeMax; i++ {
 			state.Nodes[i] = abNodeState{

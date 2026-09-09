@@ -110,6 +110,7 @@ func (s *session) killPlayer(ctx context.Context) {
 		s.player.PlayerFieldBytes |= playerFieldByteReleaseTimer
 	}
 	s.deathTimer = time.Now().Add(autoRepopDelay)
+	s.updateAchievementCriteria(criteriaTypeDeath, 0, 1)
 	if s.server != nil {
 		s.server.handleWSGPlayerDeath(s)
 		s.server.handleEOTSPlayerDeath(s)
@@ -177,7 +178,7 @@ func buildCorpseCreateBlock(corpseGUID, ownerGUID uint64, displayID uint32, posX
 	block := protocol.NewBuffer(128)
 	block.WriteU8(protocol.UpdateCreateObject2)
 	block.WritePackedGUID(corpseGUID)
-	block.WriteU8(7)      // TYPEID_CORPSE
+	block.WriteU8(7)       // TYPEID_CORPSE
 	block.WriteU16(0x0050) // UPDATEFLAG_STATIONARY_POSITION (0x0040) | UPDATEFLAG_LOWGUID (0x0010)
 	block.WriteU32(uint32(corpseGUID & 0xFFFFFFFF))
 	block.WriteF32(posX)

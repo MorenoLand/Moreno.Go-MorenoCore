@@ -317,9 +317,9 @@ func TestWardenFullHandshakeAndChecks(t *testing.T) {
 	// 9. Client constructs valid WARDEN_CMSG_CHEAT_CHECKS_RESULT
 	// Timing check result (1) + client ticks (uint32) + MemCheck result (0) + expected bytes (3 bytes: 0x11, 0x22, 0x33)
 	buf := protocol.NewBuffer(32)
-	buf.WriteU8(1)                   // timing result
-	buf.WriteU32(12345)               // client ticks
-	buf.WriteU8(0)                   // mem check result (0 = ok)
+	buf.WriteU8(1)                      // timing result
+	buf.WriteU32(12345)                 // client ticks
+	buf.WriteU8(0)                      // mem check result (0 = ok)
 	buf.Write([]byte{0x11, 0x22, 0x33}) // mem check bytes
 
 	unencryptedData := buf.Bytes()

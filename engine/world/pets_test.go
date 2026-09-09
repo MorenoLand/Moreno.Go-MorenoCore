@@ -177,16 +177,16 @@ func TestRequestPetInfoWithActivePet(t *testing.T) {
 
 	// 10 action bar slots
 	expectedSlots := []uint32{
-		0x07000002,             // Attack
-		0x07000001,             // Follow
-		0x07000000,             // Stay
-		16827 | (0xC1 << 24),   // Spell 16827 (autocast)
-		17253 | (0x81 << 24),   // Spell 17253 (manual)
-		0,                      // Empty
-		0,                      // Empty
-		0x06000002,             // Aggressive
-		0x06000001,             // Defensive
-		0x06000000,             // Passive
+		0x07000002,           // Attack
+		0x07000001,           // Follow
+		0x07000000,           // Stay
+		16827 | (0xC1 << 24), // Spell 16827 (autocast)
+		17253 | (0x81 << 24), // Spell 17253 (manual)
+		0,                    // Empty
+		0,                    // Empty
+		0x06000002,           // Aggressive
+		0x06000001,           // Defensive
+		0x06000000,           // Passive
 	}
 
 	for i, exp := range expectedSlots {
@@ -404,7 +404,7 @@ func TestPetSpellAutocastAndActionBarSync(t *testing.T) {
 	// 2. Modify action bar via handlePetSetAction: turn off autocast on slot 3 (0x81000000 | 16827)
 	setBuf := protocol.NewBuffer(16)
 	setBuf.WriteU64(petGUID)
-	setBuf.WriteU32(3)                               // slot 3
+	setBuf.WriteU32(3)                                // slot 3
 	setBuf.WriteU32(uint32(0x81<<24) | uint32(16827)) // ACT_DISABLED | 16827
 	if !sess.handlePetSetAction(ctx, setBuf.Bytes()) {
 		t.Fatal("handlePetSetAction failed")
@@ -432,9 +432,9 @@ func TestPetCastSpellAndActionSpellGo(t *testing.T) {
 	// 1. Test handlePetCastSpell emits SMSG_SPELL_GO
 	castBuf := protocol.NewBuffer(32)
 	castBuf.WriteU64(petGUID)
-	castBuf.WriteU8(1)     // castCount
+	castBuf.WriteU8(1)      // castCount
 	castBuf.WriteU32(16827) // Claw
-	castBuf.WriteU8(0)     // castFlags
+	castBuf.WriteU8(0)      // castFlags
 	// Write SpellTargetData with targetGUID
 	targetData := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID}
 	protocol.WriteSpellTargetData(castBuf, targetData)
@@ -1114,7 +1114,3 @@ func TestPet_TalentsLearnAndPreview(t *testing.T) {
 		t.Errorf("expected rank 1 in pet_spell and rank 0 removed (r0=%d, r1=%d)", hasRank0, hasRank1)
 	}
 }
-
-
-
-

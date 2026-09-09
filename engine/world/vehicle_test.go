@@ -24,11 +24,11 @@ func setupTestVehicleServer() (*Server, *session, *session) {
 		playerLoaded: true,
 		playerGUID:   1001,
 		player: &playerState{
-			GUID: 1001,
-			Map:  0,
-			X:    100.0,
-			Y:    100.0,
-			Z:    10.0,
+			GUID:        1001,
+			Map:         0,
+			X:           100.0,
+			Y:           100.0,
+			Z:           10.0,
 			Orientation: 0.0,
 		},
 	}
@@ -39,11 +39,11 @@ func setupTestVehicleServer() (*Server, *session, *session) {
 		playerLoaded: true,
 		playerGUID:   2002,
 		player: &playerState{
-			GUID: 2002,
-			Map:  0,
-			X:    100.0,
-			Y:    100.0,
-			Z:    10.0,
+			GUID:        2002,
+			Map:         0,
+			X:           100.0,
+			Y:           100.0,
+			Z:           10.0,
 			Orientation: 0.0,
 		},
 	}

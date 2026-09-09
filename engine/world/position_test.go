@@ -212,9 +212,9 @@ func TestSpellCast_BackstabBehindRequirement(t *testing.T) {
 	sess.player.Orientation = float32(math.Pi) // facing target
 
 	castPkt := protocol.NewBuffer(32)
-	castPkt.WriteU8(1)         // castCount
-	castPkt.WriteU32(53)       // spellID = Backstab
-	castPkt.WriteU8(0)         // castFlags
+	castPkt.WriteU8(1)   // castCount
+	castPkt.WriteU32(53) // spellID = Backstab
+	castPkt.WriteU8(0)   // castFlags
 	protocol.WriteSpellTargetData(castPkt, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID})
 
 	sess.handleCastSpell(ctx, castPkt.Bytes())
@@ -443,4 +443,3 @@ func TestSpellCast_TargetNotInFrontRequirement(t *testing.T) {
 		t.Fatalf("expected SMSG_SPELL_START or SMSG_SPELL_GO on valid Frostbolt cast, got opcode 0x%04X", pkt.op)
 	}
 }
-

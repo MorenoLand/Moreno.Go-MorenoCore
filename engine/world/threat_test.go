@@ -209,4 +209,3 @@ func TestThreat_DistributeHealingThreat(t *testing.T) {
 		t.Fatalf("expected healer to have unitFlagInCombat set")
 	}
 }
-

@@ -481,6 +481,7 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 		}
 	} else {
 		s.player.Money += copper
+		s.updateAchievementCriteria(criteriaTypeLootMoney, 0, copper)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 		}
@@ -561,6 +562,7 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		}
 		return true
 	}
+	s.updateAchievementCriteria(criteriaTypeLootItem, it.ItemEntry, it.Count)
 	delete(s.activeLoot.Items, lootSlot)
 	s.activeLoot.broadcastRemoved(lootSlot)
 	_ = s.sendInventoryItems(ctx)

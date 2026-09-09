@@ -126,6 +126,9 @@ func (s *session) giveReputation(ctx context.Context, factionID uint32, amount i
 		if s.player.Reputations[i].FactionID == factionID {
 			s.player.Reputations[i].Standing += amount
 			_, _ = cdb.ExecContext(ctx, "UPDATE character_reputation SET standing = ? WHERE guid = ? AND faction = ?", s.player.Reputations[i].Standing, s.playerGUID, factionID)
+			if s.player.Reputations[i].Standing > 0 {
+				s.setAchievementCriteria(criteriaTypeGainReputation, factionID, uint32(s.player.Reputations[i].Standing))
+			}
 			return
 		}
 	}

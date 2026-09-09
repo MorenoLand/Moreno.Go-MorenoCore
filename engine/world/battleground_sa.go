@@ -44,12 +44,12 @@ const (
 	SAMaxGates          = 6
 
 	// Graveyards (0..4)
-	SABeachGY               uint8 = 0
-	SADefenderLastGY        uint8 = 1
-	SARightCapturableGY     uint8 = 2
-	SALeftCapturableGY      uint8 = 3
-	SACentralCapturableGY   uint8 = 4
-	SAMaxGY                 = 5
+	SABeachGY             uint8 = 0
+	SADefenderLastGY      uint8 = 1
+	SARightCapturableGY   uint8 = 2
+	SALeftCapturableGY    uint8 = 3
+	SACentralCapturableGY uint8 = 4
+	SAMaxGY                     = 5
 
 	// GameObjects
 	SAGameObjectGateGreen   uint32 = 190722 // Gate of the Green Emerald
@@ -108,12 +108,12 @@ const (
 	SAWorldStateEnableTimer          uint32 = 3564
 
 	// Sounds
-	SASoundWallAttackedAlliance uint32 = 15912
-	SASoundWallAttackedHorde    uint32 = 15911
+	SASoundWallAttackedAlliance  uint32 = 15912
+	SASoundWallAttackedHorde     uint32 = 15911
 	SASoundWallDestroyedAlliance uint32 = 15909
-	SASoundWallDestroyedHorde   uint32 = 15910
-	SASoundVictoryAlliance      uint32 = 15907
-	SASoundVictoryHorde         uint32 = 15906
+	SASoundWallDestroyedHorde    uint32 = 15910
+	SASoundVictoryAlliance       uint32 = 15907
+	SASoundVictoryHorde          uint32 = 15906
 
 	// Default Gate Health
 	SAGateDefaultMaxHealth uint32 = 100000
@@ -138,7 +138,7 @@ var saGates = [SAMaxGates]saGateInfo{
 }
 
 type saGateState struct {
-	State     uint8  // 1: OK, 2: Damaged, 3: Destroyed
+	State     uint8 // 1: OK, 2: Damaged, 3: Destroyed
 	Health    uint32
 	MaxHealth uint32
 }
@@ -149,25 +149,25 @@ type saRoundScore struct {
 }
 
 type saBattlegroundState struct {
-	mu                  sync.Mutex
-	MapID               uint32
-	Status              uint8
-	Attackers           uint32 // 0: Alliance, 1: Horde
-	TotalTime           time.Duration
-	EndRoundTimer       time.Duration
-	TimerEnabled        bool
-	WarmupLength        time.Duration
-	RoundLength         time.Duration
-	SecondWarmupLength  time.Duration
-	Gates               [SAMaxGates]saGateState
-	Graveyards          [SAMaxGY]uint32 // Owner: 0: Alliance, 1: Horde
-	RoundScores         [2]saRoundScore
-	DemolishersAlive    [2]bool
-	GateDestroyed       bool
-	Winner              int8 // -1: ongoing, 0: Alliance, 1: Horde, 2: Draw
+	mu                   sync.Mutex
+	MapID                uint32
+	Status               uint8
+	Attackers            uint32 // 0: Alliance, 1: Horde
+	TotalTime            time.Duration
+	EndRoundTimer        time.Duration
+	TimerEnabled         bool
+	WarmupLength         time.Duration
+	RoundLength          time.Duration
+	SecondWarmupLength   time.Duration
+	Gates                [SAMaxGates]saGateState
+	Graveyards           [SAMaxGY]uint32 // Owner: 0: Alliance, 1: Horde
+	RoundScores          [2]saRoundScore
+	DemolishersAlive     [2]bool
+	GateDestroyed        bool
+	Winner               int8 // -1: ongoing, 0: Alliance, 1: Horde, 2: Draw
 	DemolishersDestroyed map[uint64]uint32
-	GatesDestroyed      map[uint64]uint32
-	StopTicker          chan struct{}
+	GatesDestroyed       map[uint64]uint32
+	StopTicker           chan struct{}
 }
 
 func isSAGameObject(entry uint32) bool {

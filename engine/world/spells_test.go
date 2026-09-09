@@ -644,4 +644,3 @@ func TestHandleUpdateProjectilePosition(t *testing.T) {
 		t.Fatal("handleUpdateProjectilePosition failed")
 	}
 }
-

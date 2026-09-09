@@ -479,7 +479,7 @@ func (s *Server) relocatePassengers(vehicleGUID uint64, transX, transY, transZ, 
 
 	kit.mu.RLock()
 	type passPos struct {
-		guid uint64
+		guid       uint64
 		x, y, z, o float32
 	}
 	var relocations []passPos

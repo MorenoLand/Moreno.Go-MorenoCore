@@ -616,7 +616,7 @@ func (s *session) sendPetSpells(ctx context.Context, petID uint32, entry uint32,
 	buf.WriteU16(family)
 	buf.WriteU32(0) // duration (0 = permanent)
 	buf.WriteU8(reactState)
-	buf.WriteU8(1) // commandState (1 = FOLLOW)
+	buf.WriteU8(1)  // commandState (1 = FOLLOW)
 	buf.WriteU16(0) // flags
 
 	hasCustomAB := false
@@ -962,7 +962,6 @@ func (s *session) handleFeedPet(ctx context.Context, spellID uint32) {
 	}
 	s.debug("pet fed", "account", s.accountName, "petID", petID)
 }
-
 
 var stableSlotPrices = []uint32{
 	500,     // 5s

@@ -250,7 +250,7 @@ func (s *session) getThreatMultiplier(schoolMask uint32) float32 {
 // Reference: TrinityCore SPELL_EFFECT_ATTACK_ME (114) and SPELL_AURA_MOD_TAUNT (11).
 func isTauntSpell(spellID uint32) bool {
 	switch spellID {
-	case 355,   // Warrior: Taunt
+	case 355, // Warrior: Taunt
 		694,   // Warrior: Mocking Blow
 		1161,  // Warrior: Challenging Shout
 		6795,  // Druid: Growl

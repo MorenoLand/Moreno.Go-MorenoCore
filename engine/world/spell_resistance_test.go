@@ -112,7 +112,7 @@ func TestBinarySpell_FullResistInSpellGo(t *testing.T) {
 		player: &playerState{
 			GUID:        3002,
 			Level:       80,
-			Class:       1, // Warrior
+			Class:       1,                                 // Warrior
 			Resistances: [7]uint32{0, 0, 0, 0, 0, 2000, 0}, // 2000 Shadow Resistance -> ~83% resist
 		},
 		auras:       make(map[uint32]struct{}),

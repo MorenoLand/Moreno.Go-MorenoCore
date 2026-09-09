@@ -470,4 +470,3 @@ func TestAuctionHouseTrinityParity(t *testing.T) {
 		t.Fatalf("expected expired return mail subject '102:0:3:2:1', got %q, err %v", expSubj, err)
 	}
 }
-

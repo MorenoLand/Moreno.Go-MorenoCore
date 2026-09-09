@@ -104,9 +104,9 @@ func TestAbsorptionShield_MagicAbsorb_DoesNotAbsorbPhysical(t *testing.T) {
 func TestManaShield_DrainsMana(t *testing.T) {
 	sess := &session{
 		player: &playerState{
-			GUID:     1,
-			Health:   1000,
-			Powers:   [7]uint32{1500}, // 1500 Mana
+			GUID:   1,
+			Health: 1000,
+			Powers: [7]uint32{1500}, // 1500 Mana
 		},
 		activeAuras: make(map[uint32]*activeAura),
 	}

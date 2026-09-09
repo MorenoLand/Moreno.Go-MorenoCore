@@ -164,13 +164,13 @@ func TestFactionChangeConversionsParity(t *testing.T) {
 		"INSERT INTO characters VALUES (10, 'AlliHero', 0, 1, 2, 3, 4, 5, 1, 1, 80, 0, 1519, -8867.0, 673.0, 97.0, 0.0, 64, 100)",
 		"INSERT INTO character_homebind VALUES (10, 0, 1519, -8867.0, 673.0, 97.0)",
 		"INSERT INTO character_social VALUES (10, 999)",
-		"INSERT INTO character_queststatus VALUES (10, 1001, 1)", // Active quest in progress
+		"INSERT INTO character_queststatus VALUES (10, 1001, 1)",          // Active quest in progress
 		"INSERT INTO character_queststatus_rewarded VALUES (10, 2001, 1)", // Alliance rewarded quest
-		"INSERT INTO character_spell VALUES (10, 3001, 1, 0)", // Alliance spell/mount
+		"INSERT INTO character_spell VALUES (10, 3001, 1, 0)",             // Alliance spell/mount
 		"INSERT INTO character_inventory VALUES (10, 0, 23, 5001)",
-		"INSERT INTO item_instance VALUES (5001, 4001, 1)", // Alliance item
-		"INSERT INTO character_reputation VALUES (10, 72, 3000, 0)", // Stormwind rep
-		"INSERT INTO character_skills VALUES (10, 98, 300, 300)", // Common
+		"INSERT INTO item_instance VALUES (5001, 4001, 1)",           // Alliance item
+		"INSERT INTO character_reputation VALUES (10, 72, 3000, 0)",  // Stormwind rep
+		"INSERT INTO character_skills VALUES (10, 98, 300, 300)",     // Common
 		"INSERT INTO character_achievement VALUES (10, 501, 123456)", // Alliance achievement
 	} {
 		if _, err := cdb.Exec(stmt); err != nil {
@@ -307,4 +307,3 @@ func TestFactionChangeConversionsParity(t *testing.T) {
 		t.Fatalf("expected Orcish language skill 109, got %d", orcishSkill)
 	}
 }
-

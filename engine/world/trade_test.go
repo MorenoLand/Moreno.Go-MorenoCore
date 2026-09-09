@@ -353,4 +353,3 @@ func TestTradeParitySoulboundDistanceBags(t *testing.T) {
 		t.Fatalf("expected item 302 in bag 500 slot 0, got bag=%d, slot=%d, err=%v", bag302, slot302, err)
 	}
 }
-

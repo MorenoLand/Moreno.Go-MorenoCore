@@ -16,13 +16,13 @@ func TestPetCommand_AttackFollowStay(t *testing.T) {
 	targetGUID := uint64(0xF130000000000002)
 
 	motion := &creatureMotion{
-		GUID:        petGUID,
-		Health:      1000,
-		MaxHealth:   1000,
-		OwnerGUID:   ownerGUID,
-		PetCommand:  PetCommandFollow,
-		PetReact:    PetReactDefensive,
-		AttackTime:  2000,
+		GUID:       petGUID,
+		Health:     1000,
+		MaxHealth:  1000,
+		OwnerGUID:  ownerGUID,
+		PetCommand: PetCommandFollow,
+		PetReact:   PetReactDefensive,
+		AttackTime: 2000,
 	}
 	srv.creatureMotion[petGUID] = motion
 
@@ -74,13 +74,13 @@ func TestPetDefensive_TriggerOnAggro(t *testing.T) {
 
 	// Pet in Defensive mode
 	motion := &creatureMotion{
-		GUID:        petGUID,
-		Health:      1000,
-		MaxHealth:   1000,
-		OwnerGUID:   ownerGUID,
-		PetCommand:  PetCommandFollow,
-		PetReact:    PetReactDefensive,
-		AttackTime:  2000,
+		GUID:       petGUID,
+		Health:     1000,
+		MaxHealth:  1000,
+		OwnerGUID:  ownerGUID,
+		PetCommand: PetCommandFollow,
+		PetReact:   PetReactDefensive,
+		AttackTime: 2000,
 	}
 	srv.creatureMotion[petGUID] = motion
 

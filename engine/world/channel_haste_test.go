@@ -25,7 +25,7 @@ func TestChannelHaste_DurationAndTickCompression(t *testing.T) {
 		player: &playerState{
 			GUID:          4001,
 			Level:         80,
-			Class:         5, // Priest
+			Class:         5,                                        // Priest
 			CombatRatings: [25]uint32{CombatRatingHasteSpell: 1640}, // ~50% haste
 		},
 		activeAuras: make(map[uint32]*activeAura),
@@ -77,7 +77,7 @@ func TestSpellCritMultiplier_TalentsAndMetagem(t *testing.T) {
 	}
 
 	shadowBolt := wotlk.Spell{ID: 686, SchoolMask: 32} // Shadow
-	frostbolt := wotlk.Spell{ID: 116, SchoolMask: 16}   // Frost
+	frostbolt := wotlk.Spell{ID: 116, SchoolMask: 16}  // Frost
 
 	// 1. Base crit multiplier: 1.5x (150%)
 	if mult := sess.getSpellCritMultiplier(shadowBolt); mult != 1.5 {

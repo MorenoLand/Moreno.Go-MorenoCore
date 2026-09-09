@@ -303,8 +303,8 @@ func TestQuestSharingToPartyParity(t *testing.T) {
 
 	// 3. Receiver 102 accepts quest 777
 	pAccept := protocol.NewBuffer(13)
-	pAccept.WriteU64(101)                    // sharerGUID
-	pAccept.WriteU32(777)                    // questID
+	pAccept.WriteU64(101)                     // sharerGUID
+	pAccept.WriteU32(777)                     // questID
 	pAccept.WriteU8(QuestPartyMsgAcceptQuest) // 2
 	if !sess2.handleQuestPushResult(ctx, pAccept.Bytes()) {
 		t.Fatal("handleQuestPushResult failed")
@@ -338,4 +338,3 @@ func TestQuestSharingToPartyParity(t *testing.T) {
 		}
 	}
 }
-

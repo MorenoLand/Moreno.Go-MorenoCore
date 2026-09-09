@@ -357,7 +357,7 @@ func (s *session) handleCalendarGetEvent(ctx context.Context, payload []byte) bo
 	buf.WriteCString(title)
 	buf.WriteCString(description)
 	buf.WriteU8(eventType)
-	buf.WriteU8(0)   // repeatable
+	buf.WriteU8(0)    // repeatable
 	buf.WriteU32(100) // maxInvites
 	buf.WriteI32(dungeon)
 	buf.WriteU32(flags)
@@ -612,7 +612,7 @@ func (s *session) handleCalendarUpdateEvent(ctx context.Context, payload []byte)
 						updBuf.WriteU32(uint32(dungeonID))
 						updBuf.WriteCString(title)
 						updBuf.WriteCString(description)
-						updBuf.WriteU8(0)   // repeatable
+						updBuf.WriteU8(0)    // repeatable
 						updBuf.WriteU32(100) // maxInvites
 						updBuf.WritePackedTime(time.Unix(int64(packedLockDate), 0))
 						_ = otherSess.write(uint16(protocol.OpcodeSMSG_CALENDAR_EVENT_UPDATED_ALERT), updBuf.Bytes(), true)

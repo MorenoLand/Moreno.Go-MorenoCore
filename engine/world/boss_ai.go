@@ -352,8 +352,8 @@ func (ai *taragamanAI) OnUpdate(ctx context.Context, s *Server, m *creatureMotio
 // Kresh (Entry 3653 - Wailing Caverns)
 // -------------------------------------------------------------
 type kreshAI struct {
-	motion      *creatureMotion
-	shieldUsed  bool
+	motion     *creatureMotion
+	shieldUsed bool
 }
 
 func newKreshAI(m *creatureMotion) BossAI {

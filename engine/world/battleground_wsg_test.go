@@ -23,13 +23,13 @@ func TestWSG_FlagPickupAndCapture(t *testing.T) {
 		playerLoaded: true,
 		activeAuras:  make(map[uint32]*activeAura),
 		player: &playerState{
-			GUID:  hordePlayerGUID,
-			Name:  "Thrall",
-			Race:  2, // Orc -> Team 1 (Horde)
-			Map:   WSGMapID,
-			X:     1540.0,
-			Y:     1480.0,
-			Z:     350.0,
+			GUID: hordePlayerGUID,
+			Name: "Thrall",
+			Race: 2, // Orc -> Team 1 (Horde)
+			Map:  WSGMapID,
+			X:    1540.0,
+			Y:    1480.0,
+			Z:    350.0,
 		},
 	}
 	srv.sessions[hordeSess] = struct{}{}

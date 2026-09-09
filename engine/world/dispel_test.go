@@ -955,5 +955,3 @@ func TestDispel_SilencePreventsCasting(t *testing.T) {
 		t.Fatalf("expected fail reason SPELL_FAILED_SILENCED (48), got %d", failReason)
 	}
 }
-
-

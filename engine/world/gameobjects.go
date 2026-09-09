@@ -623,4 +623,3 @@ func (s *Server) setGameObjectHidden(guid uint64, hidden bool) {
 		delete(s.hiddenGameObjects, guid)
 	}
 }
-

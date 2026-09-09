@@ -305,5 +305,3 @@ func TestBinderActivateParity(t *testing.T) {
 		t.Fatalf("homebind mismatch in db: map=%d zone=%d x=%f y=%f z=%f", dbMap, dbZone, dbX, dbY, dbZ)
 	}
 }
-
-

@@ -26,30 +26,30 @@ const (
 	WGTeamNeutral  uint32 = 2
 
 	// Wartime Ranks & Spells
-	WGSpellRecruit                         uint32 = 37795
-	WGSpellCorporal                        uint32 = 33280
-	WGSpellLieutenant                      uint32 = 55629
-	WGSpellTenacity                        uint32 = 58549
-	WGSpellTenacityVehicle                 uint32 = 59911
-	WGSpellTowerControl                    uint32 = 62064
-	WGSpellSpiritualImmunity               uint32 = 58729
-	WGSpellGreatHonor                      uint32 = 58555
-	WGSpellGreaterHonor                    uint32 = 58556
-	WGSpellGreatestHonor                   uint32 = 58557
-	WGSpellAllianceFlag                    uint32 = 14268
-	WGSpellHordeFlag                       uint32 = 14267
-	WGSpellGrabPassenger                   uint32 = 61178
-	WGSpellVictoryReward                   uint32 = 56902
-	WGSpellDefeatReward                    uint32 = 58494
-	WGSpellEssenceOfWintergrasp            uint32 = 58045
-	WGSpellAllianceControlPhaseShift       uint32 = 55774
-	WGSpellHordeControlPhaseShift          uint32 = 55773
+	WGSpellRecruit                           uint32 = 37795
+	WGSpellCorporal                          uint32 = 33280
+	WGSpellLieutenant                        uint32 = 55629
+	WGSpellTenacity                          uint32 = 58549
+	WGSpellTenacityVehicle                   uint32 = 59911
+	WGSpellTowerControl                      uint32 = 62064
+	WGSpellSpiritualImmunity                 uint32 = 58729
+	WGSpellGreatHonor                        uint32 = 58555
+	WGSpellGreaterHonor                      uint32 = 58556
+	WGSpellGreatestHonor                     uint32 = 58557
+	WGSpellAllianceFlag                      uint32 = 14268
+	WGSpellHordeFlag                         uint32 = 14267
+	WGSpellGrabPassenger                     uint32 = 61178
+	WGSpellVictoryReward                     uint32 = 56902
+	WGSpellDefeatReward                      uint32 = 58494
+	WGSpellEssenceOfWintergrasp              uint32 = 58045
+	WGSpellAllianceControlPhaseShift         uint32 = 55774
+	WGSpellHordeControlPhaseShift            uint32 = 55773
 	WGSpellAllianceControlsFactoryPhaseShift uint32 = 56617
-	WGSpellHordeControlsFactoryPhaseShift   uint32 = 56618
-	WGSpellBuildCatapultForce              uint32 = 56663
-	WGSpellBuildDemolisherForce            uint32 = 56575
-	WGSpellBuildSiegeAllianceForce         uint32 = 56661
-	WGSpellBuildSiegeHordeForce            uint32 = 61408
+	WGSpellHordeControlsFactoryPhaseShift    uint32 = 56618
+	WGSpellBuildCatapultForce                uint32 = 56663
+	WGSpellBuildDemolisherForce              uint32 = 56575
+	WGSpellBuildSiegeAllianceForce           uint32 = 56661
+	WGSpellBuildSiegeHordeForce              uint32 = 61408
 
 	// World States
 	WGWorldStateActive         uint32 = 3801
@@ -68,12 +68,12 @@ const (
 	WGWorldStateClock2         uint32 = 4354
 
 	// Workshop WorldStates
-	WGWorldStateWorkshopNW        uint32 = 3700 // Broken Temple
-	WGWorldStateWorkshopNE        uint32 = 3701 // Sunken Ring
-	WGWorldStateWorkshopSE        uint32 = 3702 // Eastspark
-	WGWorldStateWorkshopSW        uint32 = 3703 // Westspark
-	WGWorldStateWorkshopKeepWest  uint32 = 3707
-	WGWorldStateWorkshopKeepEast  uint32 = 3708
+	WGWorldStateWorkshopNW       uint32 = 3700 // Broken Temple
+	WGWorldStateWorkshopNE       uint32 = 3701 // Sunken Ring
+	WGWorldStateWorkshopSE       uint32 = 3702 // Eastspark
+	WGWorldStateWorkshopSW       uint32 = 3703 // Westspark
+	WGWorldStateWorkshopKeepWest uint32 = 3707
+	WGWorldStateWorkshopKeepEast uint32 = 3708
 
 	// Workshop IDs
 	WGWorkshopSE       uint8 = 0
@@ -108,9 +108,9 @@ const (
 	WGWorldStateVaultGate    uint32 = 3773
 
 	// GameObjects
-	WGGameObjectTitanRelic       uint32 = 192829
-	WGGameObjectVaultGate        uint32 = 191810
-	WGGameObjectFortressGate     uint32 = 190375
+	WGGameObjectTitanRelic        uint32 = 192829
+	WGGameObjectVaultGate         uint32 = 191810
+	WGGameObjectFortressGate      uint32 = 190375
 	WGGameObjectKeepCollisionWall uint32 = 194323
 
 	// Banners
@@ -140,24 +140,24 @@ const (
 	WGCreatureSpiritGuideHorde    uint32 = 31841
 
 	// Achievements & Quests
-	WGAchievementWinWG            uint32 = 1717
-	WGAchievementWinWGTimer10     uint32 = 1755
-	WGAchievementTowerDestroy     uint32 = 1727
-	WGQuestVictoryAlliance        uint32 = 13181
-	WGQuestVictoryHorde           uint32 = 13183
-	WGQuestCreditTowersDestroyed  uint32 = 35074
-	WGQuestCreditDefendSiege      uint32 = 31284
+	WGAchievementWinWG           uint32 = 1717
+	WGAchievementWinWGTimer10    uint32 = 1755
+	WGAchievementTowerDestroy    uint32 = 1727
+	WGQuestVictoryAlliance       uint32 = 13181
+	WGQuestVictoryHorde          uint32 = 13183
+	WGQuestCreditTowersDestroyed uint32 = 35074
+	WGQuestCreditDefendSiege     uint32 = 31284
 
 	// Building Destructible States (TrinityCore WintergraspGameObjectState)
-	WGBuildingStateNone             uint8 = 0
-	WGBuildingStateNeutralIntact    uint8 = 1
-	WGBuildingStateNeutralDamaged   uint8 = 2
-	WGBuildingStateNeutralDestroyed uint8 = 3
-	WGBuildingStateHordeIntact      uint8 = 4
-	WGBuildingStateHordeDamaged     uint8 = 5
-	WGBuildingStateHordeDestroyed   uint8 = 6
-	WGBuildingStateAllianceIntact   uint8 = 7
-	WGBuildingStateAllianceDamaged  uint8 = 8
+	WGBuildingStateNone              uint8 = 0
+	WGBuildingStateNeutralIntact     uint8 = 1
+	WGBuildingStateNeutralDamaged    uint8 = 2
+	WGBuildingStateNeutralDestroyed  uint8 = 3
+	WGBuildingStateHordeIntact       uint8 = 4
+	WGBuildingStateHordeDamaged      uint8 = 5
+	WGBuildingStateHordeDestroyed    uint8 = 6
+	WGBuildingStateAllianceIntact    uint8 = 7
+	WGBuildingStateAllianceDamaged   uint8 = 8
 	WGBuildingStateAllianceDestroyed uint8 = 9
 )
 
@@ -218,38 +218,38 @@ type wgGateState struct {
 type wgBattlegroundState struct {
 	mu sync.Mutex
 
-	MapID                 uint32
-	ZoneID                uint32
-	IsActive              bool
-	DefenderTeam          uint32 // WGTeamAlliance or WGTeamHorde
-	Timer                 time.Duration
-	TotalDuration         time.Duration
-	EndTime               time.Time
+	MapID         uint32
+	ZoneID        uint32
+	IsActive      bool
+	DefenderTeam  uint32 // WGTeamAlliance or WGTeamHorde
+	Timer         time.Duration
+	TotalDuration time.Duration
+	EndTime       time.Time
 
-	Workshops             [WGMaxWorkshops]wgWorkshopState
-	Towers                [WGMaxTowers]wgTowerState
-	Gates                 [2]wgGateState // 0: Fortress Gate, 1: Vault Gate
-	RelicInteractible     bool
-	BrokenSouthTowers     uint32
+	Workshops         [WGMaxWorkshops]wgWorkshopState
+	Towers            [WGMaxTowers]wgTowerState
+	Gates             [2]wgGateState // 0: Fortress Gate, 1: Vault Gate
+	RelicInteractible bool
+	BrokenSouthTowers uint32
 
-	VehiclesAlliance      uint32
-	VehiclesHorde         uint32
-	MaxVehiclesAlliance   uint32
-	MaxVehiclesHorde      uint32
+	VehiclesAlliance    uint32
+	VehiclesHorde       uint32
+	MaxVehiclesAlliance uint32
+	MaxVehiclesHorde    uint32
 
-	TenacityTeam          int8 // -1: neutral, 0: Alliance, 1: Horde
-	TenacityStack         uint32
+	TenacityTeam  int8 // -1: neutral, 0: Alliance, 1: Horde
+	TenacityStack uint32
 
-	PlayersInWar          map[uint64]uint32 // playerGUID -> team
-	PlayerRanks           map[uint64]uint32 // playerGUID -> rank spell ID (Recruit, Corporal, Lieutenant)
-	PlayerKillsInRank     map[uint64]uint32 // playerGUID -> kills in current rank towards next promotion (0..5)
-	Vehicles              map[uint64]uint32 // vehicleGUID -> team
+	PlayersInWar      map[uint64]uint32 // playerGUID -> team
+	PlayerRanks       map[uint64]uint32 // playerGUID -> rank spell ID (Recruit, Corporal, Lieutenant)
+	PlayerKillsInRank map[uint64]uint32 // playerGUID -> kills in current rank towards next promotion (0..5)
+	Vehicles          map[uint64]uint32 // vehicleGUID -> team
 
-	StatsWonA             uint32
-	StatsDefA             uint32
-	StatsWonH             uint32
-	StatsDefH             uint32
-	Winner                int8 // -1: ongoing, 0: Alliance, 1: Horde
+	StatsWonA uint32
+	StatsDefA uint32
+	StatsWonH uint32
+	StatsDefH uint32
+	Winner    int8 // -1: ongoing, 0: Alliance, 1: Horde
 }
 
 // AttackerTeam returns the opposing team from DefenderTeam.

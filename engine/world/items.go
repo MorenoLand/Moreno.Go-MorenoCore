@@ -950,28 +950,28 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 }
 
 const (
-	equipErrOk                             = 0
-	equipErrCantEquipLevelI                = 1
-	equipErrItemDoesntGoToSlot             = 2
-	equipErrBagFull                        = 4
-	equipErrNonemptyBagOverOtherBag        = 5
-	equipErrCantEquipWithTwohanded         = 13
-	equipErrCantDualWield                  = 14
-	equipErrItemDoesntGoIntoBag            = 15
-	equipErrItemCantBeEquipped             = 20
-	equipErrItemsCantBeSwapped             = 21
-	equipErrSlotIsEmpty                    = 22
-	equipErrItemNotFound                   = 23
-	equipErrCanOnlyDoWithEmptyBags         = 31
-	equipErrYouAreDead                     = 38
-	equipErrCantDoRightNow                 = 39
-	equipErrStackableCantBeWrapped         = 43
-	equipErrEquippedCantBeWrapped          = 44
-	equipErrWrappedCantBeWrapped           = 45
-	equipErrBoundCantBeWrapped             = 46
-	equipErrUniqueCantBeWrapped            = 47
-	equipErrBagsCantBeWrapped              = 48
-	equipErrInvFull                        = 50
+	equipErrOk                      = 0
+	equipErrCantEquipLevelI         = 1
+	equipErrItemDoesntGoToSlot      = 2
+	equipErrBagFull                 = 4
+	equipErrNonemptyBagOverOtherBag = 5
+	equipErrCantEquipWithTwohanded  = 13
+	equipErrCantDualWield           = 14
+	equipErrItemDoesntGoIntoBag     = 15
+	equipErrItemCantBeEquipped      = 20
+	equipErrItemsCantBeSwapped      = 21
+	equipErrSlotIsEmpty             = 22
+	equipErrItemNotFound            = 23
+	equipErrCanOnlyDoWithEmptyBags  = 31
+	equipErrYouAreDead              = 38
+	equipErrCantDoRightNow          = 39
+	equipErrStackableCantBeWrapped  = 43
+	equipErrEquippedCantBeWrapped   = 44
+	equipErrWrappedCantBeWrapped    = 45
+	equipErrBoundCantBeWrapped      = 46
+	equipErrUniqueCantBeWrapped     = 47
+	equipErrBagsCantBeWrapped       = 48
+	equipErrInvFull                 = 50
 )
 
 func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {
@@ -1081,6 +1081,7 @@ func (s *session) handleUseItem(ctx context.Context, payload []byte) bool {
 			}
 			if castTime > 0 {
 				time.AfterFunc(time.Duration(castTime)*time.Millisecond, func() {
+					s.updateAchievementCriteria(criteriaTypeUseItem, uint32(itemEntry), 1)
 					s.finishSpellCast(context.Background(), castCount, spellID, spell, target)
 				})
 			} else {

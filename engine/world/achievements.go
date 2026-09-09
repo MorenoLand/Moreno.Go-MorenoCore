@@ -28,12 +28,23 @@ import (
 // SharesCriteria); Achievement_Criteria.dbc fields 0-4 (ID, AchievementID,
 // Type, Asset, Quantity), 26-29 (Flags, StartEvent, StartAsset, StartTimer).
 
-// Criteria types covered by this slice; the reference defines ~130.
+// Criteria types wired so far; the reference defines ~130.
 const (
-	criteriaTypeKillCreature  = 0
-	criteriaTypeReachLevel    = 5
-	criteriaTypeCompleteQuest = 27
-	criteriaTypeLearnSpell    = 34
+	criteriaTypeKillCreature     = 0  // ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE
+	criteriaTypeWinBG            = 1  // ACHIEVEMENT_CRITERIA_TYPE_WIN_BG
+	criteriaTypeReachLevel       = 5  // ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL
+	criteriaTypeReachSkillLevel  = 7  // ACHIEVEMENT_CRITERIA_TYPE_REACH_SKILL_LEVEL
+	criteriaTypeDeath            = 17 // ACHIEVEMENT_CRITERIA_TYPE_DEATH
+	criteriaTypeKilledByCreature = 20 // ACHIEVEMENT_CRITERIA_TYPE_KILLED_BY_CREATURE
+	criteriaTypeCompleteQuest    = 27 // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST
+	criteriaTypeCastSpell        = 29 // ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL
+	criteriaTypeLearnSpell       = 34 // ACHIEVEMENT_CRITERIA_TYPE_LEARN_SPELL
+	criteriaTypeOwnItem          = 36 // ACHIEVEMENT_CRITERIA_TYPE_OWN_ITEM
+	criteriaTypeBuyBankSlot      = 45 // ACHIEVEMENT_CRITERIA_TYPE_BUY_BANK_SLOT
+	criteriaTypeUseItem          = 41 // ACHIEVEMENT_CRITERIA_TYPE_USE_ITEM
+	criteriaTypeLootItem         = 42 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_ITEM
+	criteriaTypeGainReputation   = 46 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_REPUTATION
+	criteriaTypeLootMoney        = 67 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY
 )
 
 type achievementEntry struct {
@@ -301,6 +312,12 @@ func (s *session) updateAchievementCriteria(criterionType, asset uint32, quantit
 	if s.player == nil || s.server == nil {
 		return
 	}
+	if s.earnedAchievements == nil {
+		s.earnedAchievements = make(map[uint32]uint32)
+	}
+	if s.criteriaProgress == nil {
+		s.criteriaProgress = make(map[uint32]*criteriaProgressState)
+	}
 	s.server.loadAchievementIndex()
 	achievementIndex.mu.RLock()
 	criteriaList, ok := achievementIndex.byTypeAsset[typeAssetKey(criterionType, asset)]
@@ -322,6 +339,58 @@ func (s *session) updateAchievementCriteria(criterionType, asset uint32, quantit
 			s.criteriaProgress[criterion.ID] = progress
 		}
 		progress.Counter += quantity
+		progress.Date = uint32(time.Now().Unix())
+		s.sendCriteriaUpdate(progress)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(),
+				"REPLACE INTO character_achievement_progress (guid, criteria, counter, date) VALUES (?, ?, ?, ?)",
+				s.playerGUID, criterion.ID, progress.Counter, progress.Date)
+		}
+		if criterion.Quantity > 0 && progress.Counter >= criterion.Quantity {
+			s.checkAchievementComplete(criterion.AchievementID)
+		}
+	}
+}
+
+// setAchievementCriteria sets an absolute criteria value (level, skill
+// value, reputation standing) mirroring the reference PROGRESS_SET updates.
+func (s *session) setAchievementCriteria(criterionType, asset, value uint32) {
+	if s.player == nil || s.server == nil {
+		return
+	}
+	if s.earnedAchievements == nil {
+		s.earnedAchievements = make(map[uint32]uint32)
+	}
+	if s.criteriaProgress == nil {
+		s.criteriaProgress = make(map[uint32]*criteriaProgressState)
+	}
+	s.server.loadAchievementIndex()
+	achievementIndex.mu.RLock()
+	criteriaList, ok := achievementIndex.byTypeAsset[typeAssetKey(criterionType, asset)]
+	if !ok {
+		criteriaList, ok = achievementIndex.byTypeAsset[typeAssetKey(criterionType, 0)]
+	}
+	if !ok {
+		achievementIndex.mu.RUnlock()
+		return
+	}
+	matched := make([]achievementCriteriaEntry, len(criteriaList))
+	copy(matched, criteriaList)
+	achievementIndex.mu.RUnlock()
+
+	for _, criterion := range matched {
+		if _, done := s.earnedAchievements[criterion.AchievementID]; done {
+			continue
+		}
+		progress := s.criteriaProgress[criterion.ID]
+		if progress == nil {
+			progress = &criteriaProgressState{CriteriaID: criterion.ID}
+			s.criteriaProgress[criterion.ID] = progress
+		}
+		if progress.Counter >= value {
+			continue // absolute values never regress
+		}
+		progress.Counter = value
 		progress.Date = uint32(time.Now().Unix())
 		s.sendCriteriaUpdate(progress)
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {

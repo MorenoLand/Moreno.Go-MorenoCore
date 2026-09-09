@@ -27,7 +27,7 @@ const (
 	spellFailedNothingToDispel uint8 = 86 // SPELL_FAILED_NOTHING_TO_DISPEL (SharedDefines.h:1068)
 
 	spellAuraModDispelResist uint32 = 235   // SPELL_AURA_MOD_DISPEL_RESIST (SpellAuraDefines.h:315)
-	spellUnholyBlight       uint32 = 50536 // DK Unholy Blight aura preventing disease dispel (Unit.cpp:4591)
+	spellUnholyBlight        uint32 = 50536 // DK Unholy Blight aura preventing disease dispel (Unit.cpp:4591)
 )
 
 // getDispelMask converts a DispelType to its bitmask.

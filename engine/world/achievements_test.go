@@ -231,3 +231,70 @@ func TestInspectAchievementsReturnsTargetState(t *testing.T) {
 		t.Fatalf("inspect criteria=%d", critID)
 	}
 }
+
+func TestAchievementCastSpellAndSetVariants(t *testing.T) {
+	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100, Race: 1}
+	state, clientConn, db, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+
+	// CAST_SPELL with no matching criterion in the fixture: no progress, no error.
+	state.updateAchievementCriteria(criteriaTypeCastSpell, 12345, 1)
+	if len(state.criteriaProgress) != 0 {
+		t.Fatalf("unmatched cast created progress: %+v", state.criteriaProgress)
+	}
+
+	// Set-variant on reputation (absolute, never regresses).
+	state.earnedAchievements = make(map[uint32]uint32)
+	_ = db
+	// Simulate a reputation criterion via the index directly.
+	achievementIndex.mu.Lock()
+	crit := achievementCriteriaEntry{ID: 9100, AchievementID: 5100, Type: criteriaTypeGainReputation, Asset: 72, Quantity: 42999}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeGainReputation, 72)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeGainReputation, 72)], crit)
+	achievementIndex.byAchieve[5100] = append(achievementIndex.byAchieve[5100], crit)
+	achievementIndex.achieveByID[5100] = achievementEntry{ID: 5100, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	state.setAchievementCriteria(criteriaTypeGainReputation, 72, 21000)
+	progress := state.criteriaProgress[9100]
+	if progress == nil || progress.Counter != 21000 {
+		t.Fatalf("reputation progress=%+v", progress)
+	}
+	// Lower value must not regress.
+	state.setAchievementCriteria(criteriaTypeGainReputation, 72, 15000)
+	if state.criteriaProgress[9100].Counter != 21000 {
+		t.Fatalf("absolute progress regressed: %d", state.criteriaProgress[9100].Counter)
+	}
+	// Meeting quantity completes the achievement.
+	state.setAchievementCriteria(criteriaTypeGainReputation, 72, 42999)
+	if _, earned := state.earnedAchievements[5100]; !earned {
+		t.Fatal("reputation achievement not completed at exact threshold")
+	}
+}
+
+func TestAchievementDeathAndOwnItemHooks(t *testing.T) {
+	player := &playerState{GUID: 9, Level: 10, Health: 0, MaxHealth: 100, Race: 1}
+	state, clientConn, db, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	_ = db
+
+	achievementIndex.mu.Lock()
+	deathCrit := achievementCriteriaEntry{ID: 9200, AchievementID: 5200, Type: criteriaTypeDeath, Asset: 0, Quantity: 1}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeDeath, 0)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeDeath, 0)], deathCrit)
+	achievementIndex.byAchieve[5200] = append(achievementIndex.byAchieve[5200], deathCrit)
+	achievementIndex.achieveByID[5200] = achievementEntry{ID: 5200, Faction: -1}
+	ownCrit := achievementCriteriaEntry{ID: 9300, AchievementID: 5300, Type: criteriaTypeOwnItem, Asset: 117, Quantity: 5}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeOwnItem, 117)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeOwnItem, 117)], ownCrit)
+	achievementIndex.byAchieve[5300] = append(achievementIndex.byAchieve[5300], ownCrit)
+	achievementIndex.achieveByID[5300] = achievementEntry{ID: 5300, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	state.updateAchievementCriteria(criteriaTypeDeath, 0, 1)
+	if _, earned := state.earnedAchievements[5200]; !earned {
+		t.Fatal("death achievement not completed")
+	}
+	state.updateAchievementCriteria(criteriaTypeOwnItem, 117, 3)
+	state.updateAchievementCriteria(criteriaTypeOwnItem, 117, 2)
+	if _, earned := state.earnedAchievements[5300]; !earned {
+		t.Fatal("own-item achievement not completed at 5/5 stacks")
+	}
+}

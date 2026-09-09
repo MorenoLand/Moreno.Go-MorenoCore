@@ -25,7 +25,7 @@ type groupState struct {
 	Members       []groupMember // ordered; first entry is leader
 	LootMethod    uint8         // 0=Free, 1=RR, 2=MasterLoot, 3=GroupLoot, 4=NeedBeforeGreed
 	MasterLooter  uint64
-	LootThreshold uint8 // item quality threshold (default 2 = uncommon)
+	LootThreshold uint8  // item quality threshold (default 2 = uncommon)
 	LooterGUID    uint64 // current round-robin looter GUID
 	DungeonDiff   uint8
 	RaidDiff      uint8

@@ -202,7 +202,7 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 		writeAuctionInfo(packet, a)
 	}
 	packet.WriteU32(uint32(totalCount)) // Total count
-	packet.WriteU32(300)                 // Delay
+	packet.WriteU32(300)                // Delay
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_LIST_RESULT), packet.Bytes(), true)
 	s.debug("auction list items sent", "account", s.accountName, "count", len(auctions), "total", totalCount)
 	return true

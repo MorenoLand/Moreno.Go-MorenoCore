@@ -140,9 +140,9 @@ func TestPetitionValidationAndSignRules(t *testing.T) {
 		"CREATE TABLE guild_member (guildid INTEGER, guid INTEGER PRIMARY KEY, rank INTEGER, pnote TEXT, offnote TEXT)",
 		"CREATE TABLE petition (ownerguid INTEGER, petitionguid INTEGER, name TEXT, type INTEGER, PRIMARY KEY (ownerguid, type))",
 		"CREATE TABLE petition_sign (ownerguid INTEGER, petitionguid INTEGER, playerguid INTEGER, player_account INTEGER, type INTEGER, PRIMARY KEY (petitionguid, playerguid))",
-		"INSERT INTO characters VALUES (1, 'Founder', 1, 500000)", // Human
-		"INSERT INTO characters VALUES (2, 'Signer1', 1, 1000)",   // Human
-		"INSERT INTO characters VALUES (3, 'HordePlayer', 2, 1000)", // Orc
+		"INSERT INTO characters VALUES (1, 'Founder', 1, 500000)",     // Human
+		"INSERT INTO characters VALUES (2, 'Signer1', 1, 1000)",       // Human
+		"INSERT INTO characters VALUES (3, 'HordePlayer', 2, 1000)",   // Orc
 		"INSERT INTO characters VALUES (4, 'GuildedPlayer', 1, 1000)", // Human
 	} {
 		if _, err := db.Exec(stmt); err != nil {

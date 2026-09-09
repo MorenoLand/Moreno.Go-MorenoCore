@@ -140,7 +140,7 @@ func TestGCD_OffGCDSpellsBypass(t *testing.T) {
 		{ID: 57994, StartRecoveryCategory: 0, StartRecoveryTime: 0}, // Wind Shear
 		{ID: 22812, StartRecoveryCategory: 0, StartRecoveryTime: 0}, // Barkskin
 		{ID: 48707, StartRecoveryCategory: 0, StartRecoveryTime: 0}, // Anti-Magic Shell
-		{ID: 75},                                                    // Auto Shot
+		{ID: 75}, // Auto Shot
 	}
 
 	for _, sp := range offGCDSpells {

@@ -77,7 +77,7 @@ func (s *session) learnTalent(ctx context.Context, talentID, requestedRank uint3
 		}
 		_, _ = cdb.ExecContext(ctx, "INSERT INTO character_talent (guid, spell, talentGroup) VALUES (?, ?, ?)", s.playerGUID, spellID, s.player.ActiveTalentGroup)
 		_, _ = cdb.ExecContext(ctx, "REPLACE INTO character_spell (guid, spell, active, disabled) VALUES (?, ?, 1, 0)", s.playerGUID, spellID)
-	s.updateAchievementCriteria(criteriaTypeLearnSpell, spellID, 1)
+		s.updateAchievementCriteria(criteriaTypeLearnSpell, spellID, 1)
 	}
 	return true
 }

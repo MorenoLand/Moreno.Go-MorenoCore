@@ -1153,20 +1153,20 @@ drainLoop:
 	if !foundLoot {
 		t.Fatalf("expected SMSG_LOOT_RESPONSE (0x160)")
 	}
-		r := protocol.NewReader(data)
-		lGUID, _ := r.ReadU64()
-		lType, _ := r.ReadU8()
-		_, _ = r.ReadU32() // gold
-		count, _ := r.ReadU8()
-		if lGUID != 2001 || lType != 1 || count != 1 {
-			t.Fatalf("unexpected loot response: guid=%d type=%d count=%d", lGUID, lType, count)
-		}
-		_, _ = r.ReadU8() // slot 0
-		lootItemEntry, _ := r.ReadU32()
-		lootItemCount, _ := r.ReadU32()
-		if lootItemEntry != 7777 || lootItemCount != 2 {
-			t.Fatalf("expected 2x item 7777 in clam loot, got %dx %d", lootItemCount, lootItemEntry)
-		}
+	r := protocol.NewReader(data)
+	lGUID, _ := r.ReadU64()
+	lType, _ := r.ReadU8()
+	_, _ = r.ReadU32() // gold
+	count, _ := r.ReadU8()
+	if lGUID != 2001 || lType != 1 || count != 1 {
+		t.Fatalf("unexpected loot response: guid=%d type=%d count=%d", lGUID, lType, count)
+	}
+	_, _ = r.ReadU8() // slot 0
+	lootItemEntry, _ := r.ReadU32()
+	lootItemCount, _ := r.ReadU32()
+	if lootItemEntry != 7777 || lootItemCount != 2 {
+		t.Fatalf("expected 2x item 7777 in clam loot, got %dx %d", lootItemCount, lootItemEntry)
+	}
 
 	// 4. Single Item Repair: Repair shield 3001 (durability 20 -> 100, cost 800)
 	repBuf := protocol.NewBuffer(17)
@@ -1283,7 +1283,7 @@ func TestInventoryStackMergingAndDespawnParity(t *testing.T) {
 	// Drain frames to find the despawn packet for item 101
 	foundDespawn := false
 	expectedGUID := uint64(101) | (uint64(0x4000) << 48)
-	drainLoop:
+drainLoop:
 	for {
 		select {
 		case op := <-opChan:
@@ -1642,9 +1642,9 @@ func TestHandleSellItemMasksHighGuid(t *testing.T) {
 
 	// Client sends itemGUID with high GUID (0x4000000000000010)
 	sellBuf := protocol.NewBuffer(17)
-	sellBuf.WriteU64(100)                                   // vendorGUID
+	sellBuf.WriteU64(100)                                 // vendorGUID
 	sellBuf.WriteU64(uint64(16) | (uint64(0x4000) << 48)) // itemGUID with high GUID
-	sellBuf.WriteU8(1)                                     // count
+	sellBuf.WriteU8(1)                                    // count
 
 	if !sess.handleSellItem(context.Background(), sellBuf.Bytes()) {
 		t.Fatal("handleSellItem failed")
@@ -1669,7 +1669,7 @@ func TestStoreOrStackItem_BackpackAndEquippedBags(t *testing.T) {
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
 		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, stackable INTEGER, ContainerSlots INTEGER)",
 		"INSERT INTO characters VALUES (1, 1000, '')",
-		"INSERT INTO item_template VALUES (100, 1, 10, 5, 0, 1, 20, 0)", // stackable up to 20
+		"INSERT INTO item_template VALUES (100, 1, 10, 5, 0, 1, 20, 0)",   // stackable up to 20
 		"INSERT INTO item_template VALUES (200, 2, 50, 25, 100, 1, 1, 0)", // non-stackable
 		"INSERT INTO item_template VALUES (300, 3, 100, 50, 0, 1, 1, 4)",  // 4-slot bag
 	} {
@@ -1834,5 +1834,3 @@ func TestStoreOrStackItem_PartialStackOverflow(t *testing.T) {
 		t.Fatalf("unexpected res for remainder: %+v", res)
 	}
 }
-
-

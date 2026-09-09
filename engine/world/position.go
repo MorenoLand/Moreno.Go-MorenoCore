@@ -156,4 +156,3 @@ func (s *Server) getSpellCustomAttr(spellID uint32) uint32 {
 	}
 	return s.spellCustomAttr[spellID]
 }
-

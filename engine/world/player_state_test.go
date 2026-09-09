@@ -284,4 +284,3 @@ func TestIsAllowedClassSkill(t *testing.T) {
 		t.Error("warrior should be allowed Leather")
 	}
 }
-

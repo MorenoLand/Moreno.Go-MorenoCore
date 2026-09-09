@@ -267,7 +267,7 @@ func (s *session) grantXPWithVictim(ctx context.Context, amount uint32, victimGU
 		oldMana := s.player.MaxPowers[0]
 		oldStats := s.player.Stats
 		s.player.Level++
-		s.updateAchievementCriteria(criteriaTypeReachLevel, uint32(s.player.Level), 1)
+		s.setAchievementCriteria(criteriaTypeReachLevel, uint32(s.player.Level), uint32(s.player.Level))
 		_ = s.calculatePlayerStats(ctx, s.player)
 		s.player.Health = s.player.MaxHealth
 		if len(s.player.MaxPowers) > 0 {

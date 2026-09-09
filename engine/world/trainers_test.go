@@ -241,7 +241,6 @@ func TestTrainerVisualSoundAndSkillLearning(t *testing.T) {
 		t.Fatalf("expected impact on player 1 with kit 362, got target=%d kit=%d", iTarget, iKit)
 	}
 
-
 	// Read SMSG_LEARNED_SPELL (2575)
 	opLearn1, dataLearn1, err := readServerFrame(cConn, nil)
 	if err != nil {
@@ -450,7 +449,7 @@ func TestTrainerSpellFilteringByClassAndLevelAndChatNotice(t *testing.T) {
 		"INSERT INTO creature_default_trainer VALUES (5880, 16)",
 		"INSERT INTO trainer VALUES (16, 0, 8, 'Hello, mage!')",
 		// Warlock spells on Trainer 32
-		"INSERT INTO trainer_spell VALUES (32, 688, 100, 0, 0, 0, 0, 0, 1)",  // Summon Imp (ReqLevel 1)
+		"INSERT INTO trainer_spell VALUES (32, 688, 100, 0, 0, 0, 0, 0, 1)",   // Summon Imp (ReqLevel 1)
 		"INSERT INTO trainer_spell VALUES (32, 348, 10, 0, 0, 0, 0, 0, 3)",    // Immolate Rank 1 (ReqLevel 3)
 		"INSERT INTO trainer_spell VALUES (32, 695, 100, 0, 0, 686, 0, 0, 6)", // Shadow Bolt Rank 2 (ReqLevel 6)
 		// Mage spell on Trainer 16

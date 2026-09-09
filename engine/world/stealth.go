@@ -31,7 +31,6 @@ func (s *session) getStealthDetectValue() int32 {
 	return s.getTotalAuraModifier(17)
 }
 
-
 // canDetectStealthOf determines if the observer player can detect the target stealthed player.
 // Mirrors TrinityCore WorldObject::CanDetectStealthOf (Object.cpp:1719-1790).
 func (s *session) canDetectStealthOf(target *session) bool {

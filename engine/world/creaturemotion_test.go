@@ -293,4 +293,3 @@ func TestCreatureSpellCastingInCombat(t *testing.T) {
 		t.Fatal("expected player unitFlagInCombat to be set")
 	}
 }
-

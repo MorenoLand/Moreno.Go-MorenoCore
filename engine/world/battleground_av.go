@@ -34,22 +34,22 @@ const (
 	AVNodeStateDestroyed         uint8 = 3 // Towers only
 
 	// Nodes (Graveyards: 0..6, Towers/Bunkers: 7..14)
-	AVNodeFirstAidStation   uint32 = 0
-	AVNodeStormpikeGrave    uint32 = 1
-	AVNodeStoneheartGrave   uint32 = 2
-	AVNodeSnowfallGrave     uint32 = 3
-	AVNodeIcebloodGrave     uint32 = 4
-	AVNodeFrostwolfGrave    uint32 = 5
-	AVNodeFrostwolfHut      uint32 = 6
-	AVNodeDunBaldarSouth    uint32 = 7
-	AVNodeDunBaldarNorth    uint32 = 8
-	AVNodeIcewingBunker     uint32 = 9
-	AVNodeStoneheartBunker  uint32 = 10
-	AVNodeIcebloodTower     uint32 = 11
-	AVNodeTowerPoint        uint32 = 12
+	AVNodeFirstAidStation    uint32 = 0
+	AVNodeStormpikeGrave     uint32 = 1
+	AVNodeStoneheartGrave    uint32 = 2
+	AVNodeSnowfallGrave      uint32 = 3
+	AVNodeIcebloodGrave      uint32 = 4
+	AVNodeFrostwolfGrave     uint32 = 5
+	AVNodeFrostwolfHut       uint32 = 6
+	AVNodeDunBaldarSouth     uint32 = 7
+	AVNodeDunBaldarNorth     uint32 = 8
+	AVNodeIcewingBunker      uint32 = 9
+	AVNodeStoneheartBunker   uint32 = 10
+	AVNodeIcebloodTower      uint32 = 11
+	AVNodeTowerPoint         uint32 = 12
 	AVNodeFrostwolfEastTower uint32 = 13
 	AVNodeFrostwolfWestTower uint32 = 14
-	AVNodeMax               uint32 = 15
+	AVNodeMax                uint32 = 15
 
 	// Mines
 	AVNorthMine uint32 = 0 // Irondeep
@@ -62,19 +62,19 @@ const (
 	AVCreatureGalvangar uint32 = 11947 // Horde Captain
 
 	// Mine Creatures
-	AVCreatureIrondeepBoss1   uint32 = 13099
-	AVCreatureIrondeepBoss2   uint32 = 13096
-	AVCreatureIrondeepBoss3   uint32 = 13097
-	AVCreatureColdtoothBoss1  uint32 = 13098
-	AVCreatureColdtoothBoss2  uint32 = 13094
-	AVCreatureColdtoothBoss3  uint32 = 13095
+	AVCreatureIrondeepBoss1  uint32 = 13099
+	AVCreatureIrondeepBoss2  uint32 = 13096
+	AVCreatureIrondeepBoss3  uint32 = 13097
+	AVCreatureColdtoothBoss1 uint32 = 13098
+	AVCreatureColdtoothBoss2 uint32 = 13094
+	AVCreatureColdtoothBoss3 uint32 = 13095
 
 	// World States
-	AVWorldStateAllianceScore       uint32 = 3127
-	AVWorldStateHordeScore          uint32 = 3128
-	AVWorldStateShowHordeScore      uint32 = 3133
-	AVWorldStateShowAllianceScore   uint32 = 3134
-	AVWorldStateSnowfallNeutral     uint32 = 1966
+	AVWorldStateAllianceScore     uint32 = 3127
+	AVWorldStateHordeScore        uint32 = 3128
+	AVWorldStateShowHordeScore    uint32 = 3133
+	AVWorldStateShowAllianceScore uint32 = 3134
+	AVWorldStateSnowfallNeutral   uint32 = 1966
 
 	// GameObjects (Banners)
 	AVObjectBannerA        uint32 = 178925
@@ -159,9 +159,9 @@ var avMineWorldStates = [2][3]uint32{
 type avNodeState struct {
 	NodeID       uint32
 	IsTower      bool
-	Owner        uint8  // 0: Neutral, 1: Alliance, 2: Horde
-	State        uint8  // 0: Controlled, 1: ContestedAlliance, 2: ContestedHorde, 3: Destroyed
-	PrevOwner    uint8  // Owner before contest
+	Owner        uint8 // 0: Neutral, 1: Alliance, 2: Horde
+	State        uint8 // 0: Controlled, 1: ContestedAlliance, 2: ContestedHorde, 3: Destroyed
+	PrevOwner    uint8 // Owner before contest
 	CaptureTimer *time.Timer
 	BannerGUID   uint64
 	BannerEntry  uint32

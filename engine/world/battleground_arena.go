@@ -45,15 +45,15 @@ const (
 	ArenaStatusWaitLeave  uint32 = 3 // Finished, waiting for auto-leave
 
 	// Spells
-	SpellArenaPreparation    uint32 = 32727
-	SpellAllianceGoldFlag    uint32 = 32724
-	SpellAllianceGreenFlag   uint32 = 32725
-	SpellHordeGoldFlag       uint32 = 35774
-	SpellHordeGreenFlag      uint32 = 35775
-	SpellLastManStanding     uint32 = 26549
-	SpellShadowSight         uint32 = 34709
-	SpellWarlDemonicCircle   uint32 = 48018
-	SpellDSWaterSpout        uint32 = 57090
+	SpellArenaPreparation  uint32 = 32727
+	SpellAllianceGoldFlag  uint32 = 32724
+	SpellAllianceGreenFlag uint32 = 32725
+	SpellHordeGoldFlag     uint32 = 35774
+	SpellHordeGreenFlag    uint32 = 35775
+	SpellLastManStanding   uint32 = 26549
+	SpellShadowSight       uint32 = 34709
+	SpellWarlDemonicCircle uint32 = 48018
+	SpellDSWaterSpout      uint32 = 57090
 
 	// Broadcast Texts
 	ArenaTextStartOneMinute      uint32 = 15740
@@ -71,12 +71,12 @@ const (
 	ArenaWorldStateShowRingOfValor   uint32 = 3610
 
 	// Timers & Limits
-	ArenaWarmupLength           = 60 * time.Second
-	ArenaMatchTimeLimit         = 45 * time.Minute
-	ArenaDoorRemovalDelay       = 5 * time.Second
-	ArenaShadowSightDelay       = 60 * time.Second
-	ArenaAutoLeaveDelay         = 120 * time.Second
-	ArenaTimeLimitPointsLoss    = -16
+	ArenaWarmupLength        = 60 * time.Second
+	ArenaMatchTimeLimit      = 45 * time.Minute
+	ArenaDoorRemovalDelay    = 5 * time.Second
+	ArenaShadowSightDelay    = 60 * time.Second
+	ArenaAutoLeaveDelay      = 120 * time.Second
+	ArenaTimeLimitPointsLoss = -16
 
 	// Buff GameObjects (Shadow Sight)
 	ArenaGOShadowSight1 uint32 = 184663
@@ -99,30 +99,30 @@ const (
 	ArenaGORL_Door2 uint32 = 185917
 
 	// Dalaran Sewers (617) GameObjects
-	ArenaGODS_Door1 uint32 = 192642
-	ArenaGODS_Door2 uint32 = 192643
+	ArenaGODS_Door1  uint32 = 192642
+	ArenaGODS_Door2  uint32 = 192643
 	ArenaGODS_Water1 uint32 = 194395
 	ArenaGODS_Water2 uint32 = 191877
 
 	// Ring of Valor (618) GameObjects
-	ArenaGORV_Elevator1       uint32 = 194582
-	ArenaGORV_Elevator2       uint32 = 194586
-	ArenaGORV_Fire1           uint32 = 192704
-	ArenaGORV_Fire2           uint32 = 192705
-	ArenaGORV_Firedoor1       uint32 = 192388
-	ArenaGORV_Firedoor2       uint32 = 192387
-	ArenaGORV_Pillar1         uint32 = 194583
-	ArenaGORV_Pillar2         uint32 = 194584
-	ArenaGORV_Pillar3         uint32 = 194585
-	ArenaGORV_Pillar4         uint32 = 194587
-	ArenaGORV_PillarCol1      uint32 = 194580
-	ArenaGORV_PillarCol2      uint32 = 194579
-	ArenaGORV_PillarCol3      uint32 = 194581
-	ArenaGORV_PillarCol4      uint32 = 194578
-	ArenaGORV_Gear1           uint32 = 192393
-	ArenaGORV_Gear2           uint32 = 192394
-	ArenaGORV_Pulley1         uint32 = 192389
-	ArenaGORV_Pulley2         uint32 = 192390
+	ArenaGORV_Elevator1  uint32 = 194582
+	ArenaGORV_Elevator2  uint32 = 194586
+	ArenaGORV_Fire1      uint32 = 192704
+	ArenaGORV_Fire2      uint32 = 192705
+	ArenaGORV_Firedoor1  uint32 = 192388
+	ArenaGORV_Firedoor2  uint32 = 192387
+	ArenaGORV_Pillar1    uint32 = 194583
+	ArenaGORV_Pillar2    uint32 = 194584
+	ArenaGORV_Pillar3    uint32 = 194585
+	ArenaGORV_Pillar4    uint32 = 194587
+	ArenaGORV_PillarCol1 uint32 = 194580
+	ArenaGORV_PillarCol2 uint32 = 194579
+	ArenaGORV_PillarCol3 uint32 = 194581
+	ArenaGORV_PillarCol4 uint32 = 194578
+	ArenaGORV_Gear1      uint32 = 192393
+	ArenaGORV_Gear2      uint32 = 192394
+	ArenaGORV_Pulley1    uint32 = 192389
+	ArenaGORV_Pulley2    uint32 = 192390
 )
 
 // IsArenaMap returns true if the specified map ID is an arena map.
@@ -214,9 +214,9 @@ type arenaBattlegroundState struct {
 	ArenaType  uint8 // 2, 3, 5
 	IsRated    bool
 
-	GoldTeamID   uint32
-	GreenTeamID  uint32
-	GoldTeamName string
+	GoldTeamID    uint32
+	GreenTeamID   uint32
+	GoldTeamName  string
 	GreenTeamName string
 
 	Status         uint32
@@ -239,10 +239,10 @@ type arenaBattlegroundState struct {
 	AnnouncedThirtySeconds  bool
 	AnnouncedFifteenSeconds bool
 
-	Scores          map[uint64]*ArenaPlayerScore
-	PlayerTeams     map[uint64]uint8 // GUID -> team (0: Green, 1: Gold)
-	GoldTeamScore   ArenaTeamMatchScore
-	GreenTeamScore  ArenaTeamMatchScore
+	Scores         map[uint64]*ArenaPlayerScore
+	PlayerTeams    map[uint64]uint8 // GUID -> team (0: Green, 1: Gold)
+	GoldTeamScore  ArenaTeamMatchScore
+	GreenTeamScore ArenaTeamMatchScore
 
 	StopTicker chan struct{}
 }
@@ -284,19 +284,19 @@ func (s *Server) getOrCreateArenaState(mapID, instanceID uint32, arenaType uint8
 		}
 
 		state = &arenaBattlegroundState{
-			InstanceID:     instanceID,
-			MapID:          mapID,
-			TypeID:         typeID,
-			ArenaType:      arenaType,
-			IsRated:        isRated,
-			GoldTeamName:   "Gold Team",
-			GreenTeamName:  "Green Team",
-			Status:         ArenaStatusWaitJoin,
-			StartTime:      time.Now(),
-			Winner:         ArenaTeamNone,
-			Scores:         make(map[uint64]*ArenaPlayerScore),
-			PlayerTeams:    make(map[uint64]uint8),
-			StopTicker:     make(chan struct{}),
+			InstanceID:    instanceID,
+			MapID:         mapID,
+			TypeID:        typeID,
+			ArenaType:     arenaType,
+			IsRated:       isRated,
+			GoldTeamName:  "Gold Team",
+			GreenTeamName: "Green Team",
+			Status:        ArenaStatusWaitJoin,
+			StartTime:     time.Now(),
+			Winner:        ArenaTeamNone,
+			Scores:        make(map[uint64]*ArenaPlayerScore),
+			PlayerTeams:   make(map[uint64]uint8),
+			StopTicker:    make(chan struct{}),
 		}
 		s.arenaState[key] = state
 	}

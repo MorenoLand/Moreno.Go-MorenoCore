@@ -614,15 +614,14 @@ func (s *session) handleMountSpecialAnim(ctx context.Context, payload []byte) bo
 
 // Vehicle handlers are implemented in vehicle.go
 
-
 const (
-	damageExhausted          uint8  = 0
-	damageDrowning           uint8  = 1
-	damageFall               uint8  = 2
-	damageLava               uint8  = 3
-	damageSlime              uint8  = 4
-	damageFire               uint8  = 5
-	damageFallToVoid         uint8  = 6
+	damageExhausted  uint8 = 0
+	damageDrowning   uint8 = 1
+	damageFall       uint8 = 2
+	damageLava       uint8 = 3
+	damageSlime      uint8 = 4
+	damageFire       uint8 = 5
+	damageFallToVoid uint8 = 6
 )
 
 // updateFallInformationIfNeed mirrors Player::UpdateFallInformationIfNeed (Player.cpp:25704-25708).

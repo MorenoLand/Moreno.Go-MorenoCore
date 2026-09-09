@@ -152,7 +152,7 @@ func TestQuestItemConsumptionAndRewardInEquippedBags(t *testing.T) {
 		"INSERT INTO creature_questender VALUES (200, 55)",
 
 		// Templates for items
-		"INSERT INTO item_template VALUES (4500, 1, 4, 0)", // 4-slot container bag
+		"INSERT INTO item_template VALUES (4500, 1, 4, 0)",  // 4-slot container bag
 		"INSERT INTO item_template VALUES (8888, 20, 0, 0)", // Quest item (stackable 20)
 		"INSERT INTO item_template VALUES (9999, 1, 0, 0)",  // Reward item
 		"INSERT INTO item_template VALUES (7777, 1, 0, 0)",  // Dummy item filling backpack

@@ -1020,5 +1020,3 @@ func TestCorpseWorldObjectAndBattlegroundQueueParity(t *testing.T) {
 		t.Fatal("expected aura 2584 removed after resurrection")
 	}
 }
-
-

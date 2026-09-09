@@ -29,41 +29,41 @@ type playerPos struct {
 // TrinityCore's MotionMaster fills: home position (for random wander around
 // spawn), current position, waypoint path/point and the next move deadline.
 type creatureMotion struct {
-	GUID     uint64
-	Entry    uint32
-	Map      uint32
-	HomeX    float32
-	HomeY    float32
-	HomeZ    float32
+	GUID        uint64
+	Entry       uint32
+	Map         uint32
+	HomeX       float32
+	HomeY       float32
+	HomeZ       float32
 	X           float32
 	Y           float32
 	Z           float32
 	Orientation float32
 	Speed       float32 // yd/s walk speed used for wander
-	RunSpeed float32 // yd/s run speed used for pursuit
-	MoveType uint32  // 1 random, 2 waypoint
-	Wander   float64
+	RunSpeed    float32 // yd/s run speed used for pursuit
+	MoveType    uint32  // 1 random, 2 waypoint
+	Wander      float64
 
-	Faction    uint32
-	Level      uint32
-	UnitFlags  uint32
-	FlagsExtra uint32
+	Faction     uint32
+	Level       uint32
+	UnitFlags   uint32
+	FlagsExtra  uint32
 	AttackTime  uint32
 	CombatReach float32
 
 	Armor       uint32
 	Resistances [7]uint32
 	MinDamage   float32
-	MaxDamage float32
+	MaxDamage   float32
 
 	Health    uint32
 	MaxHealth uint32
 
-	TargetGUID uint64
-	InCombat   bool
-	LastAttack time.Time
-	LastSpell  time.Time
-	Spells     []uint32
+	TargetGUID   uint64
+	InCombat     bool
+	LastAttack   time.Time
+	LastSpell    time.Time
+	Spells       []uint32
 	NextSpellIdx int
 
 	ThreatMgr  *ThreatManager
@@ -130,29 +130,29 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 	if motion == nil || motion.Entry != entry {
 		st := s.loadCreatureStats(ctx, entry)
 		motion = &creatureMotion{
-			GUID:       key,
-			Entry:      entry,
-			Map:        mapID,
-			HomeX:      x,
-			HomeY:      y,
-			HomeZ:      z,
-			X:          x,
-			Y:          y,
-			Z:          z,
-			Speed:      walkSpeed,
-			RunSpeed:   creatureBaseRunSpeed,
-			MoveType:   moveType,
-			Wander:     wander,
-			Health:     st.Health,
-			MaxHealth:  st.MaxHealth,
+			GUID:        key,
+			Entry:       entry,
+			Map:         mapID,
+			HomeX:       x,
+			HomeY:       y,
+			HomeZ:       z,
+			X:           x,
+			Y:           y,
+			Z:           z,
+			Speed:       walkSpeed,
+			RunSpeed:    creatureBaseRunSpeed,
+			MoveType:    moveType,
+			Wander:      wander,
+			Health:      st.Health,
+			MaxHealth:   st.MaxHealth,
 			Armor:       st.Armor,
 			Resistances: st.Resistances,
 			MinDamage:   st.MinDamage,
-			MaxDamage:  st.MaxDamage,
-			Level:      st.Level,
-			AttackTime: st.AttackTime,
-			UnitFlags:  st.UnitFlags,
-			FlagsExtra: st.FlagsExtra,
+			MaxDamage:   st.MaxDamage,
+			Level:       st.Level,
+			AttackTime:  st.AttackTime,
+			UnitFlags:   st.UnitFlags,
+			FlagsExtra:  st.FlagsExtra,
 		}
 		if walkSpeed <= 0 {
 			motion.Speed = creatureBaseWalkSpeed
@@ -554,6 +554,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health
 					target.Sess.player.Health = 0
+					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
 					target.Sess.killPlayer(ctx)
 					if motion.BossAI != nil {
 						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)
@@ -726,6 +727,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health
 					target.Sess.player.Health = 0
+					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
 					target.Sess.killPlayer(ctx)
 					if motion.BossAI != nil {
 						motion.BossAI.OnKillPlayer(ctx, s, motion, target.GUID)

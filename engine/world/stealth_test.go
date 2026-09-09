@@ -138,7 +138,7 @@ func TestStealthDetection_TrackHiddenAndMasterOfDeception(t *testing.T) {
 			CombatReach: 1.5,
 		},
 		activeAuras: map[uint32]*activeAura{
-			1787:  {SpellID: 1787, AuraType: 16, Amount: 300}, // Stealth
+			1787:  {SpellID: 1787, AuraType: 16, Amount: 300},  // Stealth
 			13971: {SpellID: 13971, AuraType: 154, Amount: 15}, // Master of Deception
 		},
 		auras: map[uint32]struct{}{1787: {}, 13971: {}},

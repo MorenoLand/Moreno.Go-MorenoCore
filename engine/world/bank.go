@@ -95,6 +95,7 @@ func (s *session) handleBuyBankSlot(ctx context.Context, payload []byte) bool {
 	}
 
 	res.WriteU32(0) // ERR_BANKSLOT_OK
+	s.updateAchievementCriteria(criteriaTypeBuyBankSlot, 0, 1)
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_BANK_SLOT_RESULT), res.Bytes(), true)
 	s.sendPlayerMoneyUpdate()
 	s.sendPlayerUpdate()

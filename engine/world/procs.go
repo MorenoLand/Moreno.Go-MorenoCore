@@ -39,10 +39,10 @@ const (
 
 	// Trinket Proc Spells & ICDs
 	// Deathbringer's Will (DBW) - 45s ICD
-	ProcSpellDBWAgilityNorm = 71485 // +600 Agi (Taunka)
+	ProcSpellDBWAgilityNorm  = 71485 // +600 Agi (Taunka)
 	ProcSpellDBWStrengthNorm = 71487 // +600 Str (Vrykul)
 	ProcSpellDBWAPNorm       = 71484 // +1200 AP (Iron Dwarf)
-	ProcSpellDBWAgilityHero = 71491 // +700 Agi
+	ProcSpellDBWAgilityHero  = 71491 // +700 Agi
 	ProcSpellDBWStrengthHero = 71492 // +700 Str
 	ProcSpellDBWAPHero       = 71560 // +1400 AP
 
@@ -55,10 +55,10 @@ const (
 	ProcSpellDeathsChoiceHero = 67772 // +510 Str/Agi
 
 	// Darkmoon Card: Greatness - 45s ICD
-	ProcSpellDMCGStrength = 60229 // +300 Str
-	ProcSpellDMCGAgility  = 60233 // +300 Agi
+	ProcSpellDMCGStrength  = 60229 // +300 Str
+	ProcSpellDMCGAgility   = 60233 // +300 Agi
 	ProcSpellDMCGIntellect = 60234 // +300 Int
-	ProcSpellDMCGSpirit   = 60235 // +300 Spi
+	ProcSpellDMCGSpirit    = 60235 // +300 Spi
 
 	// Mjolnir Runestone - 45s ICD
 	ProcSpellMjolnirRunestone = 60298 // +665 ArP

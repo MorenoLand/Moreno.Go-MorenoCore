@@ -878,7 +878,7 @@ func TestMasterLootParity(t *testing.T) {
 	// 2. Player 1 gives item to Player 2 via CMSG_LOOT_MASTER_GIVE
 	giveBuf := protocol.NewBuffer(17)
 	giveBuf.WriteU64(targetGUID)
-	giveBuf.WriteU8(0) // slot 0
+	giveBuf.WriteU8(0)  // slot 0
 	giveBuf.WriteU64(2) // target player 2
 	if !sess1.handleLootMasterGive(context.Background(), giveBuf.Bytes()) {
 		t.Fatal("handleLootMasterGive failed")
@@ -1251,6 +1251,3 @@ func TestGroupLootRoll_PlayerLeavesEarlyResolvesRoll(t *testing.T) {
 		t.Fatalf("expected roll to be resolved immediately upon player 20 leaving, but it is still active")
 	}
 }
-
-
-

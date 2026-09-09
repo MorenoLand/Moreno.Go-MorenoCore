@@ -666,4 +666,3 @@ func TestLFGTeleport_Denials(t *testing.T) {
 		t.Fatalf("expected teleport in to 1688, 1053, got %f, %f", sess.player.X, sess.player.Y)
 	}
 }
-

@@ -385,7 +385,7 @@ func TestSpellCrit_NonMeleeDamageLogPacket(t *testing.T) {
 	spellID := uint32(133)
 	damage := uint32(150)
 	overkill := uint32(0)
-	schoolMask := uint8(4) // Fire
+	schoolMask := uint8(4)  // Fire
 	hitInfo := uint32(0x02) // SPELL_HIT_TYPE_CRIT
 
 	logBytes := buildSpellNonMeleeDamageLog(targetGUID, attackerGUID, spellID, damage, overkill, schoolMask, 0, 0, hitInfo)
@@ -784,5 +784,3 @@ func TestCreatureEvade_ClearsAuras(t *testing.T) {
 		t.Fatalf("expected 0 active auras after creature evade, got %d", auraCount)
 	}
 }
-
-

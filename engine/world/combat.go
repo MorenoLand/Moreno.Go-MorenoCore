@@ -906,9 +906,9 @@ func calcArmorReducedDamage(armor float64, attackerLevel uint8, damage uint32, a
 }
 
 type creatureStats struct {
-	Level      uint32
-	Health     uint32
-	MaxHealth  uint32
+	Level       uint32
+	Health      uint32
+	MaxHealth   uint32
 	Armor       uint32
 	Resistances [7]uint32
 	MinDamage   float32
@@ -1310,7 +1310,7 @@ func rollMeleeOutcome(attackerLevel, victimLevel uint8, isPlayerAttacker, isPlay
 	// 7. Crushing blow: mob attacking player 4+ levels below mob
 	crushingChance := int32(0)
 	if !isPlayerAttacker && isPlayerVictim && attackerLevel >= victimLevel+4 {
-		crushingChance = (int32(attackerLevel) - int32(victimLevel) - 4)*200 + 1500
+		crushingChance = (int32(attackerLevel)-int32(victimLevel)-4)*200 + 1500
 	}
 
 	roll := rand.IntN(10000)
@@ -1608,4 +1608,3 @@ func (s *session) isInCombat() bool {
 	}
 	return s.attackTarget != 0 || (s.player.UnitFlags&unitFlagInCombat != 0)
 }
-

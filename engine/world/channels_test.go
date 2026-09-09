@@ -159,4 +159,3 @@ func TestChannel_Moderate(t *testing.T) {
 		t.Fatal("expected handleChannelModerate to return true")
 	}
 }
-

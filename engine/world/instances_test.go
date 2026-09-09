@@ -790,4 +790,3 @@ func TestSetSavedInstanceExtend(t *testing.T) {
 		t.Fatalf("expected extendState=0 (EXTEND_STATE_NORMAL), got %d", extendState)
 	}
 }
-

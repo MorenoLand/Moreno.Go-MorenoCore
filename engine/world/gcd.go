@@ -18,30 +18,30 @@ func (s *session) isOffGCDSpell(spell wotlk.Spell) bool {
 	// Primary off-GCD abilities in WoW 3.3.5:
 	switch spell.ID {
 	// Interrupts
-	case 1766,  // Kick (Rogue)
-		6552,   // Pummel (Warrior)
-		2139,   // Counterspell (Mage)
-		72,     // Shield Bash (Warrior)
-		57994,  // Wind Shear (Shaman)
-		47528,  // Mind Freeze (Death Knight)
-		19244:  // Spell Lock (Warlock Felhunter)
+	case 1766, // Kick (Rogue)
+		6552,  // Pummel (Warrior)
+		2139,  // Counterspell (Mage)
+		72,    // Shield Bash (Warrior)
+		57994, // Wind Shear (Shaman)
+		47528, // Mind Freeze (Death Knight)
+		19244: // Spell Lock (Warlock Felhunter)
 		return true
 
 	// Defensive cooldowns
 	case 22812, // Barkskin (Druid)
-		61336,  // Survival Instincts (Druid)
-		19263,  // Deterrence (Hunter)
-		48707:  // Anti-Magic Shell (Death Knight)
+		61336, // Survival Instincts (Druid)
+		19263, // Deterrence (Hunter)
+		48707: // Anti-Magic Shell (Death Knight)
 		return true
 
 	// Instant offensive/utility cooldowns
 	case 11958, // Cold Snap (Mage)
-		12043,  // Presence of Mind (Mage)
-		16188,  // Nature's Swiftness (Shaman)
-		17116,  // Nature's Swiftness (Druid)
-		20572,  // Blood Fury (Orc racial)
-		26297,  // Berserking (Troll racial)
-		36554:  // Shadowstep (Rogue)
+		12043, // Presence of Mind (Mage)
+		16188, // Nature's Swiftness (Shaman)
+		17116, // Nature's Swiftness (Druid)
+		20572, // Blood Fury (Orc racial)
+		26297, // Berserking (Troll racial)
+		36554: // Shadowstep (Rogue)
 		return true
 	}
 
