@@ -331,3 +331,77 @@ func TestAchievementDamageHealAndGoldCriteria(t *testing.T) {
 		t.Fatal("lazy maps not initialized")
 	}
 }
+
+func TestTimedAchievementLifecycle(t *testing.T) {
+	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100, Race: 1}
+	state, clientConn, db, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+
+	achievementIndex.mu.Lock()
+	timed := achievementCriteriaEntry{ID: 9600, AchievementID: 5600, Type: criteriaTypeKillCreature, Asset: 999, Quantity: 3, StartEvent: timedTypeCreature, StartAsset: 500, StartTimer: 1}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeKillCreature, 999)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeKillCreature, 999)], timed)
+	achievementIndex.byTimedEvent[typeAssetKey(timedTypeCreature, 500)] = append(achievementIndex.byTimedEvent[typeAssetKey(timedTypeCreature, 500)], timed)
+	achievementIndex.byAchieve[5600] = append(achievementIndex.byAchieve[5600], timed)
+	achievementIndex.achieveByID[5600] = achievementEntry{ID: 5600, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	// Killing the start creature (500) arms the timed criteria for criteria
+	// driven by target creature 999.
+	state.startTimedAchievement(timedTypeCreature, 500)
+	if _, running := state.timedCriteria[9600]; !running {
+		t.Fatal("timed criteria not armed")
+	}
+	if progress := state.criteriaProgress[9600]; progress == nil || progress.Counter != 0 {
+		t.Fatalf("timed progress=%+v", progress)
+	}
+	var counter int64
+	if err := db.QueryRow("SELECT counter FROM character_achievement_progress WHERE guid = 9 AND criteria = 9600").Scan(&counter); err != nil || counter != 0 {
+		t.Fatalf("timed row missing: counter=%d err=%v", counter, err)
+	}
+
+	// Expiry resets progress and notifies.
+	state.expireTimedAchievement(9600)
+	if _, has := state.criteriaProgress[9600]; has {
+		t.Fatal("progress not cleared on expiry")
+	}
+	if _, running := state.timedCriteria[9600]; running {
+		t.Fatal("timer not cleared on expiry")
+	}
+	var count int64
+	_ = db.QueryRow("SELECT COUNT(1) FROM character_achievement_progress WHERE guid = 9 AND criteria = 9600").Scan(&count)
+	if count != 0 {
+		t.Fatalf("persisted row survived expiry: %d", count)
+	}
+
+	// Completing the criterion inside the window stops the timer without reset.
+	state.startTimedAchievement(timedTypeCreature, 500)
+	state.criteriaProgress[9600].Counter = 3
+	state.stopTimedAchievement(9600)
+	if _, running := state.timedCriteria[9600]; running {
+		t.Fatal("timer not stopped on completion")
+	}
+	if _, has := state.criteriaProgress[9600]; !has {
+		t.Fatal("progress cleared by stop (only expiry should clear)")
+	}
+}
+
+func TestTimedAchievementNoDoubleStart(t *testing.T) {
+	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	state.startTimedAchievement(timedTypeCreature, 500)
+	state.startTimedAchievement(timedTypeCreature, 500)
+	// Both calls target the same criteria; only one timer per criteria id.
+	n := 0
+	for id := range state.timedCriteria {
+		if id == 9600 {
+			n++
+		}
+	}
+	if n > 1 {
+		t.Fatalf("duplicate timers: %d", n)
+	}
+	for _, timer := range state.timedCriteria {
+		timer.Stop()
+	}
+}

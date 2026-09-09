@@ -209,6 +209,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	// Quest kill credit: RequiredNpcOrGo entries plus KillCredit templates.
 	s.creditQuestKills(ctx, creatureEntry, target.GUID)
 	s.updateAchievementCriteria(criteriaTypeKillCreature, creatureEntry, 1)
+	s.startTimedAchievement(timedTypeCreature, creatureEntry)
 
 	// Clear any active auras/DoTs ticking on this creature
 	if s.server != nil {

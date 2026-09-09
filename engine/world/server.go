@@ -187,6 +187,7 @@ type session struct {
 	resurrection          *resurrectionData
 	earnedAchievements    map[uint32]uint32
 	criteriaProgress      map[uint32]*criteriaProgressState
+	timedCriteria         map[uint32]*time.Timer
 	inFlight              bool
 	buyback               [12]*buybackSlot
 	currentBuybackSlot    uint8

@@ -70,6 +70,9 @@ type achievementCriteriaEntry struct {
 	Type          uint32
 	Asset         uint32
 	Quantity      uint32 // required count
+	StartEvent    uint32 // AchievementCriteriaTimedTypes (DBC field 27)
+	StartAsset    uint32 // DBC field 28
+	StartTimer    uint32 // seconds (DBC field 29)
 }
 
 type criteriaProgressState struct {
@@ -79,19 +82,21 @@ type criteriaProgressState struct {
 }
 
 type achievementRuntime struct {
-	mu          sync.RWMutex
-	byTypeAsset map[uint64][]achievementCriteriaEntry // key: type<<32 | asset
-	byID        map[uint32]achievementCriteriaEntry
-	byAchieve   map[uint32][]achievementCriteriaEntry
-	achieveByID map[uint32]achievementEntry
-	loaded      bool
+	mu           sync.RWMutex
+	byTypeAsset  map[uint64][]achievementCriteriaEntry // key: type<<32 | asset
+	byTimedEvent map[uint64][]achievementCriteriaEntry // key: startEvent<<32 | startAsset
+	byID         map[uint32]achievementCriteriaEntry
+	byAchieve    map[uint32][]achievementCriteriaEntry
+	achieveByID  map[uint32]achievementEntry
+	loaded       bool
 }
 
 var achievementIndex = &achievementRuntime{
-	byTypeAsset: make(map[uint64][]achievementCriteriaEntry),
-	byID:        make(map[uint32]achievementCriteriaEntry),
-	byAchieve:   make(map[uint32][]achievementCriteriaEntry),
-	achieveByID: make(map[uint32]achievementEntry),
+	byTypeAsset:  make(map[uint64][]achievementCriteriaEntry),
+	byTimedEvent: make(map[uint64][]achievementCriteriaEntry),
+	byID:         make(map[uint32]achievementCriteriaEntry),
+	byAchieve:    make(map[uint32][]achievementCriteriaEntry),
+	achieveByID:  make(map[uint32]achievementEntry),
 }
 
 func typeAssetKey(criterionType, asset uint32) uint64 {
@@ -135,9 +140,16 @@ func (s *Server) loadAchievementIndex() {
 		if err != nil {
 			continue
 		}
-		entry := achievementCriteriaEntry{ID: id, AchievementID: achievementID, Type: criterionType, Asset: asset, Quantity: quantity}
+		startEvent, _ := record.Uint32(27)
+		startAsset, _ := record.Uint32(28)
+		startTimer, _ := record.Uint32(29)
+		entry := achievementCriteriaEntry{ID: id, AchievementID: achievementID, Type: criterionType, Asset: asset, Quantity: quantity, StartEvent: startEvent, StartAsset: startAsset, StartTimer: startTimer}
 		key := typeAssetKey(criterionType, asset)
 		achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], entry)
+		if startEvent != 0 {
+			timedKey := typeAssetKey(startEvent, startAsset)
+			achievementIndex.byTimedEvent[timedKey] = append(achievementIndex.byTimedEvent[timedKey], entry)
+		}
 		achievementIndex.byID[id] = entry
 		achievementIndex.byAchieve[achievementID] = append(achievementIndex.byAchieve[achievementID], entry)
 	}
@@ -355,6 +367,7 @@ func (s *session) updateAchievementCriteria(criterionType, asset uint32, quantit
 				s.playerGUID, criterion.ID, progress.Counter, progress.Date)
 		}
 		if criterion.Quantity > 0 && progress.Counter >= criterion.Quantity {
+			s.stopTimedAchievement(criterion.ID)
 			s.checkAchievementComplete(criterion.AchievementID)
 		}
 	}
@@ -409,6 +422,111 @@ func (s *session) setAchievementCriteria(criterionType, asset, value uint32) {
 		if criterion.Quantity > 0 && progress.Counter >= criterion.Quantity {
 			s.checkAchievementComplete(criterion.AchievementID)
 		}
+	}
+}
+
+// Timed criteria engine, mirroring AchievementMgr::StartTimedAchievement,
+// UpdateTimedAchievements, and RemoveTimedAchievement (AchievementMgr.cpp:1461).
+// Timed types from DBCEnums.h: 1 event, 2 quest accept, 5 spell cast,
+// 6 spell target, 7 creature kill, 9 item use. Starting arms a StartTimer-
+// second deadline; expiry resets the criteria progress, notifies the client
+// with SMSG_CRITERIA_DELETED, and removes the persisted row.
+const (
+	timedTypeQuest     = 2
+	timedTypeSpellCast = 5
+	timedTypeCreature  = 7
+	timedTypeItem      = 9
+)
+
+// startTimedAchievement mirrors AchievementMgr::StartTimedAchievement: for
+// every criteria whose StartEvent matches the timed type and StartAsset
+// matches the entry, reset progress to zero and arm the deadline.
+func (s *session) startTimedAchievement(timedType, entry uint32) {
+	if s.player == nil || s.server == nil {
+		return
+	}
+	s.server.loadAchievementIndex()
+	achievementIndex.mu.RLock()
+	list, ok := achievementIndex.byTimedEvent[typeAssetKey(timedType, entry)]
+	if !ok {
+		achievementIndex.mu.RUnlock()
+		return
+	}
+	matched := make([]achievementCriteriaEntry, len(list))
+	copy(matched, list)
+	achievementIndex.mu.RUnlock()
+
+	if s.earnedAchievements == nil {
+		s.earnedAchievements = make(map[uint32]uint32)
+	}
+	if s.criteriaProgress == nil {
+		s.criteriaProgress = make(map[uint32]*criteriaProgressState)
+	}
+	if s.timedCriteria == nil {
+		s.timedCriteria = make(map[uint32]*time.Timer)
+	}
+	for _, criterion := range matched {
+		if _, done := s.earnedAchievements[criterion.AchievementID]; done {
+			continue
+		}
+		if _, running := s.timedCriteria[criterion.ID]; running {
+			continue
+		}
+		if criterion.StartTimer == 0 {
+			continue
+		}
+		progress := &criteriaProgressState{CriteriaID: criterion.ID, Date: uint32(time.Now().Unix())}
+		s.criteriaProgress[criterion.ID] = progress
+		s.sendCriteriaUpdate(progress)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(),
+				"REPLACE INTO character_achievement_progress (guid, criteria, counter, date) VALUES (?, ?, 0, ?)",
+				s.playerGUID, criterion.ID, progress.Date)
+		}
+		timer := time.AfterFunc(time.Duration(criterion.StartTimer)*time.Second, func() {
+			s.expireTimedAchievement(criterion.ID)
+		})
+		s.timedCriteria[criterion.ID] = timer
+		s.debug("timed achievement started", "account", s.accountName, "criteria", criterion.ID, "seconds", criterion.StartTimer)
+	}
+}
+
+// expireTimedAchievement mirrors the UpdateTimedAchievements expiry path:
+// reset progress, notify with SMSG_CRITERIA_DELETED, remove persistence.
+func (s *session) expireTimedAchievement(criteriaID uint32) {
+	if s.criteriaProgress == nil {
+		return
+	}
+	if _, has := s.criteriaProgress[criteriaID]; !has {
+		return
+	}
+	delete(s.criteriaProgress, criteriaID)
+	if s.timedCriteria != nil {
+		if timer, has := s.timedCriteria[criteriaID]; has {
+			timer.Stop()
+			delete(s.timedCriteria, criteriaID)
+		}
+	}
+	packet := protocol.NewBuffer(4)
+	packet.WriteU32(criteriaID)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CRITERIA_DELETED), packet.Bytes(), true)
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(context.Background(),
+			"DELETE FROM character_achievement_progress WHERE guid = ? AND criteria = ?",
+			s.playerGUID, criteriaID)
+	}
+	s.debug("timed achievement expired", "account", s.accountName, "criteria", criteriaID)
+}
+
+// stopTimedAchievement mirrors RemoveTimedAchievement without the deletion
+// notification: used when the criteria completes inside the window.
+func (s *session) stopTimedAchievement(criteriaID uint32) {
+	if s.timedCriteria == nil {
+		return
+	}
+	if timer, has := s.timedCriteria[criteriaID]; has {
+		timer.Stop()
+		delete(s.timedCriteria, criteriaID)
 	}
 }
 

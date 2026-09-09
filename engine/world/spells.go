@@ -408,6 +408,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.startChannel(castID, spellID, spell, targetGUID)
 	}
 	s.updateAchievementCriteria(criteriaTypeCastSpell, spellID, 1)
+	s.startTimedAchievement(timedTypeSpellCast, spellID)
 	if spell.RecoveryTime > 0 {
 		nowUnix := time.Now().Unix()
 		cooldownEnd := nowUnix + int64((spell.RecoveryTime+999)/1000)

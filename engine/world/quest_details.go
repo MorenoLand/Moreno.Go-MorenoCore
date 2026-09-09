@@ -177,6 +177,7 @@ func (s *session) addQuestToPlayer(ctx context.Context, questID uint32) bool {
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return false
 	}
+	s.startTimedAchievement(timedTypeQuest, questID)
 	query := `INSERT OR REPLACE INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)`
 	if s.server.CharactersStore.Backend != database.BackendSQLite {
 		query = `INSERT INTO character_queststatus (guid, quest, status) VALUES (?, ?, ?)
