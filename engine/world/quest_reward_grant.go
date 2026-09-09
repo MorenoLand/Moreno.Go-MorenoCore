@@ -216,6 +216,10 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 		return nil, nil, err
 	}
 	s.updateAchievementCriteria(criteriaTypeCompleteQuest, questID, 1)
+	s.updateAchievementCriteria(criteriaTypeQuestCount, 0, 1)
+	if view.Detail.RewardMoney > 0 {
+		s.updateAchievementCriteria(criteriaTypeMoneyFromQuest, 0, uint32(view.Detail.RewardMoney))
+	}
 	return grants, destroyedGUIDs, nil
 }
 

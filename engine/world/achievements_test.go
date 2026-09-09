@@ -298,3 +298,36 @@ func TestAchievementDeathAndOwnItemHooks(t *testing.T) {
 		t.Fatal("own-item achievement not completed at 5/5 stacks")
 	}
 }
+
+func TestAchievementDamageHealAndGoldCriteria(t *testing.T) {
+	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100, Race: 1}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+
+	achievementIndex.mu.Lock()
+	dmgCrit := achievementCriteriaEntry{ID: 9400, AchievementID: 5400, Type: criteriaTypeDamageDone, Asset: 0, Quantity: 1000}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeDamageDone, 0)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeDamageDone, 0)], dmgCrit)
+	achievementIndex.byAchieve[5400] = append(achievementIndex.byAchieve[5400], dmgCrit)
+	achievementIndex.achieveByID[5400] = achievementEntry{ID: 5400, Faction: -1}
+	mailCrit := achievementCriteriaEntry{ID: 9500, AchievementID: 5500, Type: criteriaTypeGoldSpentForMail, Asset: 0, Quantity: 100}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeGoldSpentForMail, 0)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeGoldSpentForMail, 0)], mailCrit)
+	achievementIndex.byAchieve[5500] = append(achievementIndex.byAchieve[5500], mailCrit)
+	achievementIndex.achieveByID[5500] = achievementEntry{ID: 5500, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	state.updateAchievementCriteria(criteriaTypeDamageDone, 0, 350)
+	state.updateAchievementCriteria(criteriaTypeDamageDone, 0, 650)
+	if _, earned := state.earnedAchievements[5400]; !earned {
+		t.Fatal("damage-done achievement not completed at 1000/1000")
+	}
+	state.updateAchievementCriteria(criteriaTypeGoldSpentForMail, 0, 30)
+	if progress := state.criteriaProgress[9500]; progress == nil || progress.Counter != 30 {
+		t.Fatalf("mail gold progress=%+v", progress)
+	}
+	// Nil-map sessions stay safe under the new hooks.
+	fresh := &session{server: &Server{}, player: player}
+	fresh.updateAchievementCriteria(criteriaTypeHealingDone, 0, 5)
+	if fresh.criteriaProgress == nil {
+		t.Fatal("lazy maps not initialized")
+	}
+}

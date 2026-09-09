@@ -45,6 +45,14 @@ const (
 	criteriaTypeLootItem         = 42 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_ITEM
 	criteriaTypeGainReputation   = 46 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_REPUTATION
 	criteriaTypeLootMoney        = 67 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY
+	criteriaTypeDamageDone       = 13 // ACHIEVEMENT_CRITERIA_TYPE_DAMAGE_DONE
+	criteriaTypeHealingDone      = 55 // ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE
+	criteriaTypeQuestCount       = 9  // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST_COUNT
+	criteriaTypeRollNeed         = 50 // ACHIEVEMENT_CRITERIA_TYPE_ROLL_NEED_ON_LOOT
+	criteriaTypeRollGreed        = 51 // ACHIEVEMENT_CRITERIA_TYPE_ROLL_GREED_ON_LOOT
+	criteriaTypeMoneyFromVendor  = 59 // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_VENDORS
+	criteriaTypeMoneyFromQuest   = 62 // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_QUEST_REWARD
+	criteriaTypeGoldSpentForMail = 66 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_MAIL
 )
 
 type achievementEntry struct {

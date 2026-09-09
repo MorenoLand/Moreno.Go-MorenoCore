@@ -204,6 +204,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	}
 	earned := uint32(sellPrice) * uint32(count)
 	s.player.Money += earned
+	s.updateAchievementCriteria(criteriaTypeMoneyFromVendor, 0, earned)
 	_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 
 	bbItemGUID := uint64(itemGUID)

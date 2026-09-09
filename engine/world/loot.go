@@ -1074,9 +1074,12 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	if rollType == 1 { // NEED
 		voteRollNumber = 0
 		voteRollType = 0
+		s.updateAchievementCriteria(criteriaTypeRollNeed, 0, 1)
 	} else if rollType == 0 { // PASS
 		voteRollNumber = 128
 		voteRollType = 0
+	} else if rollType == 2 || rollType == 3 { // GREED / DISENCHANT
+		s.updateAchievementCriteria(criteriaTypeRollGreed, 0, 1)
 	}
 
 	buf := protocol.NewBuffer(35)

@@ -762,6 +762,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 	if damage >= target.Health && target.Health > 0 {
 		overkill = damage - target.Health
 	}
+	s.updateAchievementCriteria(criteriaTypeDamageDone, 0, damage)
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
 
@@ -1026,6 +1027,7 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 		targetSess.player.Health = targetSess.player.MaxHealth
 	} else {
 		targetSess.player.Health += heal
+		s.updateAchievementCriteria(criteriaTypeHealingDone, 0, heal)
 	}
 	overheal := heal - effectiveHeal
 	if s.server != nil {

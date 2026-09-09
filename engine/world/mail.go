@@ -268,6 +268,9 @@ func (s *session) handleSendMail(ctx context.Context, payload []byte) bool {
 		postageFee = uint32(30 * len(attachments))
 	}
 	totalRequired := postageFee + money
+	if s.player.Money >= totalRequired && postageFee > 0 {
+		s.updateAchievementCriteria(criteriaTypeGoldSpentForMail, 0, postageFee)
+	}
 	if s.player.Money < totalRequired {
 		_ = s.write(uint16(protocol.OpcodeSMSG_SEND_MAIL_RESULT), buildSendMailResult(0, mailSend, mailErrNotEnoughMoney, 0, 0, 0), true)
 		return true
