@@ -225,6 +225,18 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if tutOpcode != uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS) || len(tutPayload) != 32 {
 		t.Fatalf("tutorial opcode=%x payload=%d", tutOpcode, len(tutPayload))
 	}
+	// Reference login order sends the achievement dump right after the
+	// tutorial flags (AchievementMgr::SendAllAchievementData).
+	achOpcode, achPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if achOpcode != uint16(protocol.OpcodeSMSG_ALL_ACHIEVEMENT_DATA) || len(achPayload) < 4 {
+		t.Fatalf("achievements opcode=%x payload=%d", achOpcode, len(achPayload))
+	}
+	if got := binary.LittleEndian.Uint32(achPayload[len(achPayload)-4:]); got != 0xFFFFFFFF {
+		t.Fatalf("achievement block missing -1 terminator: %x", got)
+	}
 	timeOpcode, timePayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)

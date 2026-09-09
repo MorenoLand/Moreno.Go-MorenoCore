@@ -208,6 +208,7 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 
 	// Quest kill credit: RequiredNpcOrGo entries plus KillCredit templates.
 	s.creditQuestKills(ctx, creatureEntry, target.GUID)
+	s.updateAchievementCriteria(criteriaTypeKillCreature, creatureEntry, 1)
 
 	// Clear any active auras/DoTs ticking on this creature
 	if s.server != nil {
@@ -266,6 +267,7 @@ func (s *session) grantXPWithVictim(ctx context.Context, amount uint32, victimGU
 		oldMana := s.player.MaxPowers[0]
 		oldStats := s.player.Stats
 		s.player.Level++
+		s.updateAchievementCriteria(criteriaTypeReachLevel, uint32(s.player.Level), 1)
 		_ = s.calculatePlayerStats(ctx, s.player)
 		s.player.Health = s.player.MaxHealth
 		if len(s.player.MaxPowers) > 0 {

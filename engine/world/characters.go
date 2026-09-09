@@ -388,6 +388,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS), buildTutorialFlags(s.tutorials), true); err != nil {
 		return false
 	}
+	s.loadAchievementState(ctx)
+	s.sendAllAchievementData()
 	s.sendEquipmentSetList(ctx)
 	// Persist cinematic state before spawning into world (TC: CharacterHandler.cpp)
 	// The actual SMSG_TRIGGER_CINEMATIC is sent after SMSG_UPDATE_OBJECT (player spawn)

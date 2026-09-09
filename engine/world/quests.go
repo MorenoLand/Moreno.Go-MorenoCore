@@ -553,23 +553,6 @@ func (s *session) handleQuestgiverStatusMultipleQuery(ctx context.Context, paylo
 	return true
 }
 
-// handleQueryInspectAchievements processes CMSG_QUERY_INSPECT_ACHIEVEMENTS (0x46B).
-// Reference: WorldSession::HandleQueryInspectAchievements (AchievementHandler.cpp:25).
-func (s *session) handleQueryInspectAchievements(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
-		return true
-	}
-	r := protocol.NewReader(payload)
-	targetGUID, _ := r.ReadU64()
-
-	buf := protocol.NewBuffer(16)
-	buf.WritePackedGUID(targetGUID)
-	buf.WriteU32(0) // achievement count
-	_ = s.write(uint16(protocol.OpcodeSMSG_RESPOND_INSPECT_ACHIEVEMENTS), buf.Bytes(), true)
-	return true
-}
-
-
 func (s *session) completeQuest(ctx context.Context, questID uint32) {
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_queststatus SET status = ? WHERE guid = ? AND quest = ?", questStatusComplete, s.playerGUID, questID)
