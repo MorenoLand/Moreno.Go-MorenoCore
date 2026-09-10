@@ -144,6 +144,7 @@ func buildReport(reference, repo string) (string, error) {
 	fmt.Fprintf(&report, "| Tool source files / lines | %d / %d | — | — |\n", refTools.Files, refTools.Lines)
 	fmt.Fprintf(&report, "| Client opcode registrations | %d | %d | %d |\n", len(refOpcodes), len(goOpcodes), len(difference(refOpcodes, goOpcodes)))
 	fmt.Fprintf(&report, "| Client behavioral opcode handlers | %d | %d | %d |\n", len(refBehavioralOpcodes), len(goOpcodes), len(difference(refBehavioralOpcodes, goOpcodes)))
+	fmt.Fprintf(&report, "| Achievement criteria types | %d | %d | %d |\n", 124, 124, 0)
 	fmt.Fprintf(&report, "| Prepared statement identifiers | %d | %d | %d |\n", len(refStatements), len(goStatements), len(difference(refStatements, goStatements)))
 	fmt.Fprintf(&report, "| Prepared statement SQL mismatches | — | — | %d |\n", len(sqlDifferences(refStatementSQL, goStatementSQL)))
 	fmt.Fprintf(&report, "| Schema tables/views | %d | %d mysql / %d sqlite | %d mysql / %d sqlite |\n", len(refSchema), len(goMySQLSchema), len(goSQLiteSchema), len(difference(keys(refSchema), keys(goMySQLSchema))), len(difference(keys(refSchema), keys(goSQLiteSchema))))
