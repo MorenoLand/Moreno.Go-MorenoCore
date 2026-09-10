@@ -53,7 +53,9 @@ const (
 	playerFieldLifetimeHonorableKills           = 1210 // PLAYER_FIELD_LIFETIME_HONORABLE_KILLS = UNIT_END + 0x0426
 	playerFieldDuelArbiter                      = 148  // PLAYER_DUEL_ARBITER = UNIT_END + 0x0000 (Size 2)
 	playerFieldDuelTeam                         = 156  // PLAYER_DUEL_TEAM = UNIT_END + 0x0008 (Size 1)
-	playerQuestLogStart                         = 158  // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
+	playerExploredZonesStart                    = 1041 // PLAYER_EXPLORED_ZONES_1 = UNIT_END + 0x037D
+	playerExploredZonesCount                    = 128
+	playerQuestLogStart                         = 158 // PLAYER_QUEST_LOG_1_1; stride 5 per TC MAX_QUEST_OFFSET
 	playerQuestLogSlots                         = 25
 	playerSkillInfoStart                        = 636
 	playerMaxSkills                             = 128
@@ -191,6 +193,7 @@ type playerState struct {
 	TotemSlots           [4]uint64
 	PlayerFieldBytes     uint32
 	SelfResSpell         uint32
+	ExploredZones        [playerExploredZonesCount]uint32
 	DuelArbiter          uint64
 	DuelTeam             uint32
 	UnitFlags            uint32
@@ -1028,6 +1031,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	values[unitFieldPlayerFlags] = state.PlayerFlags
 	values[unitFieldPlayerFieldBytes] = state.PlayerFieldBytes
 	values[unitFieldPlayerSelfResSpell] = state.SelfResSpell
+	for i := 0; i < playerExploredZonesCount; i++ {
+		values[playerExploredZonesStart+i] = state.ExploredZones[i]
+	}
 	values[unitFieldPlayerBytes] = uint32(state.Skin) | uint32(state.Face)<<8 | uint32(state.HairStyle)<<16 | uint32(state.HairColor)<<24
 	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.SheathState)<<8 | uint32(state.BankBagSlots)<<16
 	values[unitFieldGuildID] = state.GuildID

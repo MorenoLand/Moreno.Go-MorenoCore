@@ -444,3 +444,106 @@ func TestHonorableKillAndBGObjectiveCriteria(t *testing.T) {
 		t.Fatal("BG objective achievement not completed")
 	}
 }
+
+func TestExploreZoneBitsAndCriteria(t *testing.T) {
+	dir := t.TempDir()
+	// AreaTable: zone 12 has AreaBit 5, level gate 0. WorldMapOverlay 700 covers zones {12, 0, 0, 0}.
+	writeMini := func(name string, rows ...[]uint32) {
+		var body []byte
+		for _, row := range rows {
+			for _, v := range row {
+				body = append(body, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+			}
+		}
+		out := []byte("WDBC")
+		put := func(v uint32) { out = append(out, byte(v), byte(v>>8), byte(v>>16), byte(v>>24)) }
+		put(uint32(len(rows)))
+		put(uint32(len(rows[0])))
+		put(uint32(len(rows[0])) * 4)
+		put(1)
+		out = append(out, body...)
+		out = append(out, 0)
+		if err := os.WriteFile(filepath.Join(dir, name), out, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	areaRow := make([]uint32, 11)
+	areaRow[0] = 12
+	areaRow[3] = 5 // AreaBit
+	areaRow[10] = 0
+	writeMini("AreaTable.dbc", areaRow)
+	overlayRow := make([]uint32, 6)
+	overlayRow[0] = 700
+	overlayRow[2] = 12
+	writeMini("WorldMapOverlay.dbc", overlayRow)
+
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec("CREATE TABLE characters (guid INTEGER PRIMARY KEY, exploredZones TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO characters (guid, exploredZones) VALUES (9, '')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE character_achievement_progress (guid INTEGER NOT NULL, criteria INTEGER NOT NULL, counter INTEGER NOT NULL, date INTEGER NOT NULL, PRIMARY KEY (guid, criteria))"); err != nil {
+		t.Fatal(err)
+	}
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	server := &Server{CharactersStore: store, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Data: wotlk.NewStore(dir)}
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100, Race: 1}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 9, player: player}
+	state.earnedAchievements = make(map[uint32]uint32)
+	state.criteriaProgress = make(map[uint32]*criteriaProgressState)
+	go func() {
+		_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			if _, _, err := readServerFrame(clientConn, nil); err != nil {
+				return
+			}
+		}
+	}()
+
+	server.loadAchievementIndex()
+	achievementIndex.mu.Lock()
+	explore := achievementCriteriaEntry{ID: 9900, AchievementID: 5900, Type: criteriaTypeExplore, Asset: 700, Quantity: 1}
+	achievementIndex.byID[9900] = explore
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeExplore, 700)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeExplore, 700)], explore)
+	achievementIndex.byType[criteriaTypeExplore] = append(achievementIndex.byType[criteriaTypeExplore], explore)
+	achievementIndex.exploreByZone[12] = append(achievementIndex.exploreByZone[12], 9900)
+	achievementIndex.byAchieve[5900] = append(achievementIndex.byAchieve[5900], explore)
+	achievementIndex.achieveByID[5900] = achievementEntry{ID: 5900, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	ctx := context.Background()
+	state.exploreZone(ctx, 12)
+	if player.ExploredZones[0]&(1<<5) == 0 {
+		t.Fatalf("area bit not set: %x", player.ExploredZones[0])
+	}
+	var hex string
+	if err := db.QueryRow("SELECT exploredZones FROM characters WHERE guid = 9").Scan(&hex); err != nil || len(hex) != playerExploredZonesCount*8 {
+		t.Fatalf("persisted blob len=%d err=%v", len(hex), err)
+	}
+	if _, earned := state.earnedAchievements[5900]; !earned {
+		t.Fatal("explore achievement not completed")
+	}
+
+	// Second exploration of the same zone is a no-op.
+	before := player.ExploredZones[0]
+	state.exploreZone(ctx, 12)
+	if player.ExploredZones[0] != before {
+		t.Fatal("bit state changed on re-exploration")
+	}
+
+	// Round-trip load restores the bit.
+	state2 := &session{server: server, playerGUID: 9, player: &playerState{GUID: 9}}
+	state2.loadExploredZones(ctx)
+	if state2.player.ExploredZones[0]&(1<<5) == 0 {
+		t.Fatal("blob round-trip lost the area bit")
+	}
+}

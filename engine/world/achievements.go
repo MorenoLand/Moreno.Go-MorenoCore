@@ -57,6 +57,7 @@ const (
 	criteriaTypeHonorableKill    = 35 // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL
 	criteriaTypeHKClass          = 52 // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS
 	criteriaTypeHKRace           = 53 // ACHIEVEMENT_CRITERIA_TYPE_HK_RACE
+	criteriaTypeExplore          = 43 // ACHIEVEMENT_CRITERIA_TYPE_EXPLORE_AREA
 )
 
 type achievementEntry struct {
@@ -86,21 +87,25 @@ type criteriaProgressState struct {
 }
 
 type achievementRuntime struct {
-	mu           sync.RWMutex
-	byTypeAsset  map[uint64][]achievementCriteriaEntry // key: type<<32 | asset
-	byTimedEvent map[uint64][]achievementCriteriaEntry // key: startEvent<<32 | startAsset
-	byID         map[uint32]achievementCriteriaEntry
-	byAchieve    map[uint32][]achievementCriteriaEntry
-	achieveByID  map[uint32]achievementEntry
-	loaded       bool
+	mu            sync.RWMutex
+	byTypeAsset   map[uint64][]achievementCriteriaEntry // key: type<<32 | asset
+	byTimedEvent  map[uint64][]achievementCriteriaEntry // key: startEvent<<32 | startAsset
+	byType        map[uint32][]achievementCriteriaEntry
+	exploreByZone map[uint32][]uint32 // zone id -> criteria ids (type 43)
+	byID          map[uint32]achievementCriteriaEntry
+	byAchieve     map[uint32][]achievementCriteriaEntry
+	achieveByID   map[uint32]achievementEntry
+	loaded        bool
 }
 
 var achievementIndex = &achievementRuntime{
-	byTypeAsset:  make(map[uint64][]achievementCriteriaEntry),
-	byTimedEvent: make(map[uint64][]achievementCriteriaEntry),
-	byID:         make(map[uint32]achievementCriteriaEntry),
-	byAchieve:    make(map[uint32][]achievementCriteriaEntry),
-	achieveByID:  make(map[uint32]achievementEntry),
+	byTypeAsset:   make(map[uint64][]achievementCriteriaEntry),
+	byTimedEvent:  make(map[uint64][]achievementCriteriaEntry),
+	byType:        make(map[uint32][]achievementCriteriaEntry),
+	exploreByZone: make(map[uint32][]uint32),
+	byID:          make(map[uint32]achievementCriteriaEntry),
+	byAchieve:     make(map[uint32][]achievementCriteriaEntry),
+	achieveByID:   make(map[uint32]achievementEntry),
 }
 
 func typeAssetKey(criterionType, asset uint32) uint64 {
@@ -150,12 +155,26 @@ func (s *Server) loadAchievementIndex() {
 		entry := achievementCriteriaEntry{ID: id, AchievementID: achievementID, Type: criterionType, Asset: asset, Quantity: quantity, StartEvent: startEvent, StartAsset: startAsset, StartTimer: startTimer}
 		key := typeAssetKey(criterionType, asset)
 		achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], entry)
+		achievementIndex.byType[criterionType] = append(achievementIndex.byType[criterionType], entry)
 		if startEvent != 0 {
 			timedKey := typeAssetKey(startEvent, startAsset)
 			achievementIndex.byTimedEvent[timedKey] = append(achievementIndex.byTimedEvent[timedKey], entry)
 		}
 		achievementIndex.byID[id] = entry
 		achievementIndex.byAchieve[achievementID] = append(achievementIndex.byAchieve[achievementID], entry)
+	}
+	if s.Data != nil {
+		for _, entry := range achievementIndex.byType[criteriaTypeExplore] {
+			areas, found, err := s.Data.WorldMapOverlayAreas(entry.Asset)
+			if err != nil || !found {
+				continue
+			}
+			for _, area := range areas {
+				if area != 0 {
+					achievementIndex.exploreByZone[area] = append(achievementIndex.exploreByZone[area], entry.ID)
+				}
+			}
+		}
 	}
 	if af, err := s.Data.File("Achievement"); err == nil {
 		for i := 0; i < af.Records(); i++ {
@@ -635,4 +654,131 @@ func (s *Server) creditHonorableKill(killer, victim *session) {
 	killer.updateAchievementCriteria(criteriaTypeHonorableKill, 0, 1)
 	killer.updateAchievementCriteria(criteriaTypeHKClass, uint32(victim.player.Class), 1)
 	killer.updateAchievementCriteria(criteriaTypeHKRace, uint32(victim.player.Race), 1)
+}
+
+// exploreZone mirrors Player::UpdateZone exploration (Player.cpp:6565): set
+// the AreaTable AreaBit in the PLAYER_EXPLORED_ZONES bitfield (persisted to
+// characters.exploredZones), push the changed field to the client, and
+// complete every EXPLORE_AREA criteria whose WorldMapOverlay covers the zone
+// (AchievementMgr.cpp:1881 match semantics).
+func (s *session) exploreZone(ctx context.Context, zoneID uint32) {
+	if s.player == nil || s.server == nil || s.server.Data == nil || zoneID == 0 {
+		return
+	}
+	areaBit, _, found, err := s.server.Data.AreaTableInfo(zoneID)
+	if err != nil || !found || areaBit < 0 {
+		return
+	}
+	bit := uint32(areaBit)
+	offset := bit / 32
+	if offset >= playerExploredZonesCount {
+		return
+	}
+	mask := uint32(1) << (bit % 32)
+	if s.player.ExploredZones[offset]&mask != 0 {
+		return // already explored
+	}
+	s.player.ExploredZones[offset] |= mask
+	s.persistExploredZones(ctx)
+
+	// Push the changed explored-zones field to the client.
+	s.server.loadAchievementIndex()
+	achievementIndex.mu.RLock()
+	criteriaIDs := make([]uint32, len(achievementIndex.exploreByZone[zoneID]))
+	copy(criteriaIDs, achievementIndex.exploreByZone[zoneID])
+	achievementIndex.mu.RUnlock()
+
+	if s.earnedAchievements == nil {
+		s.earnedAchievements = make(map[uint32]uint32)
+	}
+	if s.criteriaProgress == nil {
+		s.criteriaProgress = make(map[uint32]*criteriaProgressState)
+	}
+	for _, criteriaID := range criteriaIDs {
+		achievementIndex.mu.RLock()
+		criterion, has := achievementIndex.byID[criteriaID]
+		achievementIndex.mu.RUnlock()
+		if !has {
+			continue
+		}
+		if _, done := s.earnedAchievements[criterion.AchievementID]; done {
+			continue
+		}
+		progress := s.criteriaProgress[criteriaID]
+		if progress == nil {
+			progress = &criteriaProgressState{CriteriaID: criteriaID}
+			s.criteriaProgress[criteriaID] = progress
+		}
+		if progress.Counter >= 1 {
+			continue
+		}
+		progress.Counter = 1
+		progress.Date = uint32(time.Now().Unix())
+		s.sendCriteriaUpdate(progress)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+				"REPLACE INTO character_achievement_progress (guid, criteria, counter, date) VALUES (?, ?, 1, ?)",
+				s.playerGUID, criteriaID, progress.Date)
+		}
+		s.stopTimedAchievement(criteriaID)
+		s.checkAchievementComplete(criterion.AchievementID)
+	}
+	s.debug("zone explored", "account", s.accountName, "zone", zoneID, "criteria", len(criteriaIDs))
+}
+
+// persistExploredZones writes the explored bitfield as hex to characters.
+func (s *session) persistExploredZones(ctx context.Context) {
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	blob := make([]byte, playerExploredZonesCount*4)
+	for i, value := range s.player.ExploredZones {
+		blob[i*4] = byte(value)
+		blob[i*4+1] = byte(value >> 8)
+		blob[i*4+2] = byte(value >> 16)
+		blob[i*4+3] = byte(value >> 24)
+	}
+	const hexDigits = "0123456789abcdef"
+	hex := make([]byte, len(blob)*2)
+	for i, b := range blob {
+		hex[i*2] = hexDigits[b>>4]
+		hex[i*2+1] = hexDigits[b&0x0F]
+	}
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx,
+		"UPDATE characters SET exploredZones = ? WHERE guid = ?", string(hex), s.playerGUID)
+}
+
+// loadExploredZones reads the hex blob back into the bitfield at login.
+func (s *session) loadExploredZones(ctx context.Context) {
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.player == nil {
+		return
+	}
+	var hex string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx,
+		"SELECT COALESCE(exploredZones, '') FROM characters WHERE guid = ?", s.playerGUID).Scan(&hex); err != nil {
+		return
+	}
+	if len(hex) == 0 {
+		return
+	}
+	for i := 0; i < playerExploredZonesCount && (i*2+1) < len(hex); i++ {
+		hi := hexDigitValue(hex[i*2])
+		lo := hexDigitValue(hex[i*2+1])
+		if hi < 0 || lo < 0 {
+			return // corrupt blob: keep zero state
+		}
+		s.player.ExploredZones[i] = uint32(hi)<<4 | uint32(lo)
+	}
+}
+
+func hexDigitValue(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
 }

@@ -389,6 +389,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.loadAchievementState(ctx)
+	s.loadExploredZones(ctx)
 	s.sendAllAchievementData()
 	s.sendEquipmentSetList(ctx)
 	// Persist cinematic state before spawning into world (TC: CharacterHandler.cpp)

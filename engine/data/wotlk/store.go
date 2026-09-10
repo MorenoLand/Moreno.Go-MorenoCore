@@ -74,30 +74,30 @@ type SpellEffect struct {
 }
 
 type Spell struct {
-	ID               uint32
-	DispelType       uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
-	Mechanic         uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
-	Attributes       uint32
-	AttributesEx1    uint32
-	SchoolMask       uint32
-	Targets          uint32
-	FacingCasterFlags uint32 // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
-	CastingTimeIndex uint32
-	RecoveryTime     uint32
-	PowerType        uint32
-	ManaCost         uint32
-	ManaCostPct      uint32
-	RangeIndex       uint32
-	InterruptFlags     uint32
-	AuraInterruptFlags uint32
-	ChannelInterrupt   uint32
-	DurationIndex    uint32
-	SpellLevel       uint32
-	PreventionType   uint32 // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
+	ID                    uint32
+	DispelType            uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
+	Mechanic              uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
+	Attributes            uint32
+	AttributesEx1         uint32
+	SchoolMask            uint32
+	Targets               uint32
+	FacingCasterFlags     uint32 // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
+	CastingTimeIndex      uint32
+	RecoveryTime          uint32
+	PowerType             uint32
+	ManaCost              uint32
+	ManaCostPct           uint32
+	RangeIndex            uint32
+	InterruptFlags        uint32
+	AuraInterruptFlags    uint32
+	ChannelInterrupt      uint32
+	DurationIndex         uint32
+	SpellLevel            uint32
+	PreventionType        uint32 // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
 	StartRecoveryCategory uint32 // Spell.dbc field 210 = StartRecoveryCategory (DBCStructure.h:1480)
 	StartRecoveryTime     uint32 // Spell.dbc field 211 = StartRecoveryTime (DBCStructure.h:1481)
-	Speed            float32
-	Effects          [3]SpellEffect
+	Speed                 float32
+	Effects               [3]SpellEffect
 }
 
 type LFGDungeon struct {
@@ -414,8 +414,8 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		field int
 		dest  *uint32
 	}{
-		{2, &spell.DispelType},   // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
-		{3, &spell.Mechanic},     // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
+		{2, &spell.DispelType}, // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
+		{3, &spell.Mechanic},   // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 		{4, &spell.Attributes},
 		{225, &spell.SchoolMask}, // Spell.dbc field 225 = SchoolMask (DBCStructure.h:1492)
 		{16, &spell.Targets},
@@ -426,13 +426,13 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{42, &spell.ManaCost},
 		{204, &spell.ManaCostPct}, // Spell.dbc field 204 = ManaCostPct (DBCStructure.h:1476)
 		{46, &spell.RangeIndex},
-		{6, &spell.AttributesEx1},   // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
-		{31, &spell.InterruptFlags}, // DBCStructure.h:1421
+		{6, &spell.AttributesEx1},       // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
+		{31, &spell.InterruptFlags},     // DBCStructure.h:1421
 		{32, &spell.AuraInterruptFlags}, // DBCStructure.h:1422
 		{33, &spell.ChannelInterrupt},
 		{40, &spell.DurationIndex},
 		{39, &spell.SpellLevel},
-		{214, &spell.PreventionType}, // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
+		{214, &spell.PreventionType},        // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
 		{205, &spell.StartRecoveryCategory}, // Spell.dbc field 205 = StartRecoveryCategory
 		{206, &spell.StartRecoveryTime},     // Spell.dbc field 206 = StartRecoveryTime
 	}
@@ -889,4 +889,47 @@ func (s *Store) SpellName(id uint32) (string, string, bool, error) {
 	return name, rank, true, nil
 }
 
+// AreaTableInfo mirrors the fields of AreaTableEntry used by exploration
+// (DBCStructure.h:176): AreaBit (field 3) positions the zone in the
+// PLAYER_EXPLORED_ZONES bitfield, ExplorationLevel (field 10) gates XP.
+func (s *Store) AreaTableInfo(id uint32) (areaBit, explorationLevel int32, found bool, err error) {
+	file, err := s.File("AreaTable")
+	if err != nil {
+		return 0, 0, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, 0, false, nil
+	}
+	areaBit, err = record.Int32(3)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	explorationLevel, err = record.Int32(10)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	return areaBit, explorationLevel, true, nil
+}
 
+// WorldMapOverlayAreas mirrors WorldMapOverlayEntry (DBCStructure.h:1897):
+// fields 2-5 carry up to four AreaTable ids covered by the overlay.
+func (s *Store) WorldMapOverlayAreas(id uint32) ([4]uint32, bool, error) {
+	file, err := s.File("WorldMapOverlay")
+	if err != nil {
+		return [4]uint32{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return [4]uint32{}, false, nil
+	}
+	var areas [4]uint32
+	for i := 0; i < 4; i++ {
+		area, err := record.Uint32(2 + i)
+		if err != nil {
+			return [4]uint32{}, false, err
+		}
+		areas[i] = area
+	}
+	return areas, true, nil
+}
