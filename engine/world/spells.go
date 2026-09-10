@@ -408,6 +408,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		s.startChannel(castID, spellID, spell, targetGUID)
 	}
 	s.updateAchievementCriteria(criteriaTypeCastSpell, spellID, 1)
+	s.updateAchievementCriteria(criteriaTypeCastSpell2, spellID, 1)
 	s.startTimedAchievement(timedTypeSpellCast, spellID)
 	if spell.RecoveryTime > 0 {
 		nowUnix := time.Now().Unix()
@@ -749,6 +750,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 				// target of a hostile spell credits the victim and starts
 				// target-timed criteria.
 				playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget, spellID, 1)
+				playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget2, spellID, 1)
 				playerSess.startTimedAchievement(timedTypeSpellTarget, spellID)
 				if playerSess.isImmuneToDamage(uint32(schoolMask)) {
 					damage = 0
@@ -1003,6 +1005,7 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 			// Reference BE_SPELL_TARGET (28) and TIMED 6: being the target of a
 			// spell credits the victim/target and starts target-timed criteria.
 			other.updateAchievementCriteria(criteriaTypeBeSpellTarget, spellID, 1)
+			other.updateAchievementCriteria(criteriaTypeBeSpellTarget2, spellID, 1)
 			other.startTimedAchievement(timedTypeSpellTarget, spellID)
 		}
 	}

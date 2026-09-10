@@ -120,9 +120,15 @@ func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loser
 
 	// Update winner participating members
 	for _, mGUID := range winnerMembers {
+		var curPersonal uint32
+		_ = cdb.QueryRowContext(ctx, "SELECT personalRating FROM arena_team_member WHERE arenaTeamId = ? AND guid = ?", winnerTeamID, mGUID).Scan(&curPersonal)
+		newPersonal := curPersonal + uint32(gain)
 		_, _ = cdb.ExecContext(ctx, `UPDATE arena_team_member SET personalRating = personalRating + ?,
 			weekGames = weekGames + 1, weekWins = weekWins + 1, seasonGames = seasonGames + 1, seasonWins = seasonWins + 1
 			WHERE arenaTeamId = ? AND guid = ?`, gain, winnerTeamID, mGUID)
+		if sess := s.findSessionByGUID(mGUID); sess != nil {
+			sess.setAchievementCriteria(criteriaTypeHighestPersonalRating, 0, newPersonal)
+		}
 	}
 
 	// Update loser participating members

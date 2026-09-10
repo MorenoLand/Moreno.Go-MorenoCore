@@ -209,6 +209,23 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 	// Quest kill credit: RequiredNpcOrGo entries plus KillCredit templates.
 	s.creditQuestKills(ctx, creatureEntry, target.GUID)
 	s.updateAchievementCriteria(criteriaTypeKillCreature, creatureEntry, 1)
+	var creatureType uint32
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type, 0) FROM creature_template WHERE entry = ?", creatureEntry).Scan(&creatureType)
+	}
+	if creatureType > 0 {
+		s.updateAchievementCriteria(criteriaTypeKillCreatureType, creatureType, 1)
+	}
+	// Complete raid criteria when in a raid group
+	if s.groupID != 0 && s.server != nil {
+		if grp := s.server.getGroup(s.groupID); grp != nil && grp.IsRaid {
+			s.updateAchievementCriteria(criteriaTypeCompleteRaid, uint32(len(grp.Members)), 1)
+		}
+	}
+	// Mal'Ganis defeated (Heroic & Normal CoT: Stratholme, entry 26533)
+	if creatureEntry == 26533 {
+		s.updateAchievementCriteria(criteriaTypeMalGanisDefeated, creatureEntry, 1)
+	}
 	s.startTimedAchievement(timedTypeCreature, creatureEntry)
 
 	// Clear any active auras/DoTs ticking on this creature

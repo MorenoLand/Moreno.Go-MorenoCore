@@ -386,6 +386,10 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	case GameObjectTypeChest:
 		s.handleLoot(ctx, payload)
 
+	case GameObjectTypeFishingNode, GameObjectTypeFishingHole:
+		s.updateAchievementCriteria(criteriaTypeFishInGameObject, entry, 1)
+		s.handleLoot(ctx, payload)
+
 	case GameObjectTypeGoober:
 		s.server.setGameObjectState(guid, GameObjectStateActive)
 		s.server.broadcastGameObjectCustomAnim(goState.Map, guid, 0)

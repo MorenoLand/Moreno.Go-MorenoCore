@@ -596,6 +596,7 @@ func (s *session) handleSummonResponse(ctx context.Context, payload []byte) bool
 			s.teleportTo(summonerSess.player.Map, summonerSess.player.X, summonerSess.player.Y, summonerSess.player.Z, summonerSess.player.Orientation)
 		}
 	}
+	s.updateAchievementCriteria(criteriaTypeAcceptedSummonings, 0, 1)
 	s.summonExpire = time.Time{}
 	s.summonerGUID = 0
 	return true

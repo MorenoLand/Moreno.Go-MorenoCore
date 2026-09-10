@@ -401,6 +401,11 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}
 	}
 	s.sendAllAchievementData()
+	s.updateAchievementCriteria(criteriaTypeOnLogin, 0, 1)
+	s.setAchievementCriteria(criteriaTypeKnownFactions, 0, uint32(len(state.Reputations)))
+	if s.player.ChosenTitle > 0 {
+		s.updateAchievementCriteria(criteriaTypeOwnRank, s.player.ChosenTitle, 1)
+	}
 	s.sendEquipmentSetList(ctx)
 	// Persist cinematic state before spawning into world (TC: CharacterHandler.cpp)
 	// The actual SMSG_TRIGGER_CINEMATIC is sent after SMSG_UPDATE_OBJECT (player spawn)

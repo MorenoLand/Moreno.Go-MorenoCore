@@ -563,6 +563,11 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		return true
 	}
 	s.updateAchievementCriteria(criteriaTypeLootItem, it.ItemEntry, it.Count)
+	s.updateAchievementCriteria(criteriaTypeLootType, uint32(s.activeLoot.LootType), it.Count)
+	if it.Quality >= 4 {
+		s.updateAchievementCriteria(criteriaTypeLootEpicItem, it.ItemEntry, it.Count)
+		s.updateAchievementCriteria(criteriaTypeReceiveEpicItem, it.ItemEntry, it.Count)
+	}
 	delete(s.activeLoot.Items, lootSlot)
 	s.activeLoot.broadcastRemoved(lootSlot)
 	_ = s.sendInventoryItems(ctx)
@@ -1068,8 +1073,16 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 		roll.TotalPass++
 	case 1:
 		roll.TotalNeed++
+		s.updateAchievementCriteria(criteriaTypeRollNeedCount, 0, 1)
+	case 2:
+		roll.TotalGreed++
+		s.updateAchievementCriteria(criteriaTypeRollGreedCount, 0, 1)
+	case 3:
+		roll.TotalGreed++
+		s.updateAchievementCriteria(criteriaTypeRollDisenchant, 0, 1)
 	default:
 		roll.TotalGreed++
+		s.updateAchievementCriteria(criteriaTypeRollGreedCount, 0, 1)
 	}
 
 	itemEntry := roll.ItemEntry

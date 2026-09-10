@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -870,3 +871,57 @@ func TestExtendedCriteriaTypes(t *testing.T) {
 		t.Fatal("REVERED_REPUTATION not completed")
 	}
 }
+
+func TestAll124CriteriaTypesCoverage(t *testing.T) {
+	if CriteriaTypeCount != 124 {
+		t.Fatalf("expected CriteriaTypeCount == 124, got %d", CriteriaTypeCount)
+	}
+
+	// Verify all 124 criteria types have valid canonical names
+	for i := uint32(0); i < CriteriaTypeCount; i++ {
+		name := CriteriaTypeName(i)
+		if name == "" || strings.HasPrefix(name, "UnknownCriteriaType") {
+			t.Fatalf("criteria type %d has invalid or missing name: %q", i, name)
+		}
+	}
+
+	// Verify out-of-range returns unknown
+	if name := CriteriaTypeName(999); !strings.HasPrefix(name, "UnknownCriteriaType") {
+		t.Fatalf("expected UnknownCriteriaType for 999, got %q", name)
+	}
+
+	player := &playerState{GUID: 42, Level: 80, Health: 5000, MaxHealth: 5000, Race: 1}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	snapshotAchievementIndex(t)
+
+	// Register a criteria and achievement for every single type 0..123
+	achievementIndex.mu.Lock()
+	for i := uint32(0); i < CriteriaTypeCount; i++ {
+		critID := 20000 + i
+		achID := 8000 + i
+		entry := achievementCriteriaEntry{
+			ID:            critID,
+			AchievementID: achID,
+			Type:          i,
+			Asset:         0,
+			Quantity:      1,
+		}
+		key := typeAssetKey(entry.Type, entry.Asset)
+		achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], entry)
+		achievementIndex.byID[critID] = entry
+		achievementIndex.byAchieve[achID] = append(achievementIndex.byAchieve[achID], entry)
+		achievementIndex.achieveByID[achID] = achievementEntry{ID: achID, Faction: -1}
+	}
+	achievementIndex.mu.Unlock()
+
+	// Trigger progress on all 124 criteria types and verify all 124 achievements complete
+	for i := uint32(0); i < CriteriaTypeCount; i++ {
+		achID := 8000 + i
+		state.updateAchievementCriteria(i, 0, 1)
+		if _, earned := state.earnedAchievements[achID]; !earned {
+			t.Fatalf("criteria type %d (%s) failed to complete achievement %d", i, CriteriaTypeName(i), achID)
+		}
+	}
+}
+

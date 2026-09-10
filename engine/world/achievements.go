@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -28,79 +29,271 @@ import (
 // SharesCriteria); Achievement_Criteria.dbc fields 0-4 (ID, AchievementID,
 // Type, Asset, Quantity), 26-29 (Flags, StartEvent, StartAsset, StartTimer).
 
-// Criteria types wired so far; the reference defines ~130.
+// CriteriaTypeCount defines the full range of achievement criteria types (0..123).
+const CriteriaTypeCount = 124
+
+// Achievement criteria types (0..123) matching TrinityCore 3.3.5 and Achievement_Criteria.dbc.
 const (
-	criteriaTypeKillCreature        = 0  // ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE
-	criteriaTypeWinBG               = 1  // ACHIEVEMENT_CRITERIA_TYPE_WIN_BG
-	criteriaTypeReachLevel          = 5  // ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL
-	criteriaTypeReachSkillLevel     = 7  // ACHIEVEMENT_CRITERIA_TYPE_REACH_SKILL_LEVEL
-	criteriaTypeDeath               = 17 // ACHIEVEMENT_CRITERIA_TYPE_DEATH
-	criteriaTypeKilledByCreature    = 20 // ACHIEVEMENT_CRITERIA_TYPE_KILLED_BY_CREATURE
-	criteriaTypeCompleteQuest       = 27 // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST
-	criteriaTypeCastSpell           = 29 // ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL
-	criteriaTypeLearnSpell          = 34 // ACHIEVEMENT_CRITERIA_TYPE_LEARN_SPELL
-	criteriaTypeOwnItem             = 36 // ACHIEVEMENT_CRITERIA_TYPE_OWN_ITEM
-	criteriaTypeBuyBankSlot         = 45 // ACHIEVEMENT_CRITERIA_TYPE_BUY_BANK_SLOT
-	criteriaTypeUseItem             = 41 // ACHIEVEMENT_CRITERIA_TYPE_USE_ITEM
-	criteriaTypeLootItem            = 42 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_ITEM
-	criteriaTypeGainReputation      = 46 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_REPUTATION
-	criteriaTypeLootMoney           = 67 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY
-	criteriaTypeDamageDone          = 13 // ACHIEVEMENT_CRITERIA_TYPE_DAMAGE_DONE
-	criteriaTypeHealingDone         = 55 // ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE
-	criteriaTypeQuestCount          = 9  // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST_COUNT
-	criteriaTypeRollNeed            = 50 // ACHIEVEMENT_CRITERIA_TYPE_ROLL_NEED_ON_LOOT
-	criteriaTypeRollGreed           = 51 // ACHIEVEMENT_CRITERIA_TYPE_ROLL_GREED_ON_LOOT
-	criteriaTypeMoneyFromVendor     = 59 // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_VENDORS
-	criteriaTypeMoneyFromQuest      = 62 // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_QUEST_REWARD
-	criteriaTypeGoldSpentForMail    = 66 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_MAIL
-	criteriaTypeGoldSpentForTalents = 60 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TALENTS
-	criteriaTypeTalentResets        = 61 // ACHIEVEMENT_CRITERIA_TYPE_NUMBER_OF_TALENT_RESETS
-	criteriaTypeDeathAtMap          = 16 // ACHIEVEMENT_CRITERIA_TYPE_DEATH_AT_MAP
-	criteriaTypeDeathInDungeon      = 18 // ACHIEVEMENT_CRITERIA_TYPE_DEATH_IN_DUNGEON
-	criteriaTypeKilledByPlayer      = 23 // ACHIEVEMENT_CRITERIA_TYPE_KILLED_BY_PLAYER
-	criteriaTypeDeathsFrom          = 26 // ACHIEVEMENT_CRITERIA_TYPE_DEATHS_FROM
-	criteriaTypeWinArena            = 32 // ACHIEVEMENT_CRITERIA_TYPE_WIN_ARENA
-	criteriaTypePlayArena           = 33 // ACHIEVEMENT_CRITERIA_TYPE_PLAY_ARENA
-	criteriaTypeGetKillingBlows     = 56 // ACHIEVEMENT_CRITERIA_TYPE_GET_KILLING_BLOWS
-	criteriaTypeGoldSpentTravel     = 63 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TRAVELLING
-	criteriaTypeExaltedRep          = 47 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_EXALTED_REPUTATION
-	criteriaTypeHighestPower        = 96 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_POWER
-	criteriaTypeHighestStat         = 97 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_STAT
-	criteriaTypeHighestSpellpower   = 98 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_SPELLPOWER
-	criteriaTypeHighestTeamRating   = 38 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_TEAM_RATING
-	criteriaTypeBeSpellTarget       = 28 // ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET
-	criteriaTypeDoEmote             = 54 // ACHIEVEMENT_CRITERIA_TYPE_DO_EMOTE
-	criteriaTypeFallWithoutDying    = 24 // ACHIEVEMENT_CRITERIA_TYPE_FALL_WITHOUT_DYING
-	criteriaTypeUseGameObject       = 68 // ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT
-	criteriaTypeEquipItem           = 57 // ACHIEVEMENT_CRITERIA_TYPE_EQUIP_ITEM
-	criteriaTypeEquipEpicItem       = 49 // ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM
-	criteriaTypeBGObjective         = 30 // ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE
-	criteriaTypeHonorableKill       = 35 // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL
-	criteriaTypeHKClass             = 52 // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS
-	criteriaTypeHKRace              = 53 // ACHIEVEMENT_CRITERIA_TYPE_HK_RACE
-	criteriaTypeExplore             = 43 // ACHIEVEMENT_CRITERIA_TYPE_EXPLORE_AREA
-	criteriaTypeWinDuel             = 76 // ACHIEVEMENT_CRITERIA_TYPE_WIN_DUEL
-	criteriaTypeLoseDuel            = 77 // ACHIEVEMENT_CRITERIA_TYPE_LOSE_DUEL
-	criteriaTypeGoldEarnedAuctions  = 80 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_EARNED_BY_AUCTIONS
-	criteriaTypeCreateAuction       = 82 // ACHIEVEMENT_CRITERIA_TYPE_CREATE_AUCTION
-	criteriaTypeHighestAuctionBid   = 83 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_BID
-	criteriaTypeWonAuctions         = 84 // ACHIEVEMENT_CRITERIA_TYPE_WON_AUCTIONS
-	criteriaTypeHighestAuctionSold  = 85 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_SOLD
-	criteriaTypeHighestGoldValue    = 86 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_GOLD_VALUE_OWNED
-	criteriaTypeReveredRep          = 87 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_REVERED_REPUTATION
-	criteriaTypeHonoredRep          = 88 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_HONORED_REPUTATION
-	criteriaTypeHighestHealth       = 95 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEALTH
-	criteriaTypeHighestArmor        = 99 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_ARMOR
-	criteriaTypeHighestRating       = 100 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_RATING
-	criteriaTypeHighestHitDealt     = 101 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HIT_DEALT
-	criteriaTypeHighestHitReceived  = 102 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HIT_RECEIVED
-	criteriaTypeTotalDamageReceived = 103 // ACHIEVEMENT_CRITERIA_TYPE_TOTAL_DAMAGE_RECEIVED
-	criteriaTypeHighestHealCasted   = 104 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEAL_CASTED
-	criteriaTypeTotalHealingReceived = 105 // ACHIEVEMENT_CRITERIA_TYPE_TOTAL_HEALING_RECEIVED
-	criteriaTypeHighestHealingRecv  = 106 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEALING_RECEIVED
-	criteriaTypeQuestAbandoned      = 107 // ACHIEVEMENT_CRITERIA_TYPE_QUEST_ABANDONED
-	criteriaTypeFlightPathsTaken    = 108 // ACHIEVEMENT_CRITERIA_TYPE_FLIGHT_PATHS_TAKEN
+	criteriaTypeKillCreature            = 0   // ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE
+	criteriaTypeWinBG                   = 1   // ACHIEVEMENT_CRITERIA_TYPE_WIN_BG
+	criteriaTypeUnused2                 = 2   // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_2
+	criteriaTypeUnused3                 = 3   // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_3
+	criteriaTypeUnused4                 = 4   // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_4
+	criteriaTypeReachLevel              = 5   // ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL
+	criteriaTypeUnused6                 = 6   // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_6
+	criteriaTypeReachSkillLevel         = 7   // ACHIEVEMENT_CRITERIA_TYPE_REACH_SKILL_LEVEL
+	criteriaTypeCompleteAchievement     = 8   // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_ACHIEVEMENT
+	criteriaTypeQuestCount              = 9   // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST_COUNT
+	criteriaTypeCompleteDailyQuestDaily = 10  // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_DAILY_QUEST_DAILY
+	criteriaTypeCompleteQuestsInZone    = 11  // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUESTS_IN_ZONE
+	criteriaTypeUnused12                = 12  // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_12
+	criteriaTypeDamageDone              = 13  // ACHIEVEMENT_CRITERIA_TYPE_DAMAGE_DONE
+	criteriaTypeCompleteDailyQuest      = 14  // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_DAILY_QUEST
+	criteriaTypeCompleteBattleground    = 15  // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_BATTLEGROUND
+	criteriaTypeDeathAtMap              = 16  // ACHIEVEMENT_CRITERIA_TYPE_DEATH_AT_MAP
+	criteriaTypeDeath                   = 17  // ACHIEVEMENT_CRITERIA_TYPE_DEATH
+	criteriaTypeDeathInDungeon          = 18  // ACHIEVEMENT_CRITERIA_TYPE_DEATH_IN_DUNGEON
+	criteriaTypeCompleteRaid            = 19  // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_RAID
+	criteriaTypeKilledByCreature        = 20  // ACHIEVEMENT_CRITERIA_TYPE_KILLED_BY_CREATURE
+	criteriaTypeUnused21                = 21  // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_21
+	criteriaTypeUnused22                = 22  // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_22
+	criteriaTypeKilledByPlayer          = 23  // ACHIEVEMENT_CRITERIA_TYPE_KILLED_BY_PLAYER
+	criteriaTypeFallWithoutDying        = 24  // ACHIEVEMENT_CRITERIA_TYPE_FALL_WITHOUT_DYING
+	criteriaTypeUnused25                = 25  // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_25
+	criteriaTypeDeathsFrom              = 26  // ACHIEVEMENT_CRITERIA_TYPE_DEATHS_FROM
+	criteriaTypeCompleteQuest           = 27  // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST
+	criteriaTypeBeSpellTarget           = 28  // ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET
+	criteriaTypeCastSpell               = 29  // ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL
+	criteriaTypeBGObjective             = 30  // ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE
+	criteriaTypeHKAtArea                = 31  // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL_AT_AREA
+	criteriaTypeWinArena                = 32  // ACHIEVEMENT_CRITERIA_TYPE_WIN_ARENA
+	criteriaTypePlayArena               = 33  // ACHIEVEMENT_CRITERIA_TYPE_PLAY_ARENA
+	criteriaTypeLearnSpell              = 34  // ACHIEVEMENT_CRITERIA_TYPE_LEARN_SPELL
+	criteriaTypeHonorableKill           = 35  // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL
+	criteriaTypeOwnItem                 = 36  // ACHIEVEMENT_CRITERIA_TYPE_OWN_ITEM
+	criteriaTypeWinRatedArena           = 37  // ACHIEVEMENT_CRITERIA_TYPE_WIN_RATED_ARENA
+	criteriaTypeHighestTeamRating       = 38  // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_TEAM_RATING
+	criteriaTypeHighestPersonalRating   = 39  // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_PERSONAL_RATING
+	criteriaTypeLearnSkillLevel         = 40  // ACHIEVEMENT_CRITERIA_TYPE_LEARN_SKILL_LEVEL
+	criteriaTypeUseItem                 = 41  // ACHIEVEMENT_CRITERIA_TYPE_USE_ITEM
+	criteriaTypeLootItem                = 42  // ACHIEVEMENT_CRITERIA_TYPE_LOOT_ITEM
+	criteriaTypeExplore                 = 43  // ACHIEVEMENT_CRITERIA_TYPE_EXPLORE_AREA
+	criteriaTypeOwnRank                 = 44  // ACHIEVEMENT_CRITERIA_TYPE_OWN_RANK
+	criteriaTypeBuyBankSlot             = 45  // ACHIEVEMENT_CRITERIA_TYPE_BUY_BANK_SLOT
+	criteriaTypeGainReputation          = 46  // ACHIEVEMENT_CRITERIA_TYPE_GAIN_REPUTATION
+	criteriaTypeExaltedRep              = 47  // ACHIEVEMENT_CRITERIA_TYPE_GAIN_EXALTED_REPUTATION
+	criteriaTypeVisitBarberShop         = 48  // ACHIEVEMENT_CRITERIA_TYPE_VISIT_BARBER_SHOP
+	criteriaTypeEquipEpicItem           = 49  // ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM
+	criteriaTypeRollNeed                = 50  // ACHIEVEMENT_CRITERIA_TYPE_ROLL_NEED_ON_LOOT
+	criteriaTypeRollGreed               = 51  // ACHIEVEMENT_CRITERIA_TYPE_ROLL_GREED_ON_LOOT
+	criteriaTypeHKClass                 = 52  // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS
+	criteriaTypeHKRace                  = 53  // ACHIEVEMENT_CRITERIA_TYPE_HK_RACE
+	criteriaTypeDoEmote                 = 54  // ACHIEVEMENT_CRITERIA_TYPE_DO_EMOTE
+	criteriaTypeHealingDone             = 55  // ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE
+	criteriaTypeGetKillingBlows         = 56  // ACHIEVEMENT_CRITERIA_TYPE_GET_KILLING_BLOWS
+	criteriaTypeEquipItem               = 57  // ACHIEVEMENT_CRITERIA_TYPE_EQUIP_ITEM
+	criteriaTypeUnused58                = 58  // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_58
+	criteriaTypeMoneyFromVendor         = 59  // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_VENDORS
+	criteriaTypeGoldSpentForTalents     = 60  // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TALENTS
+	criteriaTypeTalentResets            = 61  // ACHIEVEMENT_CRITERIA_TYPE_NUMBER_OF_TALENT_RESETS
+	criteriaTypeMoneyFromQuest          = 62  // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_QUEST_REWARD
+	criteriaTypeGoldSpentTravel         = 63  // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TRAVELLING
+	criteriaTypeUnused64                = 64  // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_64
+	criteriaTypeGoldSpentAtBarber       = 65  // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_AT_BARBER
+	criteriaTypeGoldSpentForMail        = 66  // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_MAIL
+	criteriaTypeLootMoney               = 67  // ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY
+	criteriaTypeUseGameObject           = 68  // ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT
+	criteriaTypeBeSpellTarget2          = 69  // ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET2
+	criteriaTypeSpecialPvPKill          = 70  // ACHIEVEMENT_CRITERIA_TYPE_SPECIAL_PVP_KILL
+	criteriaTypeUnused71                = 71  // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_71
+	criteriaTypeFishInGameObject        = 72  // ACHIEVEMENT_CRITERIA_TYPE_FISH_IN_GAMEOBJECT
+	criteriaTypeMalGanisDefeated        = 73  // ACHIEVEMENT_CRITERIA_TYPE_MAL_GANIS_DEFEATED
+	criteriaTypeOnLogin                 = 74  // ACHIEVEMENT_CRITERIA_TYPE_ON_LOGIN
+	criteriaTypeLearnSkillLineSpells    = 75  // ACHIEVEMENT_CRITERIA_TYPE_LEARN_SKILLLINE_SPELLS
+	criteriaTypeWinDuel                 = 76  // ACHIEVEMENT_CRITERIA_TYPE_WIN_DUEL
+	criteriaTypeLoseDuel                = 77  // ACHIEVEMENT_CRITERIA_TYPE_LOSE_DUEL
+	criteriaTypeKillCreatureType        = 78  // ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE_TYPE
+	criteriaTypeUnused79                = 79  // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_79
+	criteriaTypeGoldEarnedAuctions      = 80  // ACHIEVEMENT_CRITERIA_TYPE_GOLD_EARNED_BY_AUCTIONS
+	criteriaTypeUnused81                = 81  // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_81
+	criteriaTypeCreateAuction           = 82  // ACHIEVEMENT_CRITERIA_TYPE_CREATE_AUCTION
+	criteriaTypeHighestAuctionBid       = 83  // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_BID
+	criteriaTypeWonAuctions             = 84  // ACHIEVEMENT_CRITERIA_TYPE_WON_AUCTIONS
+	criteriaTypeHighestAuctionSold      = 85  // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_SOLD
+	criteriaTypeHighestGoldValue        = 86  // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_GOLD_VALUE_OWNED
+	criteriaTypeReveredRep              = 87  // ACHIEVEMENT_CRITERIA_TYPE_GAIN_REVERED_REPUTATION
+	criteriaTypeHonoredRep              = 88  // ACHIEVEMENT_CRITERIA_TYPE_GAIN_HONORED_REPUTATION
+	criteriaTypeKnownFactions           = 89  // ACHIEVEMENT_CRITERIA_TYPE_KNOWN_FACTIONS
+	criteriaTypeLootEpicItem            = 90  // ACHIEVEMENT_CRITERIA_TYPE_LOOT_EPIC_ITEM
+	criteriaTypeReceiveEpicItem         = 91  // ACHIEVEMENT_CRITERIA_TYPE_RECEIVE_EPIC_ITEM
+	criteriaTypeUnused92                = 92  // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_92
+	criteriaTypeRollNeedCount           = 93  // ACHIEVEMENT_CRITERIA_TYPE_ROLL_NEED
+	criteriaTypeRollGreedCount          = 94  // ACHIEVEMENT_CRITERIA_TYPE_ROLL_GREED
+	criteriaTypeHighestHealth           = 95  // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEALTH
+	criteriaTypeHighestPower            = 96  // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_POWER
+	criteriaTypeHighestStat             = 97  // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_STAT
+	criteriaTypeHighestSpellpower       = 98  // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_SPELLPOWER
+	criteriaTypeHighestArmor            = 99  // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_ARMOR
+	criteriaTypeHighestRating           = 100 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_RATING
+	criteriaTypeHighestHitDealt         = 101 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HIT_DEALT
+	criteriaTypeHighestHitReceived      = 102 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HIT_RECEIVED
+	criteriaTypeTotalDamageReceived     = 103 // ACHIEVEMENT_CRITERIA_TYPE_TOTAL_DAMAGE_RECEIVED
+	criteriaTypeHighestHealCasted       = 104 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEAL_CAST
+	criteriaTypeTotalHealingReceived    = 105 // ACHIEVEMENT_CRITERIA_TYPE_TOTAL_HEALING_RECEIVED
+	criteriaTypeHighestHealingRecv      = 106 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEALING_RECEIVED
+	criteriaTypeQuestAbandoned          = 107 // ACHIEVEMENT_CRITERIA_TYPE_QUEST_ABANDONED
+	criteriaTypeFlightPathsTaken        = 108 // ACHIEVEMENT_CRITERIA_TYPE_FLIGHT_PATHS_TAKEN
+	criteriaTypeLootType                = 109 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_TYPE
+	criteriaTypeCastSpell2              = 110 // ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL2
+	criteriaTypeUnused111               = 111 // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_111
+	criteriaTypeLearnSkillLine          = 112 // ACHIEVEMENT_CRITERIA_TYPE_LEARN_SKILL_LINE
+	criteriaTypeEarnHonorableKill       = 113 // ACHIEVEMENT_CRITERIA_TYPE_EARN_HONORABLE_KILL
+	criteriaTypeAcceptedSummonings      = 114 // ACHIEVEMENT_CRITERIA_TYPE_ACCEPTED_SUMMONINGS
+	criteriaTypeEarnAchievementPoints   = 115 // ACHIEVEMENT_CRITERIA_TYPE_EARN_ACHIEVEMENT_POINTS
+	criteriaTypeUnused116               = 116 // ACHIEVEMENT_CRITERIA_TYPE_UNUSED_116
+	criteriaTypeRollDisenchant          = 117 // ACHIEVEMENT_CRITERIA_TYPE_ROLL_DISENCHANT
+	criteriaTypeLFGAnyRole              = 118 // ACHIEVEMENT_CRITERIA_TYPE_LFG_ANY_ROLE
+	criteriaTypeUseLFDToGroup           = 119 // ACHIEVEMENT_CRITERIA_TYPE_USE_LFD_TO_GROUP_WITH_PLAYERS
+	criteriaTypeLFGVoteKick             = 120 // ACHIEVEMENT_CRITERIA_TYPE_LFG_VOTE_KICK
+	criteriaTypeLFGDungeonReward        = 121 // ACHIEVEMENT_CRITERIA_TYPE_LFG_DUNGEON_REWARD
+	criteriaTypeLFGCompletion           = 122 // ACHIEVEMENT_CRITERIA_TYPE_LFG_COMPLETION
+	criteriaTypeLFGAbandon              = 123 // ACHIEVEMENT_CRITERIA_TYPE_LFG_ABANDON
 )
+
+var criteriaTypeNames = [CriteriaTypeCount]string{
+	criteriaTypeKillCreature:            "KillCreature",
+	criteriaTypeWinBG:                   "WinBG",
+	criteriaTypeUnused2:                 "Unused2",
+	criteriaTypeUnused3:                 "Unused3",
+	criteriaTypeUnused4:                 "Unused4",
+	criteriaTypeReachLevel:              "ReachLevel",
+	criteriaTypeUnused6:                 "Unused6",
+	criteriaTypeReachSkillLevel:         "ReachSkillLevel",
+	criteriaTypeCompleteAchievement:     "CompleteAchievement",
+	criteriaTypeQuestCount:              "QuestCount",
+	criteriaTypeCompleteDailyQuestDaily: "CompleteDailyQuestDaily",
+	criteriaTypeCompleteQuestsInZone:    "CompleteQuestsInZone",
+	criteriaTypeUnused12:                "Unused12",
+	criteriaTypeDamageDone:              "DamageDone",
+	criteriaTypeCompleteDailyQuest:      "CompleteDailyQuest",
+	criteriaTypeCompleteBattleground:    "CompleteBattleground",
+	criteriaTypeDeathAtMap:              "DeathAtMap",
+	criteriaTypeDeath:                   "Death",
+	criteriaTypeDeathInDungeon:          "DeathInDungeon",
+	criteriaTypeCompleteRaid:            "CompleteRaid",
+	criteriaTypeKilledByCreature:        "KilledByCreature",
+	criteriaTypeUnused21:                "Unused21",
+	criteriaTypeUnused22:                "Unused22",
+	criteriaTypeKilledByPlayer:          "KilledByPlayer",
+	criteriaTypeFallWithoutDying:        "FallWithoutDying",
+	criteriaTypeUnused25:                "Unused25",
+	criteriaTypeDeathsFrom:              "DeathsFrom",
+	criteriaTypeCompleteQuest:           "CompleteQuest",
+	criteriaTypeBeSpellTarget:           "BeSpellTarget",
+	criteriaTypeCastSpell:               "CastSpell",
+	criteriaTypeBGObjective:             "BGObjective",
+	criteriaTypeHKAtArea:                "HKAtArea",
+	criteriaTypeWinArena:                "WinArena",
+	criteriaTypePlayArena:               "PlayArena",
+	criteriaTypeLearnSpell:              "LearnSpell",
+	criteriaTypeHonorableKill:           "HonorableKill",
+	criteriaTypeOwnItem:                 "OwnItem",
+	criteriaTypeWinRatedArena:           "WinRatedArena",
+	criteriaTypeHighestTeamRating:       "HighestTeamRating",
+	criteriaTypeHighestPersonalRating:   "HighestPersonalRating",
+	criteriaTypeLearnSkillLevel:         "LearnSkillLevel",
+	criteriaTypeUseItem:                 "UseItem",
+	criteriaTypeLootItem:                "LootItem",
+	criteriaTypeExplore:                 "Explore",
+	criteriaTypeOwnRank:                 "OwnRank",
+	criteriaTypeBuyBankSlot:             "BuyBankSlot",
+	criteriaTypeGainReputation:          "GainReputation",
+	criteriaTypeExaltedRep:              "ExaltedRep",
+	criteriaTypeVisitBarberShop:         "VisitBarberShop",
+	criteriaTypeEquipEpicItem:           "EquipEpicItem",
+	criteriaTypeRollNeed:                "RollNeed",
+	criteriaTypeRollGreed:               "RollGreed",
+	criteriaTypeHKClass:                 "HKClass",
+	criteriaTypeHKRace:                  "HKRace",
+	criteriaTypeDoEmote:                 "DoEmote",
+	criteriaTypeHealingDone:             "HealingDone",
+	criteriaTypeGetKillingBlows:         "GetKillingBlows",
+	criteriaTypeEquipItem:               "EquipItem",
+	criteriaTypeUnused58:                "Unused58",
+	criteriaTypeMoneyFromVendor:         "MoneyFromVendor",
+	criteriaTypeGoldSpentForTalents:     "GoldSpentForTalents",
+	criteriaTypeTalentResets:            "TalentResets",
+	criteriaTypeMoneyFromQuest:          "MoneyFromQuest",
+	criteriaTypeGoldSpentTravel:         "GoldSpentTravel",
+	criteriaTypeUnused64:                "Unused64",
+	criteriaTypeGoldSpentAtBarber:       "GoldSpentAtBarber",
+	criteriaTypeGoldSpentForMail:        "GoldSpentForMail",
+	criteriaTypeLootMoney:               "LootMoney",
+	criteriaTypeUseGameObject:           "UseGameObject",
+	criteriaTypeBeSpellTarget2:          "BeSpellTarget2",
+	criteriaTypeSpecialPvPKill:          "SpecialPvPKill",
+	criteriaTypeUnused71:                "Unused71",
+	criteriaTypeFishInGameObject:        "FishInGameObject",
+	criteriaTypeMalGanisDefeated:        "MalGanisDefeated",
+	criteriaTypeOnLogin:                 "OnLogin",
+	criteriaTypeLearnSkillLineSpells:    "LearnSkillLineSpells",
+	criteriaTypeWinDuel:                 "WinDuel",
+	criteriaTypeLoseDuel:                "LoseDuel",
+	criteriaTypeKillCreatureType:        "KillCreatureType",
+	criteriaTypeUnused79:                "Unused79",
+	criteriaTypeGoldEarnedAuctions:      "GoldEarnedAuctions",
+	criteriaTypeUnused81:                "Unused81",
+	criteriaTypeCreateAuction:           "CreateAuction",
+	criteriaTypeHighestAuctionBid:       "HighestAuctionBid",
+	criteriaTypeWonAuctions:             "WonAuctions",
+	criteriaTypeHighestAuctionSold:      "HighestAuctionSold",
+	criteriaTypeHighestGoldValue:        "HighestGoldValue",
+	criteriaTypeReveredRep:              "ReveredRep",
+	criteriaTypeHonoredRep:              "HonoredRep",
+	criteriaTypeKnownFactions:           "KnownFactions",
+	criteriaTypeLootEpicItem:            "LootEpicItem",
+	criteriaTypeReceiveEpicItem:         "ReceiveEpicItem",
+	criteriaTypeUnused92:                "Unused92",
+	criteriaTypeRollNeedCount:           "RollNeedCount",
+	criteriaTypeRollGreedCount:          "RollGreedCount",
+	criteriaTypeHighestHealth:           "HighestHealth",
+	criteriaTypeHighestPower:            "HighestPower",
+	criteriaTypeHighestStat:             "HighestStat",
+	criteriaTypeHighestSpellpower:       "HighestSpellpower",
+	criteriaTypeHighestArmor:            "HighestArmor",
+	criteriaTypeHighestRating:           "HighestRating",
+	criteriaTypeHighestHitDealt:         "HighestHitDealt",
+	criteriaTypeHighestHitReceived:      "HighestHitReceived",
+	criteriaTypeTotalDamageReceived:     "TotalDamageReceived",
+	criteriaTypeHighestHealCasted:       "HighestHealCasted",
+	criteriaTypeTotalHealingReceived:    "TotalHealingReceived",
+	criteriaTypeHighestHealingRecv:      "HighestHealingRecv",
+	criteriaTypeQuestAbandoned:          "QuestAbandoned",
+	criteriaTypeFlightPathsTaken:        "FlightPathsTaken",
+	criteriaTypeLootType:                "LootType",
+	criteriaTypeCastSpell2:              "CastSpell2",
+	criteriaTypeUnused111:               "Unused111",
+	criteriaTypeLearnSkillLine:          "LearnSkillLine",
+	criteriaTypeEarnHonorableKill:       "EarnHonorableKill",
+	criteriaTypeAcceptedSummonings:      "AcceptedSummonings",
+	criteriaTypeEarnAchievementPoints:   "EarnAchievementPoints",
+	criteriaTypeUnused116:               "Unused116",
+	criteriaTypeRollDisenchant:          "RollDisenchant",
+	criteriaTypeLFGAnyRole:              "LFGAnyRole",
+	criteriaTypeUseLFDToGroup:           "UseLFDToGroup",
+	criteriaTypeLFGVoteKick:             "LFGVoteKick",
+	criteriaTypeLFGDungeonReward:        "LFGDungeonReward",
+	criteriaTypeLFGCompletion:           "LFGCompletion",
+	criteriaTypeLFGAbandon:              "LFGAbandon",
+}
+
+// CriteriaTypeName returns the canonical name for an achievement criteria type.
+func CriteriaTypeName(cType uint32) string {
+	if cType < CriteriaTypeCount {
+		return criteriaTypeNames[cType]
+	}
+	return fmt.Sprintf("UnknownCriteriaType(%d)", cType)
+}
 
 type achievementEntry struct {
 	ID              uint32
@@ -653,6 +846,20 @@ func (s *session) completeAchievement(achievementID uint32) {
 		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ACHIEVEMENT_EARNED), packet.Bytes(), s)
 	}
 	s.debug("achievement earned", "account", s.accountName, "guid", s.playerGUID, "achievement", achievementID)
+
+	// Reference COMPLETE_ACHIEVEMENT: completing an achievement advances meta-achievements
+	s.updateAchievementCriteria(criteriaTypeCompleteAchievement, achievementID, 1)
+
+	// Reference EARN_ACHIEVEMENT_POINTS: sum up points from all earned achievements
+	totalPoints := uint32(0)
+	achievementIndex.mu.RLock()
+	for earnedID := range s.earnedAchievements {
+		if entry, ok := achievementIndex.achieveByID[earnedID]; ok {
+			totalPoints += entry.Points
+		}
+	}
+	achievementIndex.mu.RUnlock()
+	s.setAchievementCriteria(criteriaTypeEarnAchievementPoints, 0, totalPoints)
 }
 
 // achievementCriteriaCount is used by tests to inspect the index size.
@@ -695,9 +902,14 @@ func (s *Server) creditHonorableKill(killer, victim *session) {
 		return
 	}
 	killer.updateAchievementCriteria(criteriaTypeHonorableKill, 0, 1)
+	killer.updateAchievementCriteria(criteriaTypeEarnHonorableKill, 0, 1)
+	if killer.player.Zone > 0 {
+		killer.updateAchievementCriteria(criteriaTypeHKAtArea, killer.player.Zone, 1)
+	}
 	victim.updateAchievementCriteria(criteriaTypeKilledByPlayer, 0, 1)
 	killer.updateAchievementCriteria(criteriaTypeHKClass, uint32(victim.player.Class), 1)
 	killer.updateAchievementCriteria(criteriaTypeHKRace, uint32(victim.player.Race), 1)
+	killer.updateAchievementCriteria(criteriaTypeSpecialPvPKill, 0, 1)
 }
 
 // exploreZone mirrors Player::UpdateZone exploration (Player.cpp:6565): set
@@ -829,25 +1041,29 @@ func hexDigitValue(c byte) int {
 
 // creditBattlegroundWin mirrors the reference WIN_BG criteria credit at
 // battleground end: every online player of the winning team on the
-// battleground map gains progress.
+// battleground map gains progress, and all participants complete the battleground.
 func (s *Server) creditBattlegroundWin(mapID, winningTeam uint32) {
 	s.sessionsMu.RLock()
-	var winners []*session
+	var allParticipants, winners []*session
 	for sess := range s.sessions {
 		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
 			continue
 		}
+		allParticipants = append(allParticipants, sess)
 		if teamForRace(sess.player.Race) == winningTeam {
 			winners = append(winners, sess)
 		}
 	}
 	s.sessionsMu.RUnlock()
+	for _, sess := range allParticipants {
+		sess.updateAchievementCriteria(criteriaTypeCompleteBattleground, mapID, 1)
+	}
 	for _, sess := range winners {
 		sess.updateAchievementCriteria(criteriaTypeWinBG, mapID, 1)
 	}
 }
 
-// creditArenaParticipants mirrors PLAY_ARENA / WIN_ARENA / GET_KILLING_BLOWS
+// creditArenaParticipants mirrors PLAY_ARENA / WIN_ARENA / WIN_RATED_ARENA / GET_KILLING_BLOWS
 // at arena end: every player on the arena map gains play credit, winners gain
 // the win, and killing blow totals come from the scoreboard.
 func (s *Server) creditArenaParticipants(mapID uint32, scores map[uint64]uint32, winners map[uint64]struct{}) {
@@ -866,6 +1082,7 @@ func (s *Server) creditArenaParticipants(mapID uint32, scores map[uint64]uint32,
 		}
 		if _, won := winners[sess.playerGUID]; won {
 			sess.updateAchievementCriteria(criteriaTypeWinArena, mapID, 1)
+			sess.updateAchievementCriteria(criteriaTypeWinRatedArena, 0, 1)
 		}
 	}
 }

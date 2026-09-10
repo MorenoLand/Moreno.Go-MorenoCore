@@ -866,6 +866,7 @@ func (s *session) handleLfgProposalResult(ctx context.Context, payload []byte) b
 				_ = ps.sendLFGProposalUpdate(proposal)
 				_ = ps.sendLFGUpdatePlayer(LFGUpdateGroupFound, LFGQueueEntry{GUID: pguid, State: LFGStateDungeon})
 				_ = ps.sendLFGUpdatePlayer(LFGUpdateRemovedFromQueue, LFGQueueEntry{GUID: pguid, State: LFGStateNone})
+				ps.updateAchievementCriteria(criteriaTypeUseLFDToGroup, 0, 1)
 			}
 		}
 

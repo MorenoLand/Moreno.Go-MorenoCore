@@ -1701,6 +1701,7 @@ func (s *session) handleSetTitle(ctx context.Context, payload []byte) bool {
 		s.player.ChosenTitle = 0
 	} else {
 		s.player.ChosenTitle = uint32(title)
+		s.updateAchievementCriteria(criteriaTypeOwnRank, s.player.ChosenTitle, 1)
 	}
 	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET chosenTitle = ? WHERE guid = ?", s.player.ChosenTitle, s.playerGUID)
@@ -1831,6 +1832,8 @@ func (s *session) handleAlterAppearance(ctx context.Context, payload []byte) boo
 	res := protocol.NewBuffer(4)
 	res.WriteU32(0) // BARBER_SHOP_RESULT_SUCCESS
 	_ = s.write(uint16(protocol.OpcodeSMSG_BARBER_SHOP_RESULT), res.Bytes(), true)
+	s.updateAchievementCriteria(criteriaTypeVisitBarberShop, 0, 1)
+	s.updateAchievementCriteria(criteriaTypeGoldSpentAtBarber, 0, 1)
 	s.sendPlayerUpdate()
 	s.debug("alter appearance applied", "account", s.accountName, "hair", hair, "color", color)
 	return true

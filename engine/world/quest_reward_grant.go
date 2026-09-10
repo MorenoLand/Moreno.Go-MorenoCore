@@ -220,6 +220,17 @@ func (s *session) commitQuestReward(ctx context.Context, view questRewardView, c
 	if view.Detail.RewardMoney > 0 {
 		s.updateAchievementCriteria(criteriaTypeMoneyFromQuest, 0, uint32(view.Detail.RewardMoney))
 	}
+	var questSortID int32
+	if s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(QuestSortID, 0) FROM quest_template WHERE ID = ?", questID).Scan(&questSortID)
+	}
+	if questSortID > 0 {
+		s.updateAchievementCriteria(criteriaTypeCompleteQuestsInZone, uint32(questSortID), 1)
+	}
+	if view.Detail.Flags&0x1000 != 0 {
+		s.updateAchievementCriteria(criteriaTypeCompleteDailyQuest, 0, 1)
+		s.updateAchievementCriteria(criteriaTypeCompleteDailyQuestDaily, 0, 1)
+	}
 	return grants, destroyedGUIDs, nil
 }
 
