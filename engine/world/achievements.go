@@ -287,6 +287,47 @@ var criteriaTypeNames = [CriteriaTypeCount]string{
 	criteriaTypeLFGAbandon:              "LFGAbandon",
 }
 
+// CriteriaCondition constants matching DBCEnums.h:96-108.
+const (
+	criteriaConditionNone       = 0
+	criteriaConditionNoDeath    = 1 // reset progress on death
+	criteriaConditionUnk2       = 2
+	criteriaConditionBGMap      = 3 // requires specific map
+	criteriaConditionNoLose     = 4 // reset progress on arena loss
+	criteriaConditionNoSpellHit = 9
+	criteriaConditionNotInGroup = 10 // requires player not to be in group
+	criteriaConditionMax        = 14
+)
+
+// CriteriaDataType constants matching AchievementMgr.h:49-80 (achievement_criteria_data table).
+const (
+	criteriaDataTypeNone              = 0
+	criteriaDataTypeTCreature         = 1
+	criteriaDataTypeTPlayerClassRace  = 2
+	criteriaDataTypeTPlayerLessHealth = 3
+	criteriaDataTypeTPlayerDead       = 4
+	criteriaDataTypeSAura             = 5
+	criteriaDataTypeSArea             = 6
+	criteriaDataTypeTAura             = 7
+	criteriaDataTypeValue             = 8
+	criteriaDataTypeTLevel            = 9
+	criteriaDataTypeTGender           = 10
+	criteriaDataTypeScript            = 11
+	criteriaDataTypeMapDifficulty     = 12
+	criteriaDataTypeMapPlayerCount    = 13
+	criteriaDataTypeTTeam             = 14
+	criteriaDataTypeSDrunk            = 15
+	criteriaDataTypeHoliday           = 16
+	criteriaDataTypeBGLossTeamScore   = 17
+	criteriaDataTypeInstanceScript    = 18
+	criteriaDataTypeSEquippedItem     = 19
+	criteriaDataTypeMapID             = 20
+	criteriaDataTypeSPlayerClassRace  = 21
+	criteriaDataTypeNthBirthday       = 22
+	criteriaDataTypeSKnownTitle       = 23
+	criteriaDataTypeSItemQuality      = 25
+)
+
 // CriteriaTypeName returns the canonical name for an achievement criteria type.
 func CriteriaTypeName(cType uint32) string {
 	if cType < CriteriaTypeCount {
@@ -310,9 +351,20 @@ type achievementCriteriaEntry struct {
 	Type          uint32
 	Asset         uint32
 	Quantity      uint32 // required count
+	ReqType1      uint32 // AdditionalRequirements[0].Type (DBC field 5)
+	ReqAsset1     uint32 // AdditionalRequirements[0].Asset (DBC field 6)
+	ReqType2      uint32 // AdditionalRequirements[1].Type (DBC field 7)
+	ReqAsset2     uint32 // AdditionalRequirements[1].Asset (DBC field 8)
 	StartEvent    uint32 // AchievementCriteriaTimedTypes (DBC field 27)
 	StartAsset    uint32 // DBC field 28
 	StartTimer    uint32 // seconds (DBC field 29)
+}
+
+type criteriaDataEntry struct {
+	Type       uint32
+	Value1     uint32
+	Value2     uint32
+	ScriptName string
 }
 
 type criteriaProgressState struct {
@@ -326,7 +378,9 @@ type achievementRuntime struct {
 	byTypeAsset   map[uint64][]achievementCriteriaEntry // key: type<<32 | asset
 	byTimedEvent  map[uint64][]achievementCriteriaEntry // key: startEvent<<32 | startAsset
 	byType        map[uint32][]achievementCriteriaEntry
-	exploreByZone map[uint32][]uint32 // zone id -> criteria ids (type 43)
+	byCondition   map[uint32][]achievementCriteriaEntry // key: condition type
+	criteriaData  map[uint32][]criteriaDataEntry        // key: criteria_id
+	exploreByZone map[uint32][]uint32                   // zone id -> criteria ids (type 43)
 	byID          map[uint32]achievementCriteriaEntry
 	byAchieve     map[uint32][]achievementCriteriaEntry
 	achieveByID   map[uint32]achievementEntry
@@ -337,6 +391,8 @@ var achievementIndex = &achievementRuntime{
 	byTypeAsset:   make(map[uint64][]achievementCriteriaEntry),
 	byTimedEvent:  make(map[uint64][]achievementCriteriaEntry),
 	byType:        make(map[uint32][]achievementCriteriaEntry),
+	byCondition:   make(map[uint32][]achievementCriteriaEntry),
+	criteriaData:  make(map[uint32][]criteriaDataEntry),
 	exploreByZone: make(map[uint32][]uint32),
 	byID:          make(map[uint32]achievementCriteriaEntry),
 	byAchieve:     make(map[uint32][]achievementCriteriaEntry),
@@ -348,85 +404,123 @@ func typeAssetKey(criterionType, asset uint32) uint64 {
 }
 
 // loadAchievementIndex builds the criteria/achievement index from the DBC
-// stores once per process.
+// stores and database once per process.
 func (s *Server) loadAchievementIndex() {
 	achievementIndex.mu.Lock()
 	defer achievementIndex.mu.Unlock()
-	if achievementIndex.loaded || s.Data == nil {
+	if achievementIndex.loaded {
 		return
-	}
-	file, err := s.Data.File("Achievement_Criteria")
-	if err != nil {
-		return
-	}
-	for i := 0; i < file.Records(); i++ {
-		record, err := file.Record(i)
-		if err != nil {
-			continue
-		}
-		id, err := record.Uint32(0)
-		if err != nil {
-			continue
-		}
-		achievementID, err := record.Uint32(1)
-		if err != nil {
-			continue
-		}
-		criterionType, err := record.Uint32(2)
-		if err != nil {
-			continue
-		}
-		asset, err := record.Uint32(3)
-		if err != nil {
-			continue
-		}
-		quantity, err := record.Uint32(4)
-		if err != nil {
-			continue
-		}
-		startEvent, _ := record.Uint32(27)
-		startAsset, _ := record.Uint32(28)
-		startTimer, _ := record.Uint32(29)
-		entry := achievementCriteriaEntry{ID: id, AchievementID: achievementID, Type: criterionType, Asset: asset, Quantity: quantity, StartEvent: startEvent, StartAsset: startAsset, StartTimer: startTimer}
-		key := typeAssetKey(criterionType, asset)
-		achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], entry)
-		achievementIndex.byType[criterionType] = append(achievementIndex.byType[criterionType], entry)
-		if startEvent != 0 {
-			timedKey := typeAssetKey(startEvent, startAsset)
-			achievementIndex.byTimedEvent[timedKey] = append(achievementIndex.byTimedEvent[timedKey], entry)
-		}
-		achievementIndex.byID[id] = entry
-		achievementIndex.byAchieve[achievementID] = append(achievementIndex.byAchieve[achievementID], entry)
 	}
 	if s.Data != nil {
-		for _, entry := range achievementIndex.byType[criteriaTypeExplore] {
-			areas, found, err := s.Data.WorldMapOverlayAreas(entry.Asset)
-			if err != nil || !found {
-				continue
+		if file, err := s.Data.File("Achievement_Criteria"); err == nil {
+			for i := 0; i < file.Records(); i++ {
+				record, err := file.Record(i)
+				if err != nil {
+					continue
+				}
+				id, err := record.Uint32(0)
+				if err != nil {
+					continue
+				}
+				achievementID, err := record.Uint32(1)
+				if err != nil {
+					continue
+				}
+				criterionType, err := record.Uint32(2)
+				if err != nil {
+					continue
+				}
+				asset, err := record.Uint32(3)
+				if err != nil {
+					continue
+				}
+				quantity, err := record.Uint32(4)
+				if err != nil {
+					continue
+				}
+				reqType1, _ := record.Uint32(5)
+				reqAsset1, _ := record.Uint32(6)
+				reqType2, _ := record.Uint32(7)
+				reqAsset2, _ := record.Uint32(8)
+				startEvent, _ := record.Uint32(27)
+				startAsset, _ := record.Uint32(28)
+				startTimer, _ := record.Uint32(29)
+				entry := achievementCriteriaEntry{
+					ID:            id,
+					AchievementID: achievementID,
+					Type:          criterionType,
+					Asset:         asset,
+					Quantity:      quantity,
+					ReqType1:      reqType1,
+					ReqAsset1:     reqAsset1,
+					ReqType2:      reqType2,
+					ReqAsset2:     reqAsset2,
+					StartEvent:    startEvent,
+					StartAsset:    startAsset,
+					StartTimer:    startTimer,
+				}
+				key := typeAssetKey(criterionType, asset)
+				achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], entry)
+				achievementIndex.byType[criterionType] = append(achievementIndex.byType[criterionType], entry)
+				if reqType1 != 0 {
+					achievementIndex.byCondition[reqType1] = append(achievementIndex.byCondition[reqType1], entry)
+				}
+				if reqType2 != 0 && (reqType2 != reqType1 || reqAsset2 != reqAsset1) {
+					achievementIndex.byCondition[reqType2] = append(achievementIndex.byCondition[reqType2], entry)
+				}
+				if startEvent != 0 {
+					timedKey := typeAssetKey(startEvent, startAsset)
+					achievementIndex.byTimedEvent[timedKey] = append(achievementIndex.byTimedEvent[timedKey], entry)
+				}
+				achievementIndex.byID[id] = entry
+				achievementIndex.byAchieve[achievementID] = append(achievementIndex.byAchieve[achievementID], entry)
 			}
-			for _, area := range areas {
-				if area != 0 {
-					achievementIndex.exploreByZone[area] = append(achievementIndex.exploreByZone[area], entry.ID)
+			for _, entry := range achievementIndex.byType[criteriaTypeExplore] {
+				areas, found, err := s.Data.WorldMapOverlayAreas(entry.Asset)
+				if err != nil || !found {
+					continue
+				}
+				for _, area := range areas {
+					if area != 0 {
+						achievementIndex.exploreByZone[area] = append(achievementIndex.exploreByZone[area], entry.ID)
+					}
 				}
 			}
 		}
+		if af, err := s.Data.File("Achievement"); err == nil {
+			for i := 0; i < af.Records(); i++ {
+				record, err := af.Record(i)
+				if err != nil {
+					continue
+				}
+				id, err := record.Uint32(0)
+				if err != nil {
+					continue
+				}
+				faction, _ := record.Int32(1)
+				category, _ := record.Uint32(38)
+				points, _ := record.Uint32(39)
+				flags, _ := record.Uint32(41)
+				minimum, _ := record.Uint32(60)
+				achievementIndex.achieveByID[id] = achievementEntry{ID: id, Faction: faction, Category: category, Points: points, Flags: flags, MinimumCriteria: minimum}
+			}
+		}
 	}
-	if af, err := s.Data.File("Achievement"); err == nil {
-		for i := 0; i < af.Records(); i++ {
-			record, err := af.Record(i)
-			if err != nil {
-				continue
+	if s.WorldStore != nil && s.WorldStore.DB != nil {
+		if rows, err := s.WorldStore.DB.Query("SELECT criteria_id, type, value1, value2, ScriptName FROM achievement_criteria_data"); err == nil {
+			for rows.Next() {
+				var cid, ctype, v1, v2 uint32
+				var script string
+				if rows.Scan(&cid, &ctype, &v1, &v2, &script) == nil {
+					achievementIndex.criteriaData[cid] = append(achievementIndex.criteriaData[cid], criteriaDataEntry{
+						Type:       ctype,
+						Value1:     v1,
+						Value2:     v2,
+						ScriptName: script,
+					})
+				}
 			}
-			id, err := record.Uint32(0)
-			if err != nil {
-				continue
-			}
-			faction, _ := record.Int32(1)
-			category, _ := record.Uint32(38)
-			points, _ := record.Uint32(39)
-			flags, _ := record.Uint32(41)
-			minimum, _ := record.Uint32(60)
-			achievementIndex.achieveByID[id] = achievementEntry{ID: id, Faction: faction, Category: category, Points: points, Flags: flags, MinimumCriteria: minimum}
+			rows.Close()
 		}
 	}
 	achievementIndex.loaded = true
@@ -583,6 +677,128 @@ func (s *session) sendCriteriaUpdate(progress *criteriaProgressState) {
 	_ = s.write(uint16(protocol.OpcodeSMSG_CRITERIA_UPDATE), packet.Bytes(), true)
 }
 
+// playerHasTitle returns true if the player has the given title ID chosen or known.
+func (s *session) playerHasTitle(titleID uint32) bool {
+	if s.player == nil {
+		return false
+	}
+	if s.player.ChosenTitle == titleID {
+		return true
+	}
+	idx := titleID / 32
+	bit := uint32(1) << (titleID % 32)
+	if int(idx) < len(s.player.KnownTitles) && (s.player.KnownTitles[idx]&bit) != 0 {
+		return true
+	}
+	return false
+}
+
+// playerHasAura returns true if the player has an active aura from spellID.
+func (s *session) playerHasAura(spellID uint32) bool {
+	if s.activeAuras == nil {
+		return false
+	}
+	aura, ok := s.activeAuras[spellID]
+	return ok && aura != nil && !aura.Stopped
+}
+
+// meetsCriteriaRequirements checks DBC AdditionalRequirements and
+// achievement_criteria_data database rules before awarding criteria progress,
+// mirroring AchievementMgr::ConditionsSatisfied and AchievementCriteriaDataSet::Meets.
+func (s *session) meetsCriteriaRequirements(criterion achievementCriteriaEntry, miscValue1, miscValue2 uint32) bool {
+	if s.player == nil {
+		return false
+	}
+
+	achievementIndex.mu.RLock()
+	achieve, hasAchieve := achievementIndex.achieveByID[criterion.AchievementID]
+	rules := achievementIndex.criteriaData[criterion.ID]
+	achievementIndex.mu.RUnlock()
+
+	// Faction check
+	if hasAchieve && achieve.Faction >= 0 {
+		team := playerTeam(s.player.Race)
+		if (achieve.Faction == 0 && team != teamHorde) || (achieve.Faction == 1 && team != teamAlliance) {
+			return false
+		}
+	}
+
+	// DBC AdditionalRequirements checks
+	reqs := [2]struct {
+		typ   uint32
+		asset uint32
+	}{
+		{criterion.ReqType1, criterion.ReqAsset1},
+		{criterion.ReqType2, criterion.ReqAsset2},
+	}
+	for _, req := range reqs {
+		if req.typ == 0 {
+			continue
+		}
+		switch req.typ {
+		case criteriaConditionBGMap: // 3: requires player to be on specific map
+			if s.player.Map != req.asset {
+				return false
+			}
+		case criteriaConditionNotInGroup: // 10: requires player not to be in group
+			if s.groupID != 0 {
+				return false
+			}
+		}
+	}
+
+	// achievement_criteria_data DB rules
+	for _, rule := range rules {
+		switch rule.Type {
+		case criteriaDataTypeMapID: // 20
+			if s.player.Map != rule.Value1 {
+				return false
+			}
+		case criteriaDataTypeSArea: // 6
+			if s.player.Zone != rule.Value1 {
+				return false
+			}
+		case criteriaDataTypeSPlayerClassRace: // 21
+			if rule.Value1 != 0 && uint32(s.player.Class) != rule.Value1 {
+				return false
+			}
+			if rule.Value2 != 0 && uint32(s.player.Race) != rule.Value2 {
+				return false
+			}
+		case criteriaDataTypeSKnownTitle: // 23
+			if !s.playerHasTitle(rule.Value1) {
+				return false
+			}
+		case criteriaDataTypeSAura: // 5
+			if !s.playerHasAura(rule.Value1) {
+				return false
+			}
+		case criteriaDataTypeMapDifficulty: // 12
+			diff := uint32(s.player.DungeonDifficulty)
+			if s.player.RaidDifficulty != 0 {
+				diff = uint32(s.player.RaidDifficulty)
+			}
+			if diff < rule.Value1 {
+				return false
+			}
+		case criteriaDataTypeValue: // 8
+			if miscValue1 < rule.Value1 {
+				return false
+			}
+		case criteriaDataTypeSDrunk: // 15
+			if uint32(s.player.DrunkenState) < rule.Value1 {
+				return false
+			}
+		case criteriaDataTypeSItemQuality: // 25
+			if miscValue1 != rule.Value1 {
+				return false
+			}
+		}
+	}
+
+	return true
+}
+
 // updateAchievementCriteria advances every criterion matching the type and
 // asset by quantity, mirroring AchievementMgr::UpdateAchievementCriteria for
 // the counter-style criteria this server tracks.
@@ -614,6 +830,9 @@ func (s *session) updateAchievementCriteria(criterionType, asset uint32, quantit
 
 	for _, criterion := range matched {
 		if _, done := s.earnedAchievements[criterion.AchievementID]; done {
+			continue
+		}
+		if !s.meetsCriteriaRequirements(criterion, quantity, asset) {
 			continue
 		}
 		progress := s.criteriaProgress[criterion.ID]
@@ -666,6 +885,9 @@ func (s *session) setAchievementCriteria(criterionType, asset, value uint32) {
 
 	for _, criterion := range matched {
 		if _, done := s.earnedAchievements[criterion.AchievementID]; done {
+			continue
+		}
+		if !s.meetsCriteriaRequirements(criterion, value, asset) {
 			continue
 		}
 		progress := s.criteriaProgress[criterion.ID]
@@ -757,9 +979,10 @@ func (s *session) startTimedAchievement(timedType, entry uint32) {
 	}
 }
 
-// expireTimedAchievement mirrors the UpdateTimedAchievements expiry path:
-// reset progress, notify with SMSG_CRITERIA_DELETED, remove persistence.
-func (s *session) expireTimedAchievement(criteriaID uint32) {
+// removeCriteriaProgress removes progress for a single criterion, cancels any
+// active timer, notifies the client with SMSG_CRITERIA_DELETED, and deletes persistence,
+// mirroring AchievementMgr::RemoveCriteriaProgress.
+func (s *session) removeCriteriaProgress(criteriaID uint32) {
 	if s.criteriaProgress == nil {
 		return
 	}
@@ -781,7 +1004,44 @@ func (s *session) expireTimedAchievement(criteriaID uint32) {
 			"DELETE FROM character_achievement_progress WHERE guid = ? AND criteria = ?",
 			s.playerGUID, criteriaID)
 	}
+}
+
+// expireTimedAchievement mirrors the UpdateTimedAchievements expiry path.
+func (s *session) expireTimedAchievement(criteriaID uint32) {
+	s.removeCriteriaProgress(criteriaID)
 	s.debug("timed achievement expired", "account", s.accountName, "criteria", criteriaID)
+}
+
+// resetAchievementCriteriaByCondition resets progress for unearned achievements
+// whose criteria match the condition (e.g. no-death on death, no-lose on arena loss),
+// mirroring AchievementMgr::ResetAchievementCriteria.
+func (s *session) resetAchievementCriteriaByCondition(condition, value uint32) {
+	if s.player == nil || s.server == nil {
+		return
+	}
+	s.server.loadAchievementIndex()
+	achievementIndex.mu.RLock()
+	criterias := make([]achievementCriteriaEntry, len(achievementIndex.byCondition[condition]))
+	copy(criterias, achievementIndex.byCondition[condition])
+	achievementIndex.mu.RUnlock()
+
+	for _, criterion := range criterias {
+		if value != 0 {
+			if (criterion.ReqType1 == condition && criterion.ReqAsset1 != value) ||
+				(criterion.ReqType2 == condition && criterion.ReqAsset2 != value) {
+				continue
+			}
+		}
+		if _, done := s.earnedAchievements[criterion.AchievementID]; done {
+			continue
+		}
+		if progress, ok := s.criteriaProgress[criterion.ID]; ok {
+			if criterion.Quantity > 0 && progress.Counter >= criterion.Quantity {
+				continue
+			}
+			s.removeCriteriaProgress(criterion.ID)
+		}
+	}
 }
 
 // stopTimedAchievement mirrors RemoveTimedAchievement without the deletion
@@ -1090,6 +1350,8 @@ func (s *Server) creditArenaParticipants(mapID uint32, scores map[uint64]uint32,
 		if _, won := winners[sess.playerGUID]; won {
 			sess.updateAchievementCriteria(criteriaTypeWinArena, mapID, 1)
 			sess.updateAchievementCriteria(criteriaTypeWinRatedArena, 0, 1)
+		} else {
+			sess.resetAchievementCriteriaByCondition(criteriaConditionNoLose, 0)
 		}
 	}
 }

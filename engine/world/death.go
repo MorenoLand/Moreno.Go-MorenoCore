@@ -117,6 +117,7 @@ func (s *session) killPlayer(ctx context.Context) {
 			s.updateAchievementCriteria(criteriaTypeDeathInDungeon, 0, 1)
 		}
 	}
+	s.resetAchievementCriteriaByCondition(criteriaConditionNoDeath, 0)
 	if s.server != nil {
 		s.server.handleWSGPlayerDeath(s)
 		s.server.handleEOTSPlayerDeath(s)

@@ -320,6 +320,7 @@ func (s *session) handleLeaveBattlefield(ctx context.Context, payload []byte) bo
 		s.server.handleArenaPlayerLeave(s)
 		s.server.handleWGPlayerLeave(s)
 	}
+	s.resetAchievementCriteriaByCondition(criteriaConditionBGMap, s.player.Map)
 	for slot := 0; slot < len(s.bgQueues); slot++ {
 		if s.bgQueues[slot].Active {
 			s.bgQueues[slot].Active = false

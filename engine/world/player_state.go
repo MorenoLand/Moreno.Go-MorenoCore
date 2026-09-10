@@ -240,6 +240,7 @@ type playerState struct {
 	TotalKills           uint32
 	TodayKills           uint16
 	YesterdayKills       uint16
+	DrunkenState         uint16
 }
 
 type playerReputation struct {

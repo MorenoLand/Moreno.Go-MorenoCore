@@ -101,6 +101,14 @@ func snapshotAchievementIndex(t *testing.T) {
 	for k, v := range achievementIndex.achieveByID {
 		achieveByIDCopy[k] = v
 	}
+	byConditionCopy := make(map[uint32][]achievementCriteriaEntry, len(achievementIndex.byCondition))
+	for k, v := range achievementIndex.byCondition {
+		byConditionCopy[k] = append([]achievementCriteriaEntry(nil), v...)
+	}
+	criteriaDataCopy := make(map[uint32][]criteriaDataEntry, len(achievementIndex.criteriaData))
+	for k, v := range achievementIndex.criteriaData {
+		criteriaDataCopy[k] = append([]criteriaDataEntry(nil), v...)
+	}
 	loaded := achievementIndex.loaded
 	achievementIndex.mu.Unlock()
 	t.Cleanup(func() {
@@ -108,6 +116,8 @@ func snapshotAchievementIndex(t *testing.T) {
 		achievementIndex.byTypeAsset = typeAssetCopy
 		achievementIndex.byTimedEvent = timedCopy
 		achievementIndex.byType = byTypeCopy
+		achievementIndex.byCondition = byConditionCopy
+		achievementIndex.criteriaData = criteriaDataCopy
 		achievementIndex.exploreByZone = exploreCopy
 		achievementIndex.byID = byIDCopy
 		achievementIndex.byAchieve = byAchieveCopy
@@ -961,5 +971,325 @@ func TestCriteriaWildcardAssetMatching(t *testing.T) {
 		t.Fatal("expected wildcard general achievement 9002 earned")
 	}
 }
+
+func TestAdditionalRequirementsConditions(t *testing.T) {
+	player := &playerState{GUID: 44, Level: 80, Health: 1000, MaxHealth: 1000, Race: 1, Map: 0}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	snapshotAchievementIndex(t)
+
+	achievementIndex.mu.Lock()
+	// Criterion 31001: requires BG map 529 (Arathi Basin)
+	bgCrit := achievementCriteriaEntry{
+		ID:            31001,
+		AchievementID: 9101,
+		Type:          criteriaTypeKillCreature,
+		Asset:         100,
+		Quantity:      1,
+		ReqType1:      criteriaConditionBGMap,
+		ReqAsset1:     529,
+	}
+	// Criterion 31002: requires player not to be in a group
+	soloCrit := achievementCriteriaEntry{
+		ID:            31002,
+		AchievementID: 9102,
+		Type:          criteriaTypeKillCreature,
+		Asset:         200,
+		Quantity:      1,
+		ReqType1:      criteriaConditionNotInGroup,
+	}
+
+	keyBG := typeAssetKey(bgCrit.Type, bgCrit.Asset)
+	keySolo := typeAssetKey(soloCrit.Type, soloCrit.Asset)
+	achievementIndex.byTypeAsset[keyBG] = append(achievementIndex.byTypeAsset[keyBG], bgCrit)
+	achievementIndex.byTypeAsset[keySolo] = append(achievementIndex.byTypeAsset[keySolo], soloCrit)
+	achievementIndex.byID[31001] = bgCrit
+	achievementIndex.byID[31002] = soloCrit
+	achievementIndex.byAchieve[9101] = append(achievementIndex.byAchieve[9101], bgCrit)
+	achievementIndex.byAchieve[9102] = append(achievementIndex.byAchieve[9102], soloCrit)
+	achievementIndex.achieveByID[9101] = achievementEntry{ID: 9101, Faction: -1}
+	achievementIndex.achieveByID[9102] = achievementEntry{ID: 9102, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	// 1. BG Map condition: player is on map 0, kill should not award progress
+	state.updateAchievementCriteria(criteriaTypeKillCreature, 100, 1)
+	if state.criteriaProgress[31001] != nil {
+		t.Fatal("expected no progress on map 0 for criteria requiring map 529")
+	}
+
+	// Move player to map 529: kill now awards progress
+	state.player.Map = 529
+	state.updateAchievementCriteria(criteriaTypeKillCreature, 100, 1)
+	if state.criteriaProgress[31001] == nil || state.criteriaProgress[31001].Counter != 1 {
+		t.Fatalf("expected progress on map 529, got %+v", state.criteriaProgress[31001])
+	}
+	if _, earned := state.earnedAchievements[9101]; !earned {
+		t.Fatal("expected achievement 9101 earned on map 529")
+	}
+
+	// 2. Not in group condition: player is in group 99, kill should not award progress
+	state.groupID = 99
+	state.updateAchievementCriteria(criteriaTypeKillCreature, 200, 1)
+	if state.criteriaProgress[31002] != nil {
+		t.Fatal("expected no progress while in group for solo criteria")
+	}
+
+	// Leave group: kill now awards progress
+	state.groupID = 0
+	state.updateAchievementCriteria(criteriaTypeKillCreature, 200, 1)
+	if state.criteriaProgress[31002] == nil || state.criteriaProgress[31002].Counter != 1 {
+		t.Fatalf("expected progress after leaving group, got %+v", state.criteriaProgress[31002])
+	}
+	if _, earned := state.earnedAchievements[9102]; !earned {
+		t.Fatal("expected achievement 9102 earned when not in group")
+	}
+}
+
+func TestAchievementCriteriaDataRules(t *testing.T) {
+	player := &playerState{
+		GUID:              45,
+		Level:             80,
+		Health:            1000,
+		MaxHealth:         1000,
+		Race:              1,   // Human
+		Class:             1,   // Warrior
+		Map:               571, // Northrend
+		Zone:              1519,
+		DungeonDifficulty: 2, // Heroic
+		DrunkenState:      2,
+		ChosenTitle:       15,
+	}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	snapshotAchievementIndex(t)
+
+	// Set active aura for aura rule
+	state.activeAuras = map[uint32]*activeAura{
+		12345: {SpellID: 12345, Stopped: false},
+	}
+
+	achievementIndex.mu.Lock()
+	crit := achievementCriteriaEntry{
+		ID:            32001,
+		AchievementID: 9201,
+		Type:          criteriaTypeKillCreature,
+		Asset:         500,
+		Quantity:      1,
+	}
+	key := typeAssetKey(crit.Type, crit.Asset)
+	achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], crit)
+	achievementIndex.byID[32001] = crit
+	achievementIndex.byAchieve[9201] = append(achievementIndex.byAchieve[9201], crit)
+	achievementIndex.achieveByID[9201] = achievementEntry{ID: 9201, Faction: -1}
+
+	// Add multi-rule set matching player's current state
+	achievementIndex.criteriaData[32001] = []criteriaDataEntry{
+		{Type: criteriaDataTypeMapID, Value1: 571},
+		{Type: criteriaDataTypeSArea, Value1: 1519},
+		{Type: criteriaDataTypeSPlayerClassRace, Value1: 1, Value2: 1},
+		{Type: criteriaDataTypeSKnownTitle, Value1: 15},
+		{Type: criteriaDataTypeSAura, Value1: 12345},
+		{Type: criteriaDataTypeMapDifficulty, Value1: 2},
+		{Type: criteriaDataTypeSDrunk, Value1: 1},
+	}
+	achievementIndex.mu.Unlock()
+
+	// Meets all requirements -> awards progress and completes
+	state.updateAchievementCriteria(criteriaTypeKillCreature, 500, 1)
+	if _, earned := state.earnedAchievements[9201]; !earned {
+		t.Fatal("expected achievement 9201 earned with all criteriaData rules matching")
+	}
+
+	// Now test failing one rule: wrong map
+	delete(state.earnedAchievements, 9201)
+	delete(state.criteriaProgress, 32001)
+	state.player.Map = 0
+	state.updateAchievementCriteria(criteriaTypeKillCreature, 500, 1)
+	if state.criteriaProgress[32001] != nil {
+		t.Fatal("expected no progress when criteriaData map rule fails")
+	}
+}
+
+func TestResetAchievementCriteriaOnDeath(t *testing.T) {
+	player := &playerState{GUID: 46, Level: 80, Health: 1000, MaxHealth: 1000, Race: 1}
+	state, clientConn, db, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	snapshotAchievementIndex(t)
+
+	achievementIndex.mu.Lock()
+	crit := achievementCriteriaEntry{
+		ID:            33001,
+		AchievementID: 9301,
+		Type:          criteriaTypeKillCreature,
+		Asset:         600,
+		Quantity:      2, // Needs 2 kills
+		ReqType1:      criteriaConditionNoDeath,
+	}
+	key := typeAssetKey(crit.Type, crit.Asset)
+	achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], crit)
+	achievementIndex.byCondition[criteriaConditionNoDeath] = append(achievementIndex.byCondition[criteriaConditionNoDeath], crit)
+	achievementIndex.byID[33001] = crit
+	achievementIndex.byAchieve[9301] = append(achievementIndex.byAchieve[9301], crit)
+	achievementIndex.achieveByID[9301] = achievementEntry{ID: 9301, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	// 1st kill: progress 1/2
+	state.updateAchievementCriteria(criteriaTypeKillCreature, 600, 1)
+	if state.criteriaProgress[33001] == nil || state.criteriaProgress[33001].Counter != 1 {
+		t.Fatalf("expected progress 1, got %+v", state.criteriaProgress[33001])
+	}
+
+	// Player dies
+	state.player.Health = 0
+	state.killPlayer(context.Background())
+
+	// Progress must be reset to nil
+	if state.criteriaProgress[33001] != nil {
+		t.Fatalf("expected progress reset on death, got %+v", state.criteriaProgress[33001])
+	}
+
+	// Database row must be deleted
+	var count int
+	_ = db.QueryRow("SELECT COUNT(*) FROM character_achievement_progress WHERE guid = 46 AND criteria = 33001").Scan(&count)
+	if count != 0 {
+		t.Fatalf("expected DB progress deleted on death, got count %d", count)
+	}
+
+	// Verify removeCriteriaProgress directly sends SMSG_CRITERIA_DELETED
+	serverConnDirect, clientConnDirect := net.Pipe()
+	t.Cleanup(func() { clientConnDirect.Close() })
+	directSess := &session{conn: serverConnDirect, authed: true, playerLoaded: true, playerGUID: 46}
+	directSess.criteriaProgress = map[uint32]*criteriaProgressState{
+		33001: {CriteriaID: 33001, Counter: 1},
+	}
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		op, payload, err := readServerFrame(clientConnDirect, nil)
+		if err != nil {
+			t.Errorf("readServerFrame err=%v", err)
+			return
+		}
+		if op != uint16(protocol.OpcodeSMSG_CRITERIA_DELETED) {
+			t.Errorf("expected SMSG_CRITERIA_DELETED (0x49E), got 0x%X", op)
+			return
+		}
+		r := protocol.NewReader(payload)
+		cid, _ := r.ReadU32()
+		if cid != 33001 {
+			t.Errorf("expected criteria ID 33001, got %d", cid)
+		}
+	}()
+	directSess.removeCriteriaProgress(33001)
+	select {
+	case <-doneCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SMSG_CRITERIA_DELETED packet")
+	}
+}
+
+func TestResetAchievementCriteriaOnArenaLoss(t *testing.T) {
+	playerW := &playerState{GUID: 47, Level: 80, Health: 1000, MaxHealth: 1000, Race: 1, Map: ArenaMapNagrand}
+	sessW, clientW, _, server := newAchievementTestSession(t, playerW)
+	sessW.playerGUID = 47
+	drainServerFrames(t, clientW)
+
+	playerL := &playerState{GUID: 48, Level: 80, Health: 1000, MaxHealth: 1000, Race: 1, Map: ArenaMapNagrand}
+	serverConnL, clientL := net.Pipe()
+	t.Cleanup(func() { clientL.Close() })
+	sessL := &session{server: server, conn: serverConnL, authed: true, playerLoaded: true, playerGUID: 48, player: playerL}
+	sessL.earnedAchievements = make(map[uint32]uint32)
+	sessL.criteriaProgress = make(map[uint32]*criteriaProgressState)
+	drainServerFrames(t, clientL)
+
+	server.sessionsMu.Lock()
+	if server.sessions == nil {
+		server.sessions = make(map[*session]struct{})
+	}
+	server.sessions[sessW] = struct{}{}
+	server.sessions[sessL] = struct{}{}
+	server.sessionsMu.Unlock()
+	t.Cleanup(func() {
+		server.sessionsMu.Lock()
+		delete(server.sessions, sessW)
+		delete(server.sessions, sessL)
+		server.sessionsMu.Unlock()
+	})
+
+	snapshotAchievementIndex(t)
+
+	achievementIndex.mu.Lock()
+	crit := achievementCriteriaEntry{
+		ID:            34001,
+		AchievementID: 9401,
+		Type:          criteriaTypeWinArena,
+		Asset:         ArenaMapNagrand,
+		Quantity:      10, // 10 wins without losing
+		ReqType1:      criteriaConditionNoLose,
+	}
+	key := typeAssetKey(crit.Type, crit.Asset)
+	achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], crit)
+	achievementIndex.byCondition[criteriaConditionNoLose] = append(achievementIndex.byCondition[criteriaConditionNoLose], crit)
+	achievementIndex.byID[34001] = crit
+	achievementIndex.byAchieve[9401] = append(achievementIndex.byAchieve[9401], crit)
+	achievementIndex.achieveByID[9401] = achievementEntry{ID: 9401, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	// Both players start with 5 wins progress
+	sessW.criteriaProgress[34001] = &criteriaProgressState{CriteriaID: 34001, Counter: 5}
+	sessL.criteriaProgress[34001] = &criteriaProgressState{CriteriaID: 34001, Counter: 5}
+
+	// Arena ends: sessW wins, sessL loses
+	winners := map[uint64]struct{}{47: {}}
+	server.creditArenaParticipants(ArenaMapNagrand, nil, winners)
+
+	// Winner has 6 wins now
+	if sessW.criteriaProgress[34001] == nil || sessW.criteriaProgress[34001].Counter != 6 {
+		t.Fatalf("expected winner progress 6, got %+v", sessW.criteriaProgress[34001])
+	}
+
+	// Loser progress was reset to nil
+	if sessL.criteriaProgress[34001] != nil {
+		t.Fatalf("expected loser progress reset to nil, got %+v", sessL.criteriaProgress[34001])
+	}
+}
+
+func TestResetAchievementCriteriaOnBGLeave(t *testing.T) {
+	player := &playerState{GUID: 49, Level: 80, Health: 1000, MaxHealth: 1000, Race: 1, Map: 529}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	snapshotAchievementIndex(t)
+
+	achievementIndex.mu.Lock()
+	crit := achievementCriteriaEntry{
+		ID:            35001,
+		AchievementID: 9501,
+		Type:          criteriaTypeBGObjective,
+		Asset:         1,
+		Quantity:      5,
+		ReqType1:      criteriaConditionBGMap,
+		ReqAsset1:     529,
+	}
+	key := typeAssetKey(crit.Type, crit.Asset)
+	achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], crit)
+	achievementIndex.byCondition[criteriaConditionBGMap] = append(achievementIndex.byCondition[criteriaConditionBGMap], crit)
+	achievementIndex.byID[35001] = crit
+	achievementIndex.byAchieve[9501] = append(achievementIndex.byAchieve[9501], crit)
+	achievementIndex.achieveByID[9501] = achievementEntry{ID: 9501, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	// Progress 2/5 on map 529
+	state.criteriaProgress[35001] = &criteriaProgressState{CriteriaID: 35001, Counter: 2}
+
+	// Player leaves battlefield
+	state.handleLeaveBattlefield(context.Background(), nil)
+
+	// Progress for map 529 criteria must be reset
+	if state.criteriaProgress[35001] != nil {
+		t.Fatalf("expected progress reset on BG leave, got %+v", state.criteriaProgress[35001])
+	}
+}
+
+
 
 
