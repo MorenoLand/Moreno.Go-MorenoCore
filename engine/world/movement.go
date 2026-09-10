@@ -720,6 +720,7 @@ func (s *session) environmentalDamage(ctx context.Context, damageType uint8, dam
 	s.sendPlayerUpdate()
 
 	if s.player.Health == 0 {
+		s.updateAchievementCriteria(criteriaTypeDeathsFrom, uint32(damageType), 1)
 		s.killPlayer(ctx)
 	}
 	return damage

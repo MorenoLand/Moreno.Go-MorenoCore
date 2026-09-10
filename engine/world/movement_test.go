@@ -548,6 +548,16 @@ func TestFallDamage_HeightThresholdAndDamageScaling(t *testing.T) {
 	}
 
 	// 3. Lethal fall: set apex at 100.0, land at 0.0 (zDiff = 100.0) -> fatal fall damage
+	snapshotAchievementIndex(t)
+	achievementIndex.mu.Lock()
+	entry := achievementCriteriaEntry{ID: 55555, AchievementID: 15555, Type: criteriaTypeDeathsFrom, Asset: uint32(damageFall), Quantity: 1}
+	key := typeAssetKey(entry.Type, entry.Asset)
+	achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], entry)
+	achievementIndex.byID[55555] = entry
+	achievementIndex.byAchieve[15555] = append(achievementIndex.byAchieve[15555], entry)
+	achievementIndex.achieveByID[15555] = achievementEntry{ID: 15555, Faction: -1}
+	achievementIndex.mu.Unlock()
+
 	sess.lastFallZ = 100.0
 	infoLethal := movementInfo{
 		GUID:     10,
@@ -568,6 +578,9 @@ func TestFallDamage_HeightThresholdAndDamageScaling(t *testing.T) {
 	}
 	if sess.player.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
 		t.Fatal("expected playerFieldByteReleaseTimer flag set upon death")
+	}
+	if _, earned := sess.earnedAchievements[15555]; !earned {
+		t.Fatal("expected DeathsFrom achievement 15555 to be earned after lethal fall")
 	}
 }
 
