@@ -311,6 +311,19 @@ func (s *session) handleAutoEquipItem(ctx context.Context, payload []byte) bool 
 	s.syncEquipmentCache(ctx)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
+	// Reference Player::_ApplyItemMods equip criteria (Player.cpp:12419).
+	s.updateAchievementCriteria(criteriaTypeEquipItem, uint32(itemEntry), 1)
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		if rows, qErr := s.server.WorldStore.DB.QueryContext(ctx, "SELECT Quality FROM item_template WHERE entry = ? LIMIT 1", itemEntry); qErr == nil {
+			if rows.Next() {
+				var quality int64
+				if rows.Scan(&quality) == nil && quality >= 5 { // epic or better
+					s.updateAchievementCriteria(criteriaTypeEquipEpicItem, uint32(destSlot), 1)
+				}
+			}
+			rows.Close()
+		}
+	}
 	s.debug("item auto-equipped", "account", s.accountName, "guid", s.playerGUID, "entry", itemEntry, "slot", destSlot)
 	return true
 }

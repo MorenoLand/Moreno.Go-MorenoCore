@@ -72,6 +72,8 @@ const (
 	criteriaTypeDoEmote             = 54 // ACHIEVEMENT_CRITERIA_TYPE_DO_EMOTE
 	criteriaTypeFallWithoutDying    = 24 // ACHIEVEMENT_CRITERIA_TYPE_FALL_WITHOUT_DYING
 	criteriaTypeUseGameObject       = 68 // ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT
+	criteriaTypeEquipItem           = 57 // ACHIEVEMENT_CRITERIA_TYPE_EQUIP_ITEM
+	criteriaTypeEquipEpicItem       = 49 // ACHIEVEMENT_CRITERIA_TYPE_EQUIP_EPIC_ITEM
 	criteriaTypeBGObjective         = 30 // ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE
 	criteriaTypeHonorableKill       = 35 // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL
 	criteriaTypeHKClass             = 52 // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS

@@ -719,3 +719,38 @@ func TestSpellTargetEmoteAndUseCriteria(t *testing.T) {
 		t.Fatalf("unexpected criteria progress: %+v", state.criteriaProgress)
 	}
 }
+
+func TestEquipAndRollCriteria(t *testing.T) {
+	player := &playerState{GUID: 9, Level: 20, Health: 100, MaxHealth: 100, Race: 1}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	snapshotAchievementIndex(t)
+
+	achievementIndex.mu.Lock()
+	equip := achievementCriteriaEntry{ID: 10700, AchievementID: 6700, Type: criteriaTypeEquipItem, Asset: 19019, Quantity: 1}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeEquipItem, 19019)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeEquipItem, 19019)], equip)
+	achievementIndex.byID[10700] = equip
+	achievementIndex.byAchieve[6700] = append(achievementIndex.byAchieve[6700], equip)
+	achievementIndex.achieveByID[6700] = achievementEntry{ID: 6700, Faction: -1}
+	need := achievementCriteriaEntry{ID: 10800, AchievementID: 6800, Type: criteriaTypeRollNeed, Asset: 0, Quantity: 90}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeRollNeed, 0)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeRollNeed, 0)], need)
+	achievementIndex.byID[10800] = need
+	achievementIndex.byAchieve[6800] = append(achievementIndex.byAchieve[6800], need)
+	achievementIndex.achieveByID[6800] = achievementEntry{ID: 6800, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	state.updateAchievementCriteria(criteriaTypeEquipItem, 19019, 1)
+	if _, earned := state.earnedAchievements[6700]; !earned {
+		t.Fatal("EQUIP_ITEM not completed")
+	}
+	// Roll winner semantics: set-variant with the roll value; 95 >= 90 completes.
+	state.setAchievementCriteria(criteriaTypeRollNeed, 0, 95)
+	if _, earned := state.earnedAchievements[6800]; !earned {
+		t.Fatal("ROLL_NEED_ON_LOOT not completed at 95 >= 90")
+	}
+	// Lower rolls never regress the highest roll tracked.
+	state.setAchievementCriteria(criteriaTypeRollNeed, 0, 50)
+	if state.criteriaProgress[10800].Counter != 95 {
+		t.Fatal("roll progress regressed")
+	}
+}

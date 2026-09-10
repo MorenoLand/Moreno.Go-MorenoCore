@@ -885,6 +885,15 @@ func (s *Server) resolveGroupLootRoll(rollKey string) {
 		wonBuf.WriteU8(winningType)
 		s.broadcastToGroup(roll.GroupID, uint16(protocol.OpcodeSMSG_LOOT_ROLL_WON), wonBuf.Bytes())
 
+		// Reference Group.cpp:1557/1621: the roll winner is credited with the
+		// winning roll value against the minimum-roll threshold.
+		if winnerSess := s.findSessionByGUID(winnerGUID); winnerSess != nil {
+			if winningType == 1 { // need
+				winnerSess.setAchievementCriteria(criteriaTypeRollNeed, roll.ItemEntry, uint32(maxRoll))
+			} else {
+				winnerSess.setAchievementCriteria(criteriaTypeRollGreed, roll.ItemEntry, uint32(maxRoll))
+			}
+		}
 		s.deliverGroupLootItem(roll, winnerGUID, winningType)
 	} else {
 		passBuf := protocol.NewBuffer(24)
@@ -1074,12 +1083,9 @@ func (s *session) handleLootRoll(ctx context.Context, payload []byte) bool {
 	if rollType == 1 { // NEED
 		voteRollNumber = 0
 		voteRollType = 0
-		s.updateAchievementCriteria(criteriaTypeRollNeed, 0, 1)
 	} else if rollType == 0 { // PASS
 		voteRollNumber = 128
 		voteRollType = 0
-	} else if rollType == 2 || rollType == 3 { // GREED / DISENCHANT
-		s.updateAchievementCriteria(criteriaTypeRollGreed, 0, 1)
 	}
 
 	buf := protocol.NewBuffer(35)
