@@ -3,7 +3,10 @@ package world
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -642,5 +645,211 @@ func TestHandleUpdateProjectilePosition(t *testing.T) {
 
 	if !sess.handleUpdateProjectilePosition(context.Background(), buf.Bytes()) {
 		t.Fatal("handleUpdateProjectilePosition failed")
+	}
+}
+
+func TestSpellEquippedItemRequirements(t *testing.T) {
+	ctx := context.Background()
+	wdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wdb.Close()
+
+	_, err = wdb.Exec(`CREATE TABLE item_template (entry INTEGER PRIMARY KEY, class INTEGER, subclass INTEGER, InventoryType INTEGER)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Item 1001: Shield (class 4, subclass 6, invtype 14)
+	// Item 1002: Offhand Frill/Orb (class 4, subclass 0, invtype 23)
+	// Item 2001: 1H Sword (class 2, subclass 7, invtype 13)
+	// Item 2002: Dagger (class 2, subclass 15, invtype 13)
+	_, _ = wdb.Exec(`INSERT INTO item_template VALUES
+		(1001, 4, 6, 14),
+		(1002, 4, 0, 23),
+		(2001, 2, 7, 13),
+		(2002, 2, 15, 13)`)
+
+	srv := &Server{
+		WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: wdb},
+	}
+
+	// 1. Shield requirement test
+	shieldSpell := wotlk.Spell{
+		ID:                   23922, // Shield Slam
+		EquippedItemClass:    4,     // Armor
+		EquippedItemSubClass: 1 << 6, // Shield
+	}
+
+	// Session with no equipment (all zeros)
+	emptyEquip := "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+	sess := &session{
+		server:       srv,
+		playerLoaded: true,
+		player: &playerState{
+			GUID:      1,
+			Equipment: emptyEquip,
+		},
+	}
+
+	failReason, ok := sess.checkSpellEquippedItemRequirements(ctx, shieldSpell)
+	if ok || failReason != spellFailedEquippedItemClass {
+		t.Fatalf("expected shield spell to fail with reason 29 when naked, got ok=%v reason=%d", ok, failReason)
+	}
+
+	// Equip non-shield in offhand slot 16 (index 16*2 = 32)
+	equipSlots := make([]string, 38)
+	for i := range equipSlots {
+		equipSlots[i] = "0"
+	}
+	equipSlots[16*2] = "1002" // Offhand frill
+	sess.player.Equipment = ""
+	for i, s := range equipSlots {
+		if i > 0 {
+			sess.player.Equipment += " "
+		}
+		sess.player.Equipment += s
+	}
+
+	failReason, ok = sess.checkSpellEquippedItemRequirements(ctx, shieldSpell)
+	if ok || failReason != spellFailedEquippedItemClass {
+		t.Fatalf("expected shield spell to fail with non-shield offhand, got ok=%v reason=%d", ok, failReason)
+	}
+
+	// Equip shield 1001 in offhand slot 16
+	equipSlots[16*2] = "1001"
+	sess.player.Equipment = ""
+	for i, s := range equipSlots {
+		if i > 0 {
+			sess.player.Equipment += " "
+		}
+		sess.player.Equipment += s
+	}
+
+	failReason, ok = sess.checkSpellEquippedItemRequirements(ctx, shieldSpell)
+	if !ok {
+		t.Fatalf("expected shield spell to succeed with shield equipped, got ok=%v reason=%d", ok, failReason)
+	}
+
+	// 2. Main hand Dagger requirement test (e.g. Ambush / Backstab)
+	daggerSpell := wotlk.Spell{
+		ID:                   8676,                // Ambush
+		AttributesEx3:        spellAttr3MainHand,  // Requires main hand weapon
+		EquippedItemClass:    2,                   // Weapon
+		EquippedItemSubClass: 1 << 15,             // Dagger
+	}
+
+	// Equip Sword 2001 in mainhand slot 15 (index 15*2 = 30)
+	equipSlots[15*2] = "2001"
+	sess.player.Equipment = ""
+	for i, s := range equipSlots {
+		if i > 0 {
+			sess.player.Equipment += " "
+		}
+		sess.player.Equipment += s
+	}
+
+	failReason, ok = sess.checkSpellEquippedItemRequirements(ctx, daggerSpell)
+	if ok || failReason != spellFailedEquippedItemClass {
+		t.Fatalf("expected dagger spell to fail with sword in mainhand, got ok=%v reason=%d", ok, failReason)
+	}
+
+	// Equip Dagger 2002 in mainhand slot 15
+	equipSlots[15*2] = "2002"
+	sess.player.Equipment = ""
+	for i, s := range equipSlots {
+		if i > 0 {
+			sess.player.Equipment += " "
+		}
+		sess.player.Equipment += s
+	}
+
+	failReason, ok = sess.checkSpellEquippedItemRequirements(ctx, daggerSpell)
+	if !ok {
+		t.Fatalf("expected dagger spell to succeed with dagger in mainhand, got ok=%v reason=%d", ok, failReason)
+	}
+}
+
+func TestHandleCastSpell_EquippedItemCheckPacketFlow(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	wdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wdb.Close()
+	_, _ = wdb.Exec(`CREATE TABLE item_template (entry INTEGER PRIMARY KEY, class INTEGER, subclass INTEGER, InventoryType INTEGER)`)
+
+	srv := &Server{
+		sessions:   make(map[*session]struct{}),
+		WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: wdb},
+	}
+	emptyEquip := "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"
+	sess := &session{
+		server:       srv,
+		conn:         serverConn,
+		playerLoaded: true,
+		playerGUID:   1,
+		player: &playerState{
+			GUID:      1,
+			Equipment: emptyEquip,
+			Spells: []learnedSpell{
+				{ID: 23922, Active: true},
+			},
+		},
+	}
+	srv.sessions[sess] = struct{}{}
+
+	// Cast Shield Slam (23922) with empty equipment
+	dbcDir := t.TempDir()
+	const fieldCount = 234
+	rec := make([]uint32, fieldCount)
+	rec[0] = 23922
+	rec[68] = 4      // EquippedItemClass = 4
+	rec[69] = 1 << 6 // EquippedItemSubClass = Shield
+	recBytes := make([]byte, fieldCount*4)
+	for i, val := range rec {
+		binary.LittleEndian.PutUint32(recBytes[i*4:(i+1)*4], val)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	_ = os.WriteFile(filepath.Join(dbcDir, "Spell.dbc"), append(header, append(recBytes, 0)...), 0o644)
+	srv.Data = wotlk.NewStore(dbcDir)
+
+	payload := protocol.NewBuffer(32)
+	payload.WriteU8(1)      // castID
+	payload.WriteU32(23922) // spellID
+	payload.WriteU8(0)      // castFlags
+	protocol.WriteSpellTargetData(payload, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: 1})
+
+	done := make(chan struct{})
+	var op uint16
+	var p []byte
+	go func() {
+		_ = clientConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		op, p, _ = readServerFrame(clientConn, nil)
+		close(done)
+	}()
+
+	if !sess.handleCastSpell(context.Background(), payload.Bytes()) {
+		t.Fatal("handleCastSpell failed")
+	}
+	<-done
+
+	if op != uint16(protocol.OpcodeSMSG_CAST_FAILED) {
+		t.Fatalf("expected SMSG_CAST_FAILED, got 0x%04X", op)
+	}
+	r := protocol.NewReader(p)
+	_, _ = r.ReadU8() // castID
+	spID, _ := r.ReadU32()
+	reason, _ := r.ReadU8()
+	if spID != 23922 || reason != spellFailedEquippedItemClass {
+		t.Fatalf("expected spell 23922 failed with reason 29, got spell=%d reason=%d", spID, reason)
 	}
 }

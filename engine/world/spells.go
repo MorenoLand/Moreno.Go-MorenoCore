@@ -15,6 +15,20 @@ const (
 	spellAttributePassive uint32 = 0x00000040
 	spellCastFlagStart    uint32 = 0x00000002
 	spellCastFlagGo       uint32 = 0x00000100
+
+	spellAttr3MainHand   uint32 = 0x00000400 // SPELL_ATTR3_MAIN_HAND: Require main hand weapon (SharedDefines.h:533)
+	spellAttr3ReqOffhand uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
+	spellAttr3ReqWand    uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
+
+	spellFailedEquippedItemClass         uint8 = 29 // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
+	spellFailedEquippedItemClassMainhand uint8 = 30 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
+	spellFailedEquippedItemClassOffhand  uint8 = 31 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
+
+	itemClassWeapon = 2
+	itemClassArmor  = 4
+
+	itemSubclassArmorBuckler = 5
+	itemSubclassArmorShield  = 6
 )
 
 // isSelfCastOnly checks if all active spell effects are self/caster targeting.
@@ -141,6 +155,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	if cost > 0 && pType < 7 && s.player.Powers[pType] < cost {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 85), true) // SPELL_FAILED_NO_POWER = 85
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "not enough power", "power", s.player.Powers[pType], "cost", cost)
+		return true
+	}
+
+	if failReason, ok := s.checkSpellEquippedItemRequirements(ctx, spell); !ok {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, failReason), true)
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "equipped item requirements not met", "failReason", failReason)
 		return true
 	}
 
@@ -3066,3 +3086,163 @@ func (s *session) delayCurrentChannel() {
 	s.sendChannelUpdate(uint32(remaining.Milliseconds()))
 	s.debug("channel pushed back", "account", s.accountName, "spell", spellID, "delay_ms", delayMs, "count", channel.Pushbacks)
 }
+
+type itemTemplateClassInfo struct {
+	Class    uint32
+	SubClass uint32
+	InvType  uint32
+}
+
+func (s *Server) getItemTemplateClassInfo(ctx context.Context, entry uint32) (itemTemplateClassInfo, bool) {
+	if entry == 0 {
+		return itemTemplateClassInfo{}, false
+	}
+	s.itemTemplateMu.RLock()
+	if s.itemTemplates != nil {
+		if info, ok := s.itemTemplates[entry]; ok {
+			s.itemTemplateMu.RUnlock()
+			return info, true
+		}
+	}
+	s.itemTemplateMu.RUnlock()
+
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return itemTemplateClassInfo{}, false
+	}
+
+	var class, subclass, invType uint32
+	err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT class, subclass, InventoryType FROM item_template WHERE entry = ? LIMIT 1", entry).Scan(&class, &subclass, &invType)
+	if err != nil {
+		return itemTemplateClassInfo{}, false
+	}
+
+	info := itemTemplateClassInfo{Class: class, SubClass: subclass, InvType: invType}
+	s.itemTemplateMu.Lock()
+	if s.itemTemplates == nil {
+		s.itemTemplates = make(map[uint32]itemTemplateClassInfo)
+	}
+	s.itemTemplates[entry] = info
+	s.itemTemplateMu.Unlock()
+	return info, true
+}
+
+func (s *session) getItemTemplateClassInfo(ctx context.Context, entry uint32) (itemTemplateClassInfo, bool) {
+	if s == nil || s.server == nil {
+		return itemTemplateClassInfo{}, false
+	}
+	return s.server.getItemTemplateClassInfo(ctx, entry)
+}
+
+// isItemFitToSpell verifies if an item's class, subclass, and inventory type satisfy the spell's requirements.
+// Reference: TrinityCore Item::IsFitToSpellRequirements (Item.cpp:799-832).
+func isItemFitToSpell(spell wotlk.Spell, class uint32, subclass uint32, invType uint32) bool {
+	if spell.EquippedItemClass >= 0 {
+		if uint32(spell.EquippedItemClass) != class {
+			return false
+		}
+		if spell.EquippedItemSubClass != 0 {
+			if (spell.EquippedItemSubClass & (1 << subclass)) == 0 {
+				return false
+			}
+		}
+	}
+	if spell.EquippedItemInvTypes != 0 {
+		if (spell.EquippedItemInvTypes & (1 << invType)) == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// checkSpellEquippedItemRequirements validates equipped weapon and armor requirements for spells before cast execution.
+// References: TrinityCore Spell::CheckCast (Spell.cpp:6768-6775, 7206-7237) and Player::HasItemFitToSpellRequirements (Player.cpp:23916-23969).
+func (s *session) checkSpellEquippedItemRequirements(ctx context.Context, spell wotlk.Spell) (uint8, bool) {
+	if spell.EquippedItemClass < 0 || s == nil || s.player == nil || s.player.Equipment == "" {
+		return 0, true
+	}
+
+	// 1. Main hand weapon requirement (SPELL_ATTR3_MAIN_HAND)
+	if spell.AttributesEx3&spellAttr3MainHand != 0 {
+		mainHandEntry := s.getEquipmentItem(equipSlotMainhand)
+		if mainHandEntry == 0 {
+			return spellFailedEquippedItemClass, false
+		}
+		if info, ok := s.getItemTemplateClassInfo(ctx, mainHandEntry); ok {
+			if !isItemFitToSpell(spell, info.Class, info.SubClass, info.InvType) {
+				return spellFailedEquippedItemClass, false
+			}
+		}
+	}
+
+	// 2. Offhand weapon requirement (SPELL_ATTR3_REQ_OFFHAND)
+	if spell.AttributesEx3&spellAttr3ReqOffhand != 0 {
+		offHandEntry := s.getEquipmentItem(equipSlotOffhand)
+		if offHandEntry == 0 {
+			return spellFailedEquippedItemClass, false
+		}
+		if info, ok := s.getItemTemplateClassInfo(ctx, offHandEntry); ok {
+			if !isItemFitToSpell(spell, info.Class, info.SubClass, info.InvType) {
+				return spellFailedEquippedItemClass, false
+			}
+		}
+	}
+
+	// 3. General item class requirements (ITEM_CLASS_WEAPON, ITEM_CLASS_ARMOR)
+	switch spell.EquippedItemClass {
+	case itemClassWeapon:
+		if spell.AttributesEx3&(spellAttr3MainHand|spellAttr3ReqOffhand) == 0 {
+			weaponSlots := []uint8{equipSlotMainhand, equipSlotOffhand, equipSlotRanged}
+			hasFitWeapon := false
+			for _, slot := range weaponSlots {
+				entry := s.getEquipmentItem(slot)
+				if entry == 0 {
+					continue
+				}
+				info, ok := s.getItemTemplateClassInfo(ctx, entry)
+				if !ok || isItemFitToSpell(spell, info.Class, info.SubClass, info.InvType) {
+					hasFitWeapon = true
+					break
+				}
+			}
+			if !hasFitWeapon {
+				return spellFailedEquippedItemClass, false
+			}
+		}
+
+	case itemClassArmor:
+		// Shield requirement (subclass 6 = shield, subclass 5 = buckler)
+		if spell.EquippedItemSubClass&((1<<itemSubclassArmorBuckler)|(1<<itemSubclassArmorShield)) != 0 {
+			offhandEntry := s.getEquipmentItem(equipSlotOffhand)
+			if offhandEntry == 0 {
+				return spellFailedEquippedItemClass, false
+			}
+			if info, ok := s.getItemTemplateClassInfo(ctx, offhandEntry); ok {
+				if !isItemFitToSpell(spell, info.Class, info.SubClass, info.InvType) {
+					return spellFailedEquippedItemClass, false
+				}
+			}
+		} else {
+			hasFitArmor := false
+			for slot := uint8(0); slot < equipSlotEnd; slot++ {
+				if slot == equipSlotMainhand || slot == equipSlotTabard {
+					continue
+				}
+				entry := s.getEquipmentItem(slot)
+				if entry == 0 {
+					continue
+				}
+				info, ok := s.getItemTemplateClassInfo(ctx, entry)
+				if !ok || isItemFitToSpell(spell, info.Class, info.SubClass, info.InvType) {
+					hasFitArmor = true
+					break
+				}
+			}
+			if !hasFitArmor {
+				return spellFailedEquippedItemClass, false
+			}
+		}
+	}
+
+	return 0, true
+}
+

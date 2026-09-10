@@ -78,7 +78,9 @@ type Spell struct {
 	DispelType            uint32 // Spell.dbc field 2 = DispelType (DBCStructure.h:1394)
 	Mechanic              uint32 // Spell.dbc field 3 = Mechanic (DBCStructure.h:1395)
 	Attributes            uint32
-	AttributesEx1         uint32
+	AttributesEx          uint32 // Spell.dbc field 5 = AttributesEx (DBCStructure.h:1397)
+	AttributesEx1         uint32 // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
+	AttributesEx3         uint32 // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
 	SchoolMask            uint32
 	Targets               uint32
 	FacingCasterFlags     uint32 // Spell.dbc field 19 = FacingCasterFlags (DBCStructure.h:1409)
@@ -96,6 +98,9 @@ type Spell struct {
 	PreventionType        uint32 // Spell.dbc field 214 = PreventionType (DBCStructure.h:1484)
 	StartRecoveryCategory uint32 // Spell.dbc field 210 = StartRecoveryCategory (DBCStructure.h:1480)
 	StartRecoveryTime     uint32 // Spell.dbc field 211 = StartRecoveryTime (DBCStructure.h:1481)
+	EquippedItemClass     int32  // Spell.dbc field 68 = EquippedItemClass (DBCStructure.h:1443), -1 = any
+	EquippedItemSubClass  uint32 // Spell.dbc field 69 = EquippedItemSubclass (DBCStructure.h:1444)
+	EquippedItemInvTypes  uint32 // Spell.dbc field 70 = EquippedItemInvTypes (DBCStructure.h:1445)
 	Speed                 float32
 	Effects               [3]SpellEffect
 }
@@ -409,7 +414,7 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 	if !ok {
 		return Spell{}, false, nil
 	}
-	spell := Spell{ID: id}
+	spell := Spell{ID: id, EquippedItemClass: -1}
 	values := []struct {
 		field int
 		dest  *uint32
@@ -426,7 +431,9 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		{42, &spell.ManaCost},
 		{204, &spell.ManaCostPct}, // Spell.dbc field 204 = ManaCostPct (DBCStructure.h:1476)
 		{46, &spell.RangeIndex},
+		{5, &spell.AttributesEx},        // Spell.dbc field 5 = AttributesEx (DBCStructure.h:1397)
 		{6, &spell.AttributesEx1},       // Spell.dbc field 6 = AttributesExB (DBCStructure.h:1398)
+		{7, &spell.AttributesEx3},       // Spell.dbc field 7 = AttributesExC (DBCStructure.h:1399)
 		{31, &spell.InterruptFlags},     // DBCStructure.h:1421
 		{32, &spell.AuraInterruptFlags}, // DBCStructure.h:1422
 		{33, &spell.ChannelInterrupt},
@@ -440,6 +447,15 @@ func (s *Store) Spell(id uint32) (Spell, bool, error) {
 		if *value.dest, err = record.Uint32(value.field); err != nil {
 			return Spell{}, false, err
 		}
+	}
+	if itemClass, itemErr := record.Int32(68); itemErr == nil {
+		spell.EquippedItemClass = itemClass
+	}
+	if subClass, subErr := record.Uint32(69); subErr == nil {
+		spell.EquippedItemSubClass = subClass
+	}
+	if invTypes, invErr := record.Uint32(70); invErr == nil {
+		spell.EquippedItemInvTypes = invTypes
 	}
 	if speed, speedErr := record.Float32(47); speedErr == nil {
 		spell.Speed = speed

@@ -285,5 +285,53 @@ func TestAreaTriggerLoadingAndRadiusCheck(t *testing.T) {
 	}
 }
 
+func TestSpellEquipmentFields(t *testing.T) {
+	dbcDir := t.TempDir()
+	const fieldCount = 234
+	rec := make([]uint32, fieldCount)
+	rec[0] = 23922 // Shield Slam
+	rec[5] = 0x10  // AttributesEx
+	rec[6] = 0x20  // AttributesEx1
+	rec[7] = 0x400 // AttributesEx3 (SPELL_ATTR3_MAIN_HAND)
+	rec[68] = 4    // EquippedItemClass = 4 (ITEM_CLASS_ARMOR)
+	rec[69] = 1 << 6 // EquippedItemSubClass = Shield (bit 6)
+	rec[70] = 1 << 14 // EquippedItemInvTypes = Shield (INVTYPE_SHIELD)
 
+	recBytes := make([]byte, fieldCount*4)
+	for i, val := range rec {
+		binary.LittleEndian.PutUint32(recBytes[i*4:(i+1)*4], val)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "Spell.dbc"), append(header, append(recBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
+	store := NewStore(dbcDir)
+	sp, found, err := store.Spell(23922)
+	if err != nil || !found {
+		t.Fatalf("expected spell 23922 found, err: %v", err)
+	}
+	if sp.AttributesEx != 0x10 {
+		t.Errorf("expected AttributesEx 0x10, got 0x%X", sp.AttributesEx)
+	}
+	if sp.AttributesEx1 != 0x20 {
+		t.Errorf("expected AttributesEx1 0x20, got 0x%X", sp.AttributesEx1)
+	}
+	if sp.AttributesEx3 != 0x400 {
+		t.Errorf("expected AttributesEx3 0x400, got 0x%X", sp.AttributesEx3)
+	}
+	if sp.EquippedItemClass != 4 {
+		t.Errorf("expected EquippedItemClass 4, got %d", sp.EquippedItemClass)
+	}
+	if sp.EquippedItemSubClass != (1 << 6) {
+		t.Errorf("expected EquippedItemSubClass 64, got %d", sp.EquippedItemSubClass)
+	}
+	if sp.EquippedItemInvTypes != (1 << 14) {
+		t.Errorf("expected EquippedItemInvTypes %d, got %d", 1<<14, sp.EquippedItemInvTypes)
+	}
+}
