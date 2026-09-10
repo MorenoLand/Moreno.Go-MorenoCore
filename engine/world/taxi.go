@@ -319,6 +319,7 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 	}
 	if price > 0 {
 		s.player.Money -= price
+		s.updateAchievementCriteria(criteriaTypeGoldSpentTravel, 0, uint32(price))
 		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
 		}

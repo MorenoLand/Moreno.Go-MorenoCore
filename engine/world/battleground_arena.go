@@ -652,6 +652,24 @@ func (s *Server) endArena(arena *arenaBattlegroundState, winner int8) {
 	greenAlive := arena.GreenAlive
 	arena.mu.Unlock()
 
+	// Reference arena end criteria: PLAY_ARENA, WIN_ARENA, GET_KILLING_BLOWS.
+	arena.mu.RLock()
+	scoreBlows := make(map[uint64]uint32, len(arena.Scores))
+	for guid, score := range arena.Scores {
+		scoreBlows[guid] = score.KillingBlows
+	}
+	winningMembers := make(map[uint64]struct{})
+	if winner == int8(ArenaTeamGold) || winner == int8(ArenaTeamGreen) {
+		for guid, team := range arena.PlayerTeams {
+			if int8(team) == winner {
+				winningMembers[guid] = struct{}{}
+			}
+		}
+	}
+	mapID := arena.MapID
+	arena.mu.RUnlock()
+	s.creditArenaParticipants(mapID, scoreBlows, winningMembers)
+
 	// Victory announcement
 	if winner == int8(ArenaTeamGold) {
 		s.broadcastArenaMessage(arena.MapID, fmt.Sprintf("%s is victorious!", arena.GoldTeamName))

@@ -547,3 +547,35 @@ func TestExploreZoneBitsAndCriteria(t *testing.T) {
 		t.Fatal("blob round-trip lost the area bit")
 	}
 }
+
+func TestBGArenaAndDeathDetailCriteria(t *testing.T) {
+	player := &playerState{GUID: 9, Level: 20, Health: 100, MaxHealth: 100, Race: 1, Map: 529}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+
+	achievementIndex.mu.Lock()
+	winCrit := achievementCriteriaEntry{ID: 10000, AchievementID: 6000, Type: criteriaTypeWinBG, Asset: 529, Quantity: 1}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeWinBG, 529)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeWinBG, 529)], winCrit)
+	achievementIndex.byID[10000] = winCrit
+	achievementIndex.byAchieve[6000] = append(achievementIndex.byAchieve[6000], winCrit)
+	achievementIndex.achieveByID[6000] = achievementEntry{ID: 6000, Faction: -1}
+	kbp := achievementCriteriaEntry{ID: 10100, AchievementID: 6100, Type: criteriaTypeKilledByPlayer, Asset: 0, Quantity: 1}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeKilledByPlayer, 0)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeKilledByPlayer, 0)], kbp)
+	achievementIndex.byID[10100] = kbp
+	achievementIndex.byAchieve[6100] = append(achievementIndex.byAchieve[6100], kbp)
+	achievementIndex.achieveByID[6100] = achievementEntry{ID: 6100, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	state.server.sessions = map[*session]struct{}{state: {}}
+	state.server.creditBattlegroundWin(529, 0) // Alliance win on the map
+	if _, earned := state.earnedAchievements[6000]; !earned {
+		t.Fatal("BG win achievement not credited")
+	}
+
+	victim := &session{server: state.server, authed: true, playerLoaded: true, playerGUID: 20, player: &playerState{GUID: 20, Level: 20, Race: 2, Class: 8, Health: 1, MaxHealth: 100}}
+	killer := &session{server: state.server, authed: true, playerLoaded: true, playerGUID: 9, player: player}
+	state.server.creditHonorableKill(killer, victim)
+	if _, earned := victim.earnedAchievements[6100]; !earned {
+		t.Fatal("KILLED_BY_PLAYER not credited to the victim")
+	}
+}

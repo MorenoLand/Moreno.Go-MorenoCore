@@ -55,6 +55,14 @@ const (
 	criteriaTypeGoldSpentForMail    = 66 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_MAIL
 	criteriaTypeGoldSpentForTalents = 60 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TALENTS
 	criteriaTypeTalentResets        = 61 // ACHIEVEMENT_CRITERIA_TYPE_NUMBER_OF_TALENT_RESETS
+	criteriaTypeDeathAtMap          = 16 // ACHIEVEMENT_CRITERIA_TYPE_DEATH_AT_MAP
+	criteriaTypeDeathInDungeon      = 18 // ACHIEVEMENT_CRITERIA_TYPE_DEATH_IN_DUNGEON
+	criteriaTypeKilledByPlayer      = 23 // ACHIEVEMENT_CRITERIA_TYPE_KILLED_BY_PLAYER
+	criteriaTypeDeathsFrom          = 26 // ACHIEVEMENT_CRITERIA_TYPE_DEATHS_FROM
+	criteriaTypeWinArena            = 32 // ACHIEVEMENT_CRITERIA_TYPE_WIN_ARENA
+	criteriaTypePlayArena           = 33 // ACHIEVEMENT_CRITERIA_TYPE_PLAY_ARENA
+	criteriaTypeGetKillingBlows     = 56 // ACHIEVEMENT_CRITERIA_TYPE_GET_KILLING_BLOWS
+	criteriaTypeGoldSpentTravel     = 63 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TRAVELLING
 	criteriaTypeBGObjective         = 30 // ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE
 	criteriaTypeHonorableKill       = 35 // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL
 	criteriaTypeHKClass             = 52 // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS
@@ -654,6 +662,7 @@ func (s *Server) creditHonorableKill(killer, victim *session) {
 		return
 	}
 	killer.updateAchievementCriteria(criteriaTypeHonorableKill, 0, 1)
+	victim.updateAchievementCriteria(criteriaTypeKilledByPlayer, 0, 1)
 	killer.updateAchievementCriteria(criteriaTypeHKClass, uint32(victim.player.Class), 1)
 	killer.updateAchievementCriteria(criteriaTypeHKRace, uint32(victim.player.Race), 1)
 }
@@ -783,4 +792,47 @@ func hexDigitValue(c byte) int {
 		return int(c-'A') + 10
 	}
 	return -1
+}
+
+// creditBattlegroundWin mirrors the reference WIN_BG criteria credit at
+// battleground end: every online player of the winning team on the
+// battleground map gains progress.
+func (s *Server) creditBattlegroundWin(mapID, winningTeam uint32) {
+	s.sessionsMu.RLock()
+	var winners []*session
+	for sess := range s.sessions {
+		if !sess.playerLoaded || sess.player == nil || sess.player.Map != mapID {
+			continue
+		}
+		if teamForRace(sess.player.Race) == winningTeam {
+			winners = append(winners, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range winners {
+		sess.updateAchievementCriteria(criteriaTypeWinBG, mapID, 1)
+	}
+}
+
+// creditArenaParticipants mirrors PLAY_ARENA / WIN_ARENA / GET_KILLING_BLOWS
+// at arena end: every player on the arena map gains play credit, winners gain
+// the win, and killing blow totals come from the scoreboard.
+func (s *Server) creditArenaParticipants(mapID uint32, scores map[uint64]uint32, winners map[uint64]struct{}) {
+	s.sessionsMu.RLock()
+	var participants []*session
+	for sess := range s.sessions {
+		if sess.playerLoaded && sess.player != nil && sess.player.Map == mapID {
+			participants = append(participants, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range participants {
+		sess.updateAchievementCriteria(criteriaTypePlayArena, mapID, 1)
+		if blows, has := scores[sess.playerGUID]; has && blows > 0 {
+			sess.updateAchievementCriteria(criteriaTypeGetKillingBlows, mapID, blows)
+		}
+		if _, won := winners[sess.playerGUID]; won {
+			sess.updateAchievementCriteria(criteriaTypeWinArena, mapID, 1)
+		}
+	}
 }

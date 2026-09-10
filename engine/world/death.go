@@ -111,6 +111,12 @@ func (s *session) killPlayer(ctx context.Context) {
 	}
 	s.deathTimer = time.Now().Add(autoRepopDelay)
 	s.updateAchievementCriteria(criteriaTypeDeath, 0, 1)
+	s.updateAchievementCriteria(criteriaTypeDeathAtMap, s.player.Map, 1)
+	if s.server != nil && s.server.Data != nil {
+		if mapInfo, found, err := s.server.Data.Map(s.player.Map); err == nil && found && mapInfo.InstanceType != 0 {
+			s.updateAchievementCriteria(criteriaTypeDeathInDungeon, 0, 1)
+		}
+	}
 	if s.server != nil {
 		s.server.handleWSGPlayerDeath(s)
 		s.server.handleEOTSPlayerDeath(s)

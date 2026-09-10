@@ -549,6 +549,7 @@ func (s *Server) announceEOTSVictory(mapID uint32, winningTeam uint32) {
 	}
 	msg := fmt.Sprintf("The %s wins!", teamName)
 	s.broadcastBattlegroundMessage(mapID, msg)
+	s.creditBattlegroundWin(mapID, winningTeam)
 }
 
 func (s *Server) getEOTSFlagCarriers(mapID uint32) []*session {
