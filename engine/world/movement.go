@@ -672,7 +672,13 @@ func (s *session) handleFall(ctx context.Context, info movementInfo) {
 	}
 
 	if damage > 0 {
+		before := s.player.Health
 		s.environmentalDamage(ctx, damageFall, damage)
+		// Reference Player.cpp:25410: surviving the fall with real damage
+		// credits FALL_WITHOUT_DYING with the fall distance in centimeters.
+		if s.player.Health > 0 && uint32(damage) < before {
+			s.updateAchievementCriteria(criteriaTypeFallWithoutDying, 0, uint32(zDiff*100))
+		}
 	}
 }
 

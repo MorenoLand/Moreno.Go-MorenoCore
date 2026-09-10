@@ -68,6 +68,10 @@ const (
 	criteriaTypeHighestStat         = 97 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_STAT
 	criteriaTypeHighestSpellpower   = 98 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_SPELLPOWER
 	criteriaTypeHighestTeamRating   = 38 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_TEAM_RATING
+	criteriaTypeBeSpellTarget       = 28 // ACHIEVEMENT_CRITERIA_TYPE_BE_SPELL_TARGET
+	criteriaTypeDoEmote             = 54 // ACHIEVEMENT_CRITERIA_TYPE_DO_EMOTE
+	criteriaTypeFallWithoutDying    = 24 // ACHIEVEMENT_CRITERIA_TYPE_FALL_WITHOUT_DYING
+	criteriaTypeUseGameObject       = 68 // ACHIEVEMENT_CRITERIA_TYPE_USE_GAMEOBJECT
 	criteriaTypeBGObjective         = 30 // ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE
 	criteriaTypeHonorableKill       = 35 // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL
 	criteriaTypeHKClass             = 52 // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS
@@ -470,10 +474,11 @@ func (s *session) setAchievementCriteria(criterionType, asset, value uint32) {
 // second deadline; expiry resets the criteria progress, notifies the client
 // with SMSG_CRITERIA_DELETED, and removes the persisted row.
 const (
-	timedTypeQuest     = 2
-	timedTypeSpellCast = 5
-	timedTypeCreature  = 7
-	timedTypeItem      = 9
+	timedTypeQuest       = 2
+	timedTypeSpellCast   = 5
+	timedTypeSpellTarget = 6
+	timedTypeCreature    = 7
+	timedTypeItem        = 9
 )
 
 // startTimedAchievement mirrors AchievementMgr::StartTimedAchievement: for

@@ -307,6 +307,7 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 	}
 
 	entry := uint32((guid >> 24) & 0x00FFFFFF)
+	s.updateAchievementCriteria(criteriaTypeUseGameObject, entry, 1)
 	lowGUID := uint32(guid & 0x00FFFFFF)
 
 	// Delegate Warsong Gulch flags to WSG state machine

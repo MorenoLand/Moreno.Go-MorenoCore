@@ -685,3 +685,37 @@ func TestHighestStatPowerExaltedAndRatingCriteria(t *testing.T) {
 		t.Fatal("exalted achievement not completed")
 	}
 }
+
+func TestSpellTargetEmoteAndUseCriteria(t *testing.T) {
+	player := &playerState{GUID: 9, Level: 20, Health: 100, MaxHealth: 100, Race: 1}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	snapshotAchievementIndex(t)
+
+	achievementIndex.mu.Lock()
+	target := achievementCriteriaEntry{ID: 10500, AchievementID: 6500, Type: criteriaTypeBeSpellTarget, Asset: 0, Quantity: 1}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeBeSpellTarget, 0)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeBeSpellTarget, 0)], target)
+	achievementIndex.byID[10500] = target
+	achievementIndex.byAchieve[6500] = append(achievementIndex.byAchieve[6500], target)
+	achievementIndex.achieveByID[6500] = achievementEntry{ID: 6500, Faction: -1}
+	emote := achievementCriteriaEntry{ID: 10600, AchievementID: 6600, Type: criteriaTypeDoEmote, Asset: 17, Quantity: 1}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeDoEmote, 17)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeDoEmote, 17)], emote)
+	achievementIndex.byID[10600] = emote
+	achievementIndex.byAchieve[6600] = append(achievementIndex.byAchieve[6600], emote)
+	achievementIndex.achieveByID[6600] = achievementEntry{ID: 6600, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	state.updateAchievementCriteria(criteriaTypeBeSpellTarget, 0, 1)
+	if _, earned := state.earnedAchievements[6500]; !earned {
+		t.Fatal("BE_SPELL_TARGET not completed")
+	}
+	state.updateAchievementCriteria(criteriaTypeDoEmote, 17, 1)
+	if _, earned := state.earnedAchievements[6600]; !earned {
+		t.Fatal("DO_EMOTE not completed")
+	}
+	// Unmatched emote does nothing.
+	state.updateAchievementCriteria(criteriaTypeDoEmote, 999, 1)
+	if len(state.criteriaProgress) != 2 {
+		t.Fatalf("unexpected criteria progress: %+v", state.criteriaProgress)
+	}
+}

@@ -68,6 +68,7 @@ func (s *session) handleTextEmote(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	entry, found := file.Find(textEmote)
+	s.updateAchievementCriteria(criteriaTypeDoEmote, textEmote, 1)
 	if !found {
 		return true
 	}

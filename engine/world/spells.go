@@ -745,6 +745,11 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 
 		if isPlayerVictim {
 			if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil {
+				// Reference BE_SPELL_TARGET (28) and TIMED 6: being the
+				// target of a hostile spell credits the victim and starts
+				// target-timed criteria.
+				playerSess.updateAchievementCriteria(criteriaTypeBeSpellTarget, spellID, 1)
+				playerSess.startTimedAchievement(timedTypeSpellTarget, spellID)
 				if playerSess.isImmuneToDamage(uint32(schoolMask)) {
 					damage = 0
 				}
@@ -992,6 +997,10 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 	if targetGUID != s.playerGUID && s.server != nil {
 		if other := s.server.findSessionByGUID(targetGUID); other != nil && other.player != nil {
 			targetSess = other
+			// Reference BE_SPELL_TARGET (28) and TIMED 6: being the target of a
+			// spell credits the victim/target and starts target-timed criteria.
+			other.updateAchievementCriteria(criteriaTypeBeSpellTarget, spellID, 1)
+			other.startTimedAchievement(timedTypeSpellTarget, spellID)
 		}
 	}
 
