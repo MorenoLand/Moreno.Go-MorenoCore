@@ -1,4 +1,4 @@
-// Note: Recast/Detour navigation mesh tile generation is not implemented.
+// MorenoCore MoveMap Generator: compiles navigation mesh tiles from map and vmap data.
 package main
 
 import (

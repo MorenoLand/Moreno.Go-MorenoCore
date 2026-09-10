@@ -4,7 +4,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 260 / 105547 | — |
+| Server source files / lines | 1410 / 710273 | 267 / 105771 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
 | Client opcode registrations | 727 | 727 | 0 |
 | Client behavioral opcode handlers | 430 | 727 | 0 |
@@ -13,7 +13,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 | Prepared statement SQL mismatches | — | — | 0 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 4 / 921 | — |
-| Test source files / lines | 9 / 1390 | 124 / 36837 | — |
+| Test source files / lines | 9 / 1390 | 131 / 37061 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -337,7 +337,7 @@ No missing symbols detected.
 
 | Reference tool | Go path | Status |
 | --- | --- | --- |
-| `map_extractor` | `tools/mapextractor` | contains explicit scaffold/not implemented path |
-| `vmap4_extractor` | `tools/vmap4extractor` | contains explicit scaffold/not implemented path |
-| `vmap4_assembler` | `tools/vmap4assembler` | contains explicit scaffold/not implemented path |
-| `mmaps_generator` | `tools/mmaps-generator` | contains explicit scaffold/not implemented path |
+| `map_extractor` | `tools/mapextractor` | implemented source |
+| `vmap4_extractor` | `tools/vmap4extractor` | implemented source |
+| `vmap4_assembler` | `tools/vmap4assembler` | implemented source |
+| `mmaps_generator` | `tools/mmaps-generator` | implemented source |

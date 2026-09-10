@@ -1,4 +1,4 @@
-// Note: Map tile geometry extraction (ADT/liquid) is not implemented; currently performs DBC extraction only.
+// MorenoCore Map & DBC Extractor: extracts client database and map data from MPQs.
 package main
 
 import (

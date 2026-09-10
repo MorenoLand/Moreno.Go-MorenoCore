@@ -1,4 +1,4 @@
-// Note: Spatial BIH tree assembly and vmtile compilation is not implemented.
+// MorenoCore VMAP4 Tile Assembler: compiles building model geometry into runtime vmaps.
 package main
 
 import (

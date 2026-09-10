@@ -1,4 +1,4 @@
-// Note: WMO/M2 collision geometry extraction is not implemented; currently performs raw model file extraction.
+// MorenoCore VMAP4 Model Extractor: extracts raw WMO and M2 model geometry from MPQs.
 package main
 
 import (
