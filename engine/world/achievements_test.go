@@ -925,3 +925,41 @@ func TestAll124CriteriaTypesCoverage(t *testing.T) {
 	}
 }
 
+func TestCriteriaWildcardAssetMatching(t *testing.T) {
+	player := &playerState{GUID: 43, Level: 80, Health: 1000, MaxHealth: 1000, Race: 1}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	snapshotAchievementIndex(t)
+
+	achievementIndex.mu.Lock()
+	// Specific criterion: Kill Hogger (448)
+	specific := achievementCriteriaEntry{ID: 30001, AchievementID: 9001, Type: criteriaTypeKillCreature, Asset: 448, Quantity: 1}
+	// General criterion: Kill any creature (asset 0)
+	general := achievementCriteriaEntry{ID: 30002, AchievementID: 9002, Type: criteriaTypeKillCreature, Asset: 0, Quantity: 1}
+
+	keySpecific := typeAssetKey(specific.Type, specific.Asset)
+	keyGeneral := typeAssetKey(general.Type, general.Asset)
+
+	achievementIndex.byTypeAsset[keySpecific] = append(achievementIndex.byTypeAsset[keySpecific], specific)
+	achievementIndex.byTypeAsset[keyGeneral] = append(achievementIndex.byTypeAsset[keyGeneral], general)
+	achievementIndex.byID[30001] = specific
+	achievementIndex.byID[30002] = general
+	achievementIndex.byAchieve[9001] = append(achievementIndex.byAchieve[9001], specific)
+	achievementIndex.byAchieve[9002] = append(achievementIndex.byAchieve[9002], general)
+	achievementIndex.achieveByID[9001] = achievementEntry{ID: 9001, Faction: -1}
+	achievementIndex.achieveByID[9002] = achievementEntry{ID: 9002, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	// Update with specific asset 448
+	state.updateAchievementCriteria(criteriaTypeKillCreature, 448, 1)
+
+	// Both specific and general should be earned!
+	if _, earned := state.earnedAchievements[9001]; !earned {
+		t.Fatal("expected specific achievement 9001 earned")
+	}
+	if _, earned := state.earnedAchievements[9002]; !earned {
+		t.Fatal("expected wildcard general achievement 9002 earned")
+	}
+}
+
+

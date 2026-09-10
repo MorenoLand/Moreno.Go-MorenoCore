@@ -598,14 +598,19 @@ func (s *session) updateAchievementCriteria(criterionType, asset uint32, quantit
 	}
 	s.server.loadAchievementIndex()
 	achievementIndex.mu.RLock()
-	criteriaList, ok := achievementIndex.byTypeAsset[typeAssetKey(criterionType, asset)]
-	if !ok {
-		achievementIndex.mu.RUnlock()
+	var matched []achievementCriteriaEntry
+	if list, ok := achievementIndex.byTypeAsset[typeAssetKey(criterionType, asset)]; ok {
+		matched = append(matched, list...)
+	}
+	if asset != 0 {
+		if list0, ok := achievementIndex.byTypeAsset[typeAssetKey(criterionType, 0)]; ok {
+			matched = append(matched, list0...)
+		}
+	}
+	achievementIndex.mu.RUnlock()
+	if len(matched) == 0 {
 		return
 	}
-	matched := make([]achievementCriteriaEntry, len(criteriaList))
-	copy(matched, criteriaList)
-	achievementIndex.mu.RUnlock()
 
 	for _, criterion := range matched {
 		if _, done := s.earnedAchievements[criterion.AchievementID]; done {
@@ -645,17 +650,19 @@ func (s *session) setAchievementCriteria(criterionType, asset, value uint32) {
 	}
 	s.server.loadAchievementIndex()
 	achievementIndex.mu.RLock()
-	criteriaList, ok := achievementIndex.byTypeAsset[typeAssetKey(criterionType, asset)]
-	if !ok {
-		criteriaList, ok = achievementIndex.byTypeAsset[typeAssetKey(criterionType, 0)]
+	var matched []achievementCriteriaEntry
+	if list, ok := achievementIndex.byTypeAsset[typeAssetKey(criterionType, asset)]; ok {
+		matched = append(matched, list...)
 	}
-	if !ok {
-		achievementIndex.mu.RUnlock()
+	if asset != 0 {
+		if list0, ok := achievementIndex.byTypeAsset[typeAssetKey(criterionType, 0)]; ok {
+			matched = append(matched, list0...)
+		}
+	}
+	achievementIndex.mu.RUnlock()
+	if len(matched) == 0 {
 		return
 	}
-	matched := make([]achievementCriteriaEntry, len(criteriaList))
-	copy(matched, criteriaList)
-	achievementIndex.mu.RUnlock()
 
 	for _, criterion := range matched {
 		if _, done := s.earnedAchievements[criterion.AchievementID]; done {
