@@ -666,3 +666,89 @@ func TestLFGTeleport_Denials(t *testing.T) {
 		t.Fatalf("expected teleport in to 1688, 1053, got %f, %f", sess.player.X, sess.player.Y)
 	}
 }
+
+func TestLFG_AchievementCriteria(t *testing.T) {
+	srv, charDB, worldDB := setupTestLFGServer(t)
+	defer charDB.Close()
+	defer worldDB.Close()
+
+	cConn, sConn := net.Pipe()
+	defer cConn.Close()
+	defer sConn.Close()
+
+	sess := &session{
+		server:       srv,
+		conn:         sConn,
+		playerGUID:   99,
+		accountName:  "TEST_LFG_ACHIEVE",
+		playerLoaded: true,
+		player:       &playerState{GUID: 99, Name: "Hero", Level: 80, Race: 1},
+		criteriaProgress: make(map[uint32]*criteriaProgressState),
+		earnedAchievements: make(map[uint32]uint32),
+	}
+	srv.sessions[sess] = struct{}{}
+
+	// Discard server outbound writes
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := cConn.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	snapshotAchievementIndex(t)
+	achievementIndex.mu.Lock()
+	setupCriteria := func(critID, achID, critType, asset uint32) {
+		entry := achievementCriteriaEntry{ID: critID, AchievementID: achID, Type: critType, Asset: asset, Quantity: 1}
+		key := typeAssetKey(entry.Type, entry.Asset)
+		achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], entry)
+		achievementIndex.byID[critID] = entry
+		achievementIndex.byAchieve[achID] = append(achievementIndex.byAchieve[achID], entry)
+		achievementIndex.achieveByID[achID] = achievementEntry{ID: achID, Faction: -1}
+	}
+	setupCriteria(40001, 10001, criteriaTypeLFGAnyRole, 0)
+	setupCriteria(40002, 10002, criteriaTypeLFGVoteKick, 0)
+	setupCriteria(40003, 10003, criteriaTypeLFGDungeonReward, 0)
+	setupCriteria(40004, 10004, criteriaTypeLFGCompletion, 280)
+	setupCriteria(40005, 10005, criteriaTypeLFGAbandon, 0)
+	achievementIndex.mu.Unlock()
+
+	// 1. Role selection
+	sess.handleLfgSetRoles(context.Background(), []byte{LFGRoleTank})
+	if _, earned := sess.earnedAchievements[10001]; !earned {
+		t.Fatalf("expected LFGAnyRole achievement 10001 to be earned")
+	}
+
+	// 2. Vote kick
+	sess.handleLfgSetBootVote(context.Background(), []byte{1})
+	if _, earned := sess.earnedAchievements[10002]; !earned {
+		t.Fatalf("expected LFGVoteKick achievement 10002 to be earned")
+	}
+
+	// 3. Dungeon completion & reward
+	grp := &groupState{
+		ID:           1,
+		LeaderGUID:   99,
+		IsLFG:        true,
+		LFGDungeonID: 280,
+		Members:      []groupMember{{GUID: 99, Name: "Hero"}},
+	}
+	srv.groups[1] = grp
+	srv.completeLFGDungeon(1, 280)
+
+	if _, earned := sess.earnedAchievements[10003]; !earned {
+		t.Fatalf("expected LFGDungeonReward achievement 10003 to be earned")
+	}
+	if _, earned := sess.earnedAchievements[10004]; !earned {
+		t.Fatalf("expected LFGCompletion achievement 10004 to be earned")
+	}
+
+	// 4. Abandon LFG group
+	sess.groupID = 1
+	sess.handleGroupDisband(context.Background(), nil)
+	if _, earned := sess.earnedAchievements[10005]; !earned {
+		t.Fatalf("expected LFGAbandon achievement 10005 to be earned")
+	}
+}

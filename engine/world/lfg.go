@@ -903,6 +903,7 @@ func (s *session) handleLfgSetBootVote(ctx context.Context, payload []byte) bool
 	}
 	agree := payload[0]
 	s.debug("lfg boot vote", "account", s.accountName, "agree", agree)
+	s.updateAchievementCriteria(criteriaTypeLFGVoteKick, 0, 1)
 	return true
 }
 
@@ -914,6 +915,9 @@ func (s *session) handleLfgSetRoles(ctx context.Context, payload []byte) bool {
 	}
 	roles := payload[0] & (LFGRoleTank | LFGRoleHealer | LFGRoleDamage | LFGRoleLeader)
 	s.debug("lfg set roles", "account", s.accountName, "roles", roles)
+	if roles > 0 {
+		s.updateAchievementCriteria(criteriaTypeLFGAnyRole, 0, 1)
+	}
 
 	if s.server != nil && s.server.Features != nil && s.server.Features.LFG != nil {
 		lfg := s.server.Features.LFG
@@ -1081,4 +1085,32 @@ func (s *session) handleSetLfgComment(ctx context.Context, payload []byte) bool 
 	}
 	s.debug("lfg set comment", "account", s.accountName, "comment", comment)
 	return true
+}
+
+// completeLFGDungeon rewards players in an LFG dungeon group and triggers criteria.
+func (s *Server) completeLFGDungeon(groupID uint32, dungeonID uint32) {
+	s.groupsMu.RLock()
+	grp := s.groups[uint64(groupID)]
+	s.groupsMu.RUnlock()
+	if grp == nil || !grp.IsLFG {
+		return
+	}
+	for _, m := range grp.Members {
+		if sess := s.findSessionByGUID(m.GUID); sess != nil {
+			sess.updateAchievementCriteria(criteriaTypeLFGCompletion, dungeonID, 1)
+			sess.updateAchievementCriteria(criteriaTypeLFGDungeonReward, 0, 1)
+			_ = sess.sendLFGDungeonReward(dungeonID)
+		}
+	}
+}
+
+// sendLFGDungeonReward sends SMSG_LFG_PLAYER_REWARD (0x1FF) to the client.
+func (s *session) sendLFGDungeonReward(dungeonID uint32) error {
+	packet := protocol.NewBuffer(32)
+	packet.WriteU32(dungeonID)
+	packet.WriteU32(dungeonID)
+	packet.WriteU32(0) // copper
+	packet.WriteU32(0) // xp
+	packet.WriteU8(0)  // reward count
+	return s.write(uint16(protocol.OpcodeSMSG_LFG_PLAYER_REWARD), packet.Bytes(), true)
 }

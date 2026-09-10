@@ -591,6 +591,10 @@ func (s *session) handleGroupDisband(_ context.Context, _ []byte) bool {
 		name = s.player.Name
 	}
 
+	if g.IsLFG {
+		s.updateAchievementCriteria(criteriaTypeLFGAbandon, 0, 1)
+	}
+
 	if g.LeaderGUID == s.playerGUID {
 		// Leader disbands entire group
 		members := make([]uint64, len(g.Members))
