@@ -573,7 +573,25 @@ func (s *session) handleCmdLearn(ctx context.Context, args []string) {
 
 func (s *session) handleCmdUnlearn(ctx context.Context, args []string) {
 	if len(args) == 0 {
-		s.sendSysMessage("Syntax: .unlearn <spellId>")
+		s.sendSysMessage("Syntax: .unlearn <spellId|talents>")
+		return
+	}
+	// Reference Player::ResetTalents via .unlearn talents with the escalating
+	// gold cost curve; GMs reset for free like the reference command paths.
+	if strings.EqualFold(args[0], "talents") {
+		if s.player == nil {
+			return
+		}
+		free := s.player.ExtraFlags&playerExtraGMOn != 0
+		if !s.resetTalents(ctx, free) {
+			s.sendSysMessage("You do not have enough gold to reset your talents.")
+			return
+		}
+		if free {
+			s.sendSysMessage("Your talents have been reset (no cost).")
+		} else {
+			s.sendSysMessage(fmt.Sprintf("Your talents have been reset for %dg.", s.player.ResetTalentsCost/goldUnit))
+		}
 		return
 	}
 	spellID, err := strconv.ParseUint(args[0], 10, 32)

@@ -30,34 +30,36 @@ import (
 
 // Criteria types wired so far; the reference defines ~130.
 const (
-	criteriaTypeKillCreature     = 0  // ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE
-	criteriaTypeWinBG            = 1  // ACHIEVEMENT_CRITERIA_TYPE_WIN_BG
-	criteriaTypeReachLevel       = 5  // ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL
-	criteriaTypeReachSkillLevel  = 7  // ACHIEVEMENT_CRITERIA_TYPE_REACH_SKILL_LEVEL
-	criteriaTypeDeath            = 17 // ACHIEVEMENT_CRITERIA_TYPE_DEATH
-	criteriaTypeKilledByCreature = 20 // ACHIEVEMENT_CRITERIA_TYPE_KILLED_BY_CREATURE
-	criteriaTypeCompleteQuest    = 27 // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST
-	criteriaTypeCastSpell        = 29 // ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL
-	criteriaTypeLearnSpell       = 34 // ACHIEVEMENT_CRITERIA_TYPE_LEARN_SPELL
-	criteriaTypeOwnItem          = 36 // ACHIEVEMENT_CRITERIA_TYPE_OWN_ITEM
-	criteriaTypeBuyBankSlot      = 45 // ACHIEVEMENT_CRITERIA_TYPE_BUY_BANK_SLOT
-	criteriaTypeUseItem          = 41 // ACHIEVEMENT_CRITERIA_TYPE_USE_ITEM
-	criteriaTypeLootItem         = 42 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_ITEM
-	criteriaTypeGainReputation   = 46 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_REPUTATION
-	criteriaTypeLootMoney        = 67 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY
-	criteriaTypeDamageDone       = 13 // ACHIEVEMENT_CRITERIA_TYPE_DAMAGE_DONE
-	criteriaTypeHealingDone      = 55 // ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE
-	criteriaTypeQuestCount       = 9  // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST_COUNT
-	criteriaTypeRollNeed         = 50 // ACHIEVEMENT_CRITERIA_TYPE_ROLL_NEED_ON_LOOT
-	criteriaTypeRollGreed        = 51 // ACHIEVEMENT_CRITERIA_TYPE_ROLL_GREED_ON_LOOT
-	criteriaTypeMoneyFromVendor  = 59 // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_VENDORS
-	criteriaTypeMoneyFromQuest   = 62 // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_QUEST_REWARD
-	criteriaTypeGoldSpentForMail = 66 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_MAIL
-	criteriaTypeBGObjective      = 30 // ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE
-	criteriaTypeHonorableKill    = 35 // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL
-	criteriaTypeHKClass          = 52 // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS
-	criteriaTypeHKRace           = 53 // ACHIEVEMENT_CRITERIA_TYPE_HK_RACE
-	criteriaTypeExplore          = 43 // ACHIEVEMENT_CRITERIA_TYPE_EXPLORE_AREA
+	criteriaTypeKillCreature        = 0  // ACHIEVEMENT_CRITERIA_TYPE_KILL_CREATURE
+	criteriaTypeWinBG               = 1  // ACHIEVEMENT_CRITERIA_TYPE_WIN_BG
+	criteriaTypeReachLevel          = 5  // ACHIEVEMENT_CRITERIA_TYPE_REACH_LEVEL
+	criteriaTypeReachSkillLevel     = 7  // ACHIEVEMENT_CRITERIA_TYPE_REACH_SKILL_LEVEL
+	criteriaTypeDeath               = 17 // ACHIEVEMENT_CRITERIA_TYPE_DEATH
+	criteriaTypeKilledByCreature    = 20 // ACHIEVEMENT_CRITERIA_TYPE_KILLED_BY_CREATURE
+	criteriaTypeCompleteQuest       = 27 // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST
+	criteriaTypeCastSpell           = 29 // ACHIEVEMENT_CRITERIA_TYPE_CAST_SPELL
+	criteriaTypeLearnSpell          = 34 // ACHIEVEMENT_CRITERIA_TYPE_LEARN_SPELL
+	criteriaTypeOwnItem             = 36 // ACHIEVEMENT_CRITERIA_TYPE_OWN_ITEM
+	criteriaTypeBuyBankSlot         = 45 // ACHIEVEMENT_CRITERIA_TYPE_BUY_BANK_SLOT
+	criteriaTypeUseItem             = 41 // ACHIEVEMENT_CRITERIA_TYPE_USE_ITEM
+	criteriaTypeLootItem            = 42 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_ITEM
+	criteriaTypeGainReputation      = 46 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_REPUTATION
+	criteriaTypeLootMoney           = 67 // ACHIEVEMENT_CRITERIA_TYPE_LOOT_MONEY
+	criteriaTypeDamageDone          = 13 // ACHIEVEMENT_CRITERIA_TYPE_DAMAGE_DONE
+	criteriaTypeHealingDone         = 55 // ACHIEVEMENT_CRITERIA_TYPE_HEALING_DONE
+	criteriaTypeQuestCount          = 9  // ACHIEVEMENT_CRITERIA_TYPE_COMPLETE_QUEST_COUNT
+	criteriaTypeRollNeed            = 50 // ACHIEVEMENT_CRITERIA_TYPE_ROLL_NEED_ON_LOOT
+	criteriaTypeRollGreed           = 51 // ACHIEVEMENT_CRITERIA_TYPE_ROLL_GREED_ON_LOOT
+	criteriaTypeMoneyFromVendor     = 59 // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_VENDORS
+	criteriaTypeMoneyFromQuest      = 62 // ACHIEVEMENT_CRITERIA_TYPE_MONEY_FROM_QUEST_REWARD
+	criteriaTypeGoldSpentForMail    = 66 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_MAIL
+	criteriaTypeGoldSpentForTalents = 60 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TALENTS
+	criteriaTypeTalentResets        = 61 // ACHIEVEMENT_CRITERIA_TYPE_NUMBER_OF_TALENT_RESETS
+	criteriaTypeBGObjective         = 30 // ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE
+	criteriaTypeHonorableKill       = 35 // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL
+	criteriaTypeHKClass             = 52 // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS
+	criteriaTypeHKRace              = 53 // ACHIEVEMENT_CRITERIA_TYPE_HK_RACE
+	criteriaTypeExplore             = 43 // ACHIEVEMENT_CRITERIA_TYPE_EXPLORE_AREA
 )
 
 type achievementEntry struct {

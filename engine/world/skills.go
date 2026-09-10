@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -267,5 +268,100 @@ func (s *session) handleUnlearnSkill(ctx context.Context, payload []byte) bool {
 	}
 
 	s.sendPlayerUpdate()
+	return true
+}
+
+const (
+	goldUnit uint32 = 10000
+	monthSec        = 30 * 24 * 3600
+)
+
+// resetTalentsCost mirrors Player::ResetTalentsCost (Player.cpp:3957): the
+// first reset costs 1 gold, then 5, then 10, afterwards increments of 5 gold
+// up to a 50 gold cap, decaying 5 gold per month down to a 10 gold floor.
+func (s *session) resetTalentsCost() uint32 {
+	if s.player == nil {
+		return goldUnit
+	}
+	if s.player.ResetTalentsCost < goldUnit {
+		return goldUnit
+	}
+	if s.player.ResetTalentsCost < 5*goldUnit {
+		return 5 * goldUnit
+	}
+	if s.player.ResetTalentsCost < 10*goldUnit {
+		return 10 * goldUnit
+	}
+	months := (uint32(time.Now().Unix()) - s.player.ResetTalentsTime) / monthSec
+	if months > 0 {
+		decay := int64(5*goldUnit) * int64(months)
+		newCost := int64(s.player.ResetTalentsCost) - decay
+		floor := int64(10 * goldUnit)
+		if newCost < floor {
+			return 10 * goldUnit
+		}
+		return uint32(newCost)
+	}
+	newCost := s.player.ResetTalentsCost + 5*goldUnit
+	if newCost > 50*goldUnit {
+		newCost = 50 * goldUnit
+	}
+	return newCost
+}
+
+// resetTalents mirrors Player::ResetTalents (Player.cpp:3990): remove every
+// learned talent spell for the active talent group, refund the full point
+// pool, charge the escalating cost (unless free), persist the new cost state,
+// and refresh the talent panel. Returns false when the player cannot afford
+// the reset.
+func (s *session) resetTalents(ctx context.Context, free bool) bool {
+	if s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return false
+	}
+	if len(s.player.Talents) == 0 {
+		return true // nothing spent, nothing to reset
+	}
+	cost := uint32(0)
+	if !free {
+		cost = s.resetTalentsCost()
+		if s.player.Money < cost {
+			return false
+		}
+	}
+
+	// Unlearn the highest known rank spell of every talent.
+	for talentID, rank := range s.player.Talents {
+		if s.server.Data == nil {
+			continue
+		}
+		if tEntry, ok, err := s.server.Data.Talent(talentID); err == nil && ok && uint32(rank) < uint32(len(tEntry.SpellRank)) {
+			spellID := tEntry.SpellRank[rank]
+			if spellID != 0 {
+				removed := protocol.NewBuffer(8)
+				removed.WriteU32(spellID)
+				removed.WriteU32(0)
+				_ = s.write(uint16(protocol.OpcodeSMSG_REMOVED_SPELL), removed.Bytes(), true)
+			}
+		}
+	}
+
+	s.player.Talents = make(map[uint32]uint8)
+	cdb := s.server.CharactersStore.DB
+	if _, err := cdb.ExecContext(ctx, "DELETE FROM character_talent WHERE guid = ? AND talentGroup = ?", s.playerGUID, s.player.ActiveTalentGroup); err != nil {
+		s.debug("talent reset persistence failed", "account", s.accountName, "error", err)
+	}
+	if cost > 0 {
+		s.player.Money -= cost
+		s.player.ResetTalentsCost = cost
+		s.player.ResetTalentsTime = uint32(time.Now().Unix())
+		s.updateAchievementCriteria(criteriaTypeGoldSpentForTalents, 0, cost)
+	}
+	s.updateAchievementCriteria(criteriaTypeTalentResets, 0, 1)
+	if _, err := cdb.ExecContext(ctx, "UPDATE characters SET resettalents_cost = ?, resettalents_time = ?, money = ? WHERE guid = ?", s.player.ResetTalentsCost, s.player.ResetTalentsTime, s.player.Money, s.playerGUID); err != nil {
+		s.debug("talent reset cost persistence failed", "account", s.accountName, "error", err)
+	}
+	s.sendPlayerUpdate()
+	_ = s.sendTalentsInfo(false)
+	s.debug("talents reset", "account", s.accountName, "cost", cost, "free", free)
 	return true
 }

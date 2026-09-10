@@ -30,6 +30,7 @@ const (
 	characterCustomizeFaction    uint32 = 0x00010000
 	characterCustomizeRace       uint32 = 0x00100000
 	atLoginRename                uint64 = 0x001
+	atLoginResetTalents          uint64 = 0x004 // AT_LOGIN_RESET_TALENTS (Player.h:459)
 	atLoginCustomize             uint64 = 0x008
 	atLoginFirst                 uint64 = 0x020
 	atLoginChangeFaction         uint64 = 0x040
@@ -390,6 +391,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.loadAchievementState(ctx)
 	s.loadExploredZones(ctx)
+	// Reference Player::LoadFromDB: AT_LOGIN_RESET_TALENTS resets talents
+	// without cost at login.
+	if s.player.AtLogin&uint32(atLoginResetTalents) != 0 {
+		s.player.AtLogin &^= uint32(atLoginResetTalents)
+		_ = s.resetTalents(ctx, true)
+		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ~4 WHERE guid = ?", s.playerGUID)
+		}
+	}
 	s.sendAllAchievementData()
 	s.sendEquipmentSetList(ctx)
 	// Persist cinematic state before spawning into world (TC: CharacterHandler.cpp)

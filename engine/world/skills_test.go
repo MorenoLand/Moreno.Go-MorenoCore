@@ -555,3 +555,103 @@ func TestGlyphApplicationAndRemoval(t *testing.T) {
 		t.Fatalf("expected db glyph1=0 after remove, got %d", dbGlyph1)
 	}
 }
+
+func TestResetTalentsCostCurveAndReset(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER NOT NULL DEFAULT 0, resettalents_cost INTEGER NOT NULL DEFAULT 0, resettalents_time INTEGER NOT NULL DEFAULT 0)",
+		"CREATE TABLE character_talent (guid INTEGER NOT NULL, spell INTEGER NOT NULL, talentGroup INTEGER NOT NULL)",
+		"CREATE TABLE character_achievement_progress (guid INTEGER NOT NULL, criteria INTEGER NOT NULL, counter INTEGER NOT NULL, date INTEGER NOT NULL, PRIMARY KEY (guid, criteria))",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}}
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() { _ = clientConn.Close() })
+	player := &playerState{GUID: 9, Level: 40, Money: 100 * 10000, Talents: map[uint32]uint8{100: 2, 200: 1}}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 9, player: player}
+	state.earnedAchievements = make(map[uint32]uint32)
+	state.criteriaProgress = make(map[uint32]*criteriaProgressState)
+	go func() {
+		_ = clientConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		for {
+			if _, _, err := readServerFrame(clientConn, nil); err != nil {
+				return
+			}
+		}
+	}()
+	if _, err := db.Exec("INSERT INTO characters (guid, money) VALUES (9, ?)", player.Money); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO character_talent (guid, spell, talentGroup) VALUES (9, 1122, 0)"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cost curve: fresh = 1g, after a 1g spend = 5g, after 5g = 10g.
+	if got := state.resetTalentsCost(); got != 10000 {
+		t.Fatalf("first cost=%d want 1g", got)
+	}
+	player.ResetTalentsCost = 10000
+	if got := state.resetTalentsCost(); got != 50000 {
+		t.Fatalf("second cost=%d want 5g", got)
+	}
+	player.ResetTalentsCost = 50000
+	if got := state.resetTalentsCost(); got != 100000 {
+		t.Fatalf("third cost=%d want 10g", got)
+	}
+	player.ResetTalentsCost = 100000
+	player.ResetTalentsTime = uint32(time.Now().Unix())
+	if got := state.resetTalentsCost(); got != 150000 {
+		t.Fatalf("fourth cost=%d want 15g", got)
+	}
+	// Cap at 50g with a fresh timestamp.
+	player.ResetTalentsCost = 490000
+	player.ResetTalentsTime = uint32(time.Now().Unix())
+	if got := state.resetTalentsCost(); got != 500000 {
+		t.Fatalf("cap cost=%d want 50g", got)
+	}
+	// Decaying path: two months old at 40g decays 10g to the 30g result.
+	player.ResetTalentsCost = 40 * 10000
+	player.ResetTalentsTime = uint32(time.Now().Unix()) - 2*monthSec
+	if got := state.resetTalentsCost(); got != 30*10000 {
+		t.Fatalf("decayed cost=%d want 30g", got)
+	}
+
+	// Reset with insufficient funds fails and keeps talents.
+	player.ResetTalentsCost = 0
+	player.Money = 5000
+	if state.resetTalents(context.Background(), false) {
+		t.Fatal("reset succeeded without gold")
+	}
+	if len(player.Talents) != 2 {
+		t.Fatal("talents cleared on failed reset")
+	}
+
+	// Successful reset clears talents, charges gold, persists state.
+	player.Money = 100 * 10000
+	if !state.resetTalents(context.Background(), false) {
+		t.Fatal("reset failed with gold")
+	}
+	if len(player.Talents) != 0 {
+		t.Fatalf("talents kept: %+v", player.Talents)
+	}
+	if player.Money != 100*10000-10000 {
+		t.Fatalf("money=%d", player.Money)
+	}
+	var cost, savedMoney int64
+	if err := db.QueryRow("SELECT resettalents_cost, money FROM characters WHERE guid = 9").Scan(&cost, &savedMoney); err != nil || cost != 10000 {
+		t.Fatalf("persisted cost=%d err=%v", cost, err)
+	}
+	var talents int64
+	_ = db.QueryRow("SELECT COUNT(1) FROM character_talent WHERE guid = 9").Scan(&talents)
+	if talents != 0 {
+		t.Fatalf("talent rows survived: %d", talents)
+	}
+}

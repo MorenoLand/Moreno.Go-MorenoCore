@@ -204,6 +204,8 @@ type playerState struct {
 	HomebindZ            float32
 	Reputations          []playerReputation
 	Talents              map[uint32]uint8
+	ResetTalentsCost     uint32
+	ResetTalentsTime     uint32
 	TalentGroupsCount    uint8
 	ActiveTalentGroup    uint8
 	Glyphs               [2][6]uint16
