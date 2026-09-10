@@ -63,6 +63,11 @@ const (
 	criteriaTypePlayArena           = 33 // ACHIEVEMENT_CRITERIA_TYPE_PLAY_ARENA
 	criteriaTypeGetKillingBlows     = 56 // ACHIEVEMENT_CRITERIA_TYPE_GET_KILLING_BLOWS
 	criteriaTypeGoldSpentTravel     = 63 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_SPENT_FOR_TRAVELLING
+	criteriaTypeExaltedRep          = 47 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_EXALTED_REPUTATION
+	criteriaTypeHighestPower        = 96 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_POWER
+	criteriaTypeHighestStat         = 97 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_STAT
+	criteriaTypeHighestSpellpower   = 98 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_SPELLPOWER
+	criteriaTypeHighestTeamRating   = 38 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_TEAM_RATING
 	criteriaTypeBGObjective         = 30 // ACHIEVEMENT_CRITERIA_TYPE_BG_OBJECTIVE_CAPTURE
 	criteriaTypeHonorableKill       = 35 // ACHIEVEMENT_CRITERIA_TYPE_HONORABLE_KILL
 	criteriaTypeHKClass             = 52 // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS

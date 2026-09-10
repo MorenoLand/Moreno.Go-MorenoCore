@@ -387,6 +387,11 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	state.Stats[2] = uint32(sta)
 	state.Stats[3] = uint32(inte)
 	state.Stats[4] = uint32(spi)
+	// Reference ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_STAT: absolute per-stat
+	// progress (asset: 0 str, 1 agi, 2 sta, 3 int, 4 spi).
+	for statIndex, statValue := range state.Stats {
+		s.setAchievementCriteria(criteriaTypeHighestStat, uint32(statIndex), statValue)
+	}
 
 	// Base health and base mana from player_classlevelstats
 	var baseHealth, baseMana int64
@@ -398,6 +403,10 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 		baseMana = int64(80 + int(lvl)*20)
 	}
 	state.BaseMana = uint32(baseMana)
+	// Reference ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_POWER (asset 0 = mana).
+	if state.MaxPowers[0] < uint32(baseMana) {
+		s.setAchievementCriteria(criteriaTypeHighestPower, 0, uint32(baseMana))
+	}
 
 	// Default unarmed weapon speeds and damages
 	state.MinDamage = 1.0
@@ -550,6 +559,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 						state.CombatRatings[24] += uint32(val)
 					case 45: // Spell power (ITEM_MOD_SPELL_POWER)
 						state.SpellPower += uint32(val)
+						s.setAchievementCriteria(criteriaTypeHighestSpellpower, 0, state.SpellPower)
 					case 47: // Spell penetration (ITEM_MOD_SPELL_PENETRATION)
 						state.SpellPenetration += uint32(val)
 					}

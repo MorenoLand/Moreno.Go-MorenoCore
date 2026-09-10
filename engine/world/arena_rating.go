@@ -100,6 +100,13 @@ func (s *Server) RecordArenaMatchResult(ctx context.Context, winnerTeamID, loser
 	// Update winning team
 	_, err = cdb.ExecContext(ctx, `UPDATE arena_team SET rating = ?, weekGames = weekGames + 1, weekWins = weekWins + 1,
 		seasonGames = seasonGames + 1, seasonWins = seasonWins + 1 WHERE arenaTeamId = ?`, newWinRating, winnerTeamID)
+	// Reference ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_TEAM_RATING: absolute
+	// progress for the winning team members' new rating.
+	for _, guid := range winnerMembers {
+		if sess := s.findSessionByGUID(guid); sess != nil {
+			sess.setAchievementCriteria(criteriaTypeHighestTeamRating, 0, newWinRating)
+		}
+	}
 	if err != nil {
 		return 0, 0, err
 	}

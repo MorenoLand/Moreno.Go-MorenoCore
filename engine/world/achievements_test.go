@@ -66,6 +66,56 @@ func writeAchievementDBCs(t *testing.T, dir string) {
 	write("Achievement_Criteria.dbc", critRow)
 }
 
+// snapshotAchievementIndex snapshots the global criteria index and restores
+// it when the test finishes, keeping index mutations test-local so later
+// suites never observe synthetic criteria through shared state.
+func snapshotAchievementIndex(t *testing.T) {
+	t.Helper()
+	achievementIndex.mu.Lock()
+	typeAssetCopy := make(map[uint64][]achievementCriteriaEntry, len(achievementIndex.byTypeAsset))
+	for k, v := range achievementIndex.byTypeAsset {
+		typeAssetCopy[k] = append([]achievementCriteriaEntry(nil), v...)
+	}
+	timedCopy := make(map[uint64][]achievementCriteriaEntry, len(achievementIndex.byTimedEvent))
+	for k, v := range achievementIndex.byTimedEvent {
+		timedCopy[k] = append([]achievementCriteriaEntry(nil), v...)
+	}
+	byTypeCopy := make(map[uint32][]achievementCriteriaEntry, len(achievementIndex.byType))
+	for k, v := range achievementIndex.byType {
+		byTypeCopy[k] = append([]achievementCriteriaEntry(nil), v...)
+	}
+	exploreCopy := make(map[uint32][]uint32, len(achievementIndex.exploreByZone))
+	for k, v := range achievementIndex.exploreByZone {
+		exploreCopy[k] = append([]uint32(nil), v...)
+	}
+	byIDCopy := make(map[uint32]achievementCriteriaEntry, len(achievementIndex.byID))
+	for k, v := range achievementIndex.byID {
+		byIDCopy[k] = v
+	}
+	byAchieveCopy := make(map[uint32][]achievementCriteriaEntry, len(achievementIndex.byAchieve))
+	for k, v := range achievementIndex.byAchieve {
+		byAchieveCopy[k] = append([]achievementCriteriaEntry(nil), v...)
+	}
+	achieveByIDCopy := make(map[uint32]achievementEntry, len(achievementIndex.achieveByID))
+	for k, v := range achievementIndex.achieveByID {
+		achieveByIDCopy[k] = v
+	}
+	loaded := achievementIndex.loaded
+	achievementIndex.mu.Unlock()
+	t.Cleanup(func() {
+		achievementIndex.mu.Lock()
+		achievementIndex.byTypeAsset = typeAssetCopy
+		achievementIndex.byTimedEvent = timedCopy
+		achievementIndex.byType = byTypeCopy
+		achievementIndex.exploreByZone = exploreCopy
+		achievementIndex.byID = byIDCopy
+		achievementIndex.byAchieve = byAchieveCopy
+		achievementIndex.achieveByID = achieveByIDCopy
+		achievementIndex.loaded = loaded
+		achievementIndex.mu.Unlock()
+	})
+}
+
 func newAchievementTestSession(t *testing.T, player *playerState) (*session, net.Conn, *sql.DB, *Server) {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
@@ -233,6 +283,7 @@ func TestInspectAchievementsReturnsTargetState(t *testing.T) {
 }
 
 func TestAchievementCastSpellAndSetVariants(t *testing.T) {
+	snapshotAchievementIndex(t)
 	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100, Race: 1}
 	state, clientConn, db, _ := newAchievementTestSession(t, player)
 	drainServerFrames(t, clientConn)
@@ -272,6 +323,7 @@ func TestAchievementCastSpellAndSetVariants(t *testing.T) {
 }
 
 func TestAchievementDeathAndOwnItemHooks(t *testing.T) {
+	snapshotAchievementIndex(t)
 	player := &playerState{GUID: 9, Level: 10, Health: 0, MaxHealth: 100, Race: 1}
 	state, clientConn, db, _ := newAchievementTestSession(t, player)
 	drainServerFrames(t, clientConn)
@@ -300,6 +352,7 @@ func TestAchievementDeathAndOwnItemHooks(t *testing.T) {
 }
 
 func TestAchievementDamageHealAndGoldCriteria(t *testing.T) {
+	snapshotAchievementIndex(t)
 	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100, Race: 1}
 	state, clientConn, _, _ := newAchievementTestSession(t, player)
 	drainServerFrames(t, clientConn)
@@ -333,6 +386,7 @@ func TestAchievementDamageHealAndGoldCriteria(t *testing.T) {
 }
 
 func TestTimedAchievementLifecycle(t *testing.T) {
+	snapshotAchievementIndex(t)
 	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100, Race: 1}
 	state, clientConn, db, _ := newAchievementTestSession(t, player)
 	drainServerFrames(t, clientConn)
@@ -386,6 +440,7 @@ func TestTimedAchievementLifecycle(t *testing.T) {
 }
 
 func TestTimedAchievementNoDoubleStart(t *testing.T) {
+	snapshotAchievementIndex(t)
 	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100}
 	state, clientConn, _, _ := newAchievementTestSession(t, player)
 	drainServerFrames(t, clientConn)
@@ -407,6 +462,7 @@ func TestTimedAchievementNoDoubleStart(t *testing.T) {
 }
 
 func TestHonorableKillAndBGObjectiveCriteria(t *testing.T) {
+	snapshotAchievementIndex(t)
 	player := &playerState{GUID: 9, Level: 10, Health: 100, MaxHealth: 100, Race: 1, Class: 1}
 	state, clientConn, _, _ := newAchievementTestSession(t, player)
 	drainServerFrames(t, clientConn)
@@ -446,6 +502,7 @@ func TestHonorableKillAndBGObjectiveCriteria(t *testing.T) {
 }
 
 func TestExploreZoneBitsAndCriteria(t *testing.T) {
+	snapshotAchievementIndex(t)
 	dir := t.TempDir()
 	// AreaTable: zone 12 has AreaBit 5, level gate 0. WorldMapOverlay 700 covers zones {12, 0, 0, 0}.
 	writeMini := func(name string, rows ...[]uint32) {
@@ -549,6 +606,7 @@ func TestExploreZoneBitsAndCriteria(t *testing.T) {
 }
 
 func TestBGArenaAndDeathDetailCriteria(t *testing.T) {
+	snapshotAchievementIndex(t)
 	player := &playerState{GUID: 9, Level: 20, Health: 100, MaxHealth: 100, Race: 1, Map: 529}
 	state, clientConn, _, _ := newAchievementTestSession(t, player)
 	drainServerFrames(t, clientConn)
@@ -577,5 +635,53 @@ func TestBGArenaAndDeathDetailCriteria(t *testing.T) {
 	state.server.creditHonorableKill(killer, victim)
 	if _, earned := victim.earnedAchievements[6100]; !earned {
 		t.Fatal("KILLED_BY_PLAYER not credited to the victim")
+	}
+}
+
+func TestHighestStatPowerExaltedAndRatingCriteria(t *testing.T) {
+	snapshotAchievementIndex(t)
+	player := &playerState{GUID: 9, Level: 70, Health: 100, MaxHealth: 100, Race: 1}
+	player.Stats = [5]uint32{100, 90, 120, 85, 95}
+	player.MaxPowers = [7]uint32{4000, 0, 0, 0, 0, 0, 0}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+
+	achievementIndex.mu.Lock()
+	statCrit := achievementCriteriaEntry{ID: 10200, AchievementID: 6200, Type: criteriaTypeHighestStat, Asset: 0, Quantity: 80}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeHighestStat, 0)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeHighestStat, 0)], statCrit)
+	achievementIndex.byID[10200] = statCrit
+	achievementIndex.byAchieve[6200] = append(achievementIndex.byAchieve[6200], statCrit)
+	achievementIndex.achieveByID[6200] = achievementEntry{ID: 6200, Faction: -1}
+	powCrit := achievementCriteriaEntry{ID: 10300, AchievementID: 6300, Type: criteriaTypeHighestPower, Asset: 0, Quantity: 3000}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeHighestPower, 0)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeHighestPower, 0)], powCrit)
+	achievementIndex.byID[10300] = powCrit
+	achievementIndex.byAchieve[6300] = append(achievementIndex.byAchieve[6300], powCrit)
+	achievementIndex.achieveByID[6300] = achievementEntry{ID: 6300, Faction: -1}
+	exCrit := achievementCriteriaEntry{ID: 10400, AchievementID: 6400, Type: criteriaTypeExaltedRep, Asset: 72, Quantity: 1}
+	achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeExaltedRep, 72)] = append(achievementIndex.byTypeAsset[typeAssetKey(criteriaTypeExaltedRep, 72)], exCrit)
+	achievementIndex.byID[10400] = exCrit
+	achievementIndex.byAchieve[6400] = append(achievementIndex.byAchieve[6400], exCrit)
+	achievementIndex.achieveByID[6400] = achievementEntry{ID: 6400, Faction: -1}
+	achievementIndex.mu.Unlock()
+
+	// Absolute stats: strength 100 over the 80 threshold completes.
+	state.setAchievementCriteria(criteriaTypeHighestStat, 0, 100)
+	if _, earned := state.earnedAchievements[6200]; !earned {
+		t.Fatal("highest-stat achievement not completed at 100 >= 80")
+	}
+	// Lower values never regress and do not re-fire.
+	state.setAchievementCriteria(criteriaTypeHighestStat, 0, 60)
+	if state.criteriaProgress[10200].Counter != 100 {
+		t.Fatal("highest-stat regressed")
+	}
+	// Power: 4000 mana over 3000 threshold.
+	state.setAchievementCriteria(criteriaTypeHighestPower, 0, 4000)
+	if _, earned := state.earnedAchievements[6300]; !earned {
+		t.Fatal("highest-power achievement not completed")
+	}
+	// Exalted: 42000+ standing fires once per faction.
+	state.updateAchievementCriteria(criteriaTypeExaltedRep, 72, 1)
+	if _, earned := state.earnedAchievements[6400]; !earned {
+		t.Fatal("exalted achievement not completed")
 	}
 }
