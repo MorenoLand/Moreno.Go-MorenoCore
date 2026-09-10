@@ -385,6 +385,7 @@ func (s *Server) executePetMeleeAttack(ctx context.Context, motion *creatureMoti
 		s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, targetSess)
 		if damage >= targetHealth {
 			targetSess.player.Health = 0
+			targetSess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
 			targetSess.killPlayer(ctx)
 		} else {
 			targetSess.player.Health -= damage

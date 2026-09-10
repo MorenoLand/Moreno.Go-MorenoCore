@@ -721,8 +721,11 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 		hitInfo = 0x01 // SPELL_HIT_TYPE_MISS
 		damage = 0
 	} else {
-		// Spell crit roll
-		crit := s.rollSpellCrit(target.GUID, schoolMask)
+		// Spell crit roll (fixed damage backlash spells do not crit, per TrinityCore SPELL_ATTR4_FIXED_DAMAGE)
+		crit := false
+		if spellID != 31117 && spellID != 64085 {
+			crit = s.rollSpellCrit(target.GUID, schoolMask)
+		}
 		if crit {
 			mult := 1.5
 			if s.server != nil && s.server.Data != nil {
@@ -803,6 +806,9 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 				} else {
 					playerSess.player.Health = 0
 					playerSess.sendPlayerUpdate()
+					if s.server != nil {
+						s.server.creditHonorableKill(s, playerSess)
+					}
 					playerSess.killPlayer(ctx)
 					s.server.handleWGPlayerDeath(playerSess, s)
 				}

@@ -704,6 +704,9 @@ func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, 
 					}
 					vicSess.player.Health = 0
 					vicSess.sendPlayerUpdate()
+					if s.server != nil {
+						s.server.creditHonorableKill(s, vicSess)
+					}
 					vicSess.killPlayer(ctx)
 					s.server.handleWGPlayerDeath(vicSess, s)
 					s.autoRepeatSpell = 0
