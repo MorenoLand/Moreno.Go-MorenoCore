@@ -277,6 +277,7 @@ func (s *session) handleQuestLogRemoveQuest(ctx context.Context, payload []byte)
 	}
 	s.player.QuestLog[slot] = questLogEntry{}
 	s.sendPlayerQuestLogUpdate(slot)
+	s.updateAchievementCriteria(criteriaTypeQuestAbandoned, 0, 1)
 
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {

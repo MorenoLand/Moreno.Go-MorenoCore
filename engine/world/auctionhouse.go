@@ -282,6 +282,7 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 	}
 	_, _ = cdb.ExecContext(ctx, `INSERT INTO auctionhouse (id, houseid, itemguid, item_template, itemCount, itemowner, buyoutprice, time, buyguid, lastbid, startbid, deposit)
 		VALUES (?, 1, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`, nextID, itemGUID, itemEntry, stackCount, s.playerGUID, buyout, expire, bid, deposit)
+	s.updateAchievementCriteria(criteriaTypeCreateAuction, 0, 1)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AUCTION_COMMAND_RESULT), buildAuctionCommandResult(uint32(nextID), auctionSellItem, errAuctionOK), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerMoneyUpdate()
@@ -358,13 +359,21 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 
 	now := time.Now().Unix()
 
+	s.setAchievementCriteria(criteriaTypeHighestAuctionBid, 0, price)
 	if isBuyout {
 		// Buyout success!
+		s.updateAchievementCriteria(criteriaTypeWonAuctions, 0, 1)
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM auctionhouse WHERE id = ?", auctionID)
 
 		// Consignment cut (5%) and profit (bid + deposit - cut)
 		consignment := uint32(buyout) * 5 / 100
 		profit := uint32(buyout) + uint32(deposit) - consignment
+		if s.server != nil {
+			if sellerSess := s.server.findSessionByGUID(uint64(ownerGUID)); sellerSess != nil {
+				sellerSess.setAchievementCriteria(criteriaTypeHighestAuctionSold, 0, uint32(buyout))
+				sellerSess.updateAchievementCriteria(criteriaTypeGoldEarnedAuctions, 0, profit)
+			}
+		}
 
 		// 1. If previous bidder existed and was not current buyer, refund them
 		if bidderGUID > 0 && bidderGUID != int64(s.playerGUID) && lastBid > 0 {
@@ -699,6 +708,15 @@ func (s *session) expireAuctions(ctx context.Context) {
 				invoiceMailID, mailAuctionType, mailStationeryAuction, a.houseID, a.owner, pendingSubj, pendingBody, now+3600, now)
 			s.sendMailNotify(uint64(a.owner))
 			s.notifyAuctionOwner(uint64(a.owner), uint32(a.id), uint32(a.lastBid), uint64(a.bidder), uint32(a.itemTmpl))
+			if s.server != nil {
+				if bidderSess := s.server.findSessionByGUID(uint64(a.bidder)); bidderSess != nil {
+					bidderSess.updateAchievementCriteria(criteriaTypeWonAuctions, 0, 1)
+				}
+				if sellerSess := s.server.findSessionByGUID(uint64(a.owner)); sellerSess != nil {
+					sellerSess.setAchievementCriteria(criteriaTypeHighestAuctionSold, 0, uint32(a.lastBid))
+					sellerSess.updateAchievementCriteria(criteriaTypeGoldEarnedAuctions, 0, profit)
+				}
+			}
 		} else {
 			// Expired with no bids: return item to owner (deposit forfeited)
 			var expMailID int64

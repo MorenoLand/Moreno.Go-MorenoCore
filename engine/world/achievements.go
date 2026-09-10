@@ -79,6 +79,27 @@ const (
 	criteriaTypeHKClass             = 52 // ACHIEVEMENT_CRITERIA_TYPE_HK_CLASS
 	criteriaTypeHKRace              = 53 // ACHIEVEMENT_CRITERIA_TYPE_HK_RACE
 	criteriaTypeExplore             = 43 // ACHIEVEMENT_CRITERIA_TYPE_EXPLORE_AREA
+	criteriaTypeWinDuel             = 76 // ACHIEVEMENT_CRITERIA_TYPE_WIN_DUEL
+	criteriaTypeLoseDuel            = 77 // ACHIEVEMENT_CRITERIA_TYPE_LOSE_DUEL
+	criteriaTypeGoldEarnedAuctions  = 80 // ACHIEVEMENT_CRITERIA_TYPE_GOLD_EARNED_BY_AUCTIONS
+	criteriaTypeCreateAuction       = 82 // ACHIEVEMENT_CRITERIA_TYPE_CREATE_AUCTION
+	criteriaTypeHighestAuctionBid   = 83 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_BID
+	criteriaTypeWonAuctions         = 84 // ACHIEVEMENT_CRITERIA_TYPE_WON_AUCTIONS
+	criteriaTypeHighestAuctionSold  = 85 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_AUCTION_SOLD
+	criteriaTypeHighestGoldValue    = 86 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_GOLD_VALUE_OWNED
+	criteriaTypeReveredRep          = 87 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_REVERED_REPUTATION
+	criteriaTypeHonoredRep          = 88 // ACHIEVEMENT_CRITERIA_TYPE_GAIN_HONORED_REPUTATION
+	criteriaTypeHighestHealth       = 95 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEALTH
+	criteriaTypeHighestArmor        = 99 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_ARMOR
+	criteriaTypeHighestRating       = 100 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_RATING
+	criteriaTypeHighestHitDealt     = 101 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HIT_DEALT
+	criteriaTypeHighestHitReceived  = 102 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HIT_RECEIVED
+	criteriaTypeTotalDamageReceived = 103 // ACHIEVEMENT_CRITERIA_TYPE_TOTAL_DAMAGE_RECEIVED
+	criteriaTypeHighestHealCasted   = 104 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEAL_CASTED
+	criteriaTypeTotalHealingReceived = 105 // ACHIEVEMENT_CRITERIA_TYPE_TOTAL_HEALING_RECEIVED
+	criteriaTypeHighestHealingRecv  = 106 // ACHIEVEMENT_CRITERIA_TYPE_HIGHEST_HEALING_RECEIVED
+	criteriaTypeQuestAbandoned      = 107 // ACHIEVEMENT_CRITERIA_TYPE_QUEST_ABANDONED
+	criteriaTypeFlightPathsTaken    = 108 // ACHIEVEMENT_CRITERIA_TYPE_FLIGHT_PATHS_TAKEN
 )
 
 type achievementEntry struct {

@@ -595,6 +595,15 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	// Armor: item armor + Agility * 2
 	state.Armor += totalAgi * 2
 
+	s.setAchievementCriteria(criteriaTypeHighestHealth, 0, state.MaxHealth)
+	s.setAchievementCriteria(criteriaTypeHighestArmor, 0, state.Armor)
+	for ratingID, ratingVal := range state.CombatRatings {
+		if ratingVal > 0 {
+			s.setAchievementCriteria(criteriaTypeHighestRating, uint32(ratingID), ratingVal)
+		}
+	}
+	s.setAchievementCriteria(criteriaTypeHighestGoldValue, 0, state.Money)
+
 	// Base Attack Power (TC StatSystem.cpp:1034-1065)
 	var baseAP int32
 	switch state.Class {

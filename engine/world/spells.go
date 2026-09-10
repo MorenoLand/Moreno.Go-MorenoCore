@@ -769,6 +769,7 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 		overkill = damage - target.Health
 	}
 	s.updateAchievementCriteria(criteriaTypeDamageDone, 0, damage)
+	s.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, damage)
 
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELLNONMELEEDAMAGELOG), buildSpellNonMeleeDamageLog(target.GUID, s.playerGUID, spellID, damage, overkill, schoolMask, absorbed, resisted, hitInfo), true)
 
@@ -784,6 +785,8 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 	// If target is an online player (e.g. duel opponent or PvP)
 	if s.server != nil {
 		if playerSess := s.server.findSessionByGUID(target.GUID); playerSess != nil && playerSess.player != nil {
+			playerSess.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, damage)
+			playerSess.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, damage)
 			playerSess.lastCombatTime = time.Now()
 			if playerSess.player.UnitFlags&unitFlagInCombat == 0 {
 				playerSess.player.UnitFlags |= unitFlagInCombat
@@ -1037,8 +1040,11 @@ func (s *session) executeSpellHeal(ctx context.Context, targetGUID uint64, spell
 		targetSess.player.Health = targetSess.player.MaxHealth
 	} else {
 		targetSess.player.Health += heal
-		s.updateAchievementCriteria(criteriaTypeHealingDone, 0, heal)
 	}
+	s.updateAchievementCriteria(criteriaTypeHealingDone, 0, heal)
+	s.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, heal)
+	targetSess.updateAchievementCriteria(criteriaTypeTotalHealingReceived, 0, effectiveHeal)
+	targetSess.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, heal)
 	overheal := heal - effectiveHeal
 	if s.server != nil {
 		s.server.updateArenaHealingScore(s, effectiveHeal)

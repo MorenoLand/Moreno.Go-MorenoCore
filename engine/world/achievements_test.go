@@ -754,3 +754,119 @@ func TestEquipAndRollCriteria(t *testing.T) {
 		t.Fatal("roll progress regressed")
 	}
 }
+
+func TestExtendedCriteriaTypes(t *testing.T) {
+	player := &playerState{GUID: 9, Level: 80, Health: 1000, MaxHealth: 1000, Race: 1, Money: 50000}
+	state, clientConn, _, _ := newAchievementTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	snapshotAchievementIndex(t)
+
+	achievementIndex.mu.Lock()
+	entries := []achievementCriteriaEntry{
+		{ID: 11001, AchievementID: 7001, Type: criteriaTypeWinDuel, Asset: 0, Quantity: 1},
+		{ID: 11002, AchievementID: 7002, Type: criteriaTypeLoseDuel, Asset: 0, Quantity: 1},
+		{ID: 11003, AchievementID: 7003, Type: criteriaTypeCreateAuction, Asset: 0, Quantity: 1},
+		{ID: 11004, AchievementID: 7004, Type: criteriaTypeHighestAuctionBid, Asset: 0, Quantity: 1000},
+		{ID: 11005, AchievementID: 7005, Type: criteriaTypeWonAuctions, Asset: 0, Quantity: 1},
+		{ID: 11006, AchievementID: 7006, Type: criteriaTypeHighestHealth, Asset: 0, Quantity: 1500},
+		{ID: 11007, AchievementID: 7007, Type: criteriaTypeHighestArmor, Asset: 0, Quantity: 2000},
+		{ID: 11008, AchievementID: 7008, Type: criteriaTypeHighestHitDealt, Asset: 0, Quantity: 500},
+		{ID: 11009, AchievementID: 7009, Type: criteriaTypeHighestHitReceived, Asset: 0, Quantity: 400},
+		{ID: 11010, AchievementID: 7010, Type: criteriaTypeTotalDamageReceived, Asset: 0, Quantity: 1000},
+		{ID: 11011, AchievementID: 7011, Type: criteriaTypeHighestHealCasted, Asset: 0, Quantity: 800},
+		{ID: 11012, AchievementID: 7012, Type: criteriaTypeTotalHealingReceived, Asset: 0, Quantity: 1200},
+		{ID: 11013, AchievementID: 7013, Type: criteriaTypeHighestHealingRecv, Asset: 0, Quantity: 600},
+		{ID: 11014, AchievementID: 7014, Type: criteriaTypeQuestAbandoned, Asset: 0, Quantity: 1},
+		{ID: 11015, AchievementID: 7015, Type: criteriaTypeFlightPathsTaken, Asset: 0, Quantity: 1},
+		{ID: 11016, AchievementID: 7016, Type: criteriaTypeHonoredRep, Asset: 0, Quantity: 1},
+		{ID: 11017, AchievementID: 7017, Type: criteriaTypeReveredRep, Asset: 0, Quantity: 1},
+	}
+	for _, entry := range entries {
+		key := typeAssetKey(entry.Type, entry.Asset)
+		achievementIndex.byTypeAsset[key] = append(achievementIndex.byTypeAsset[key], entry)
+		achievementIndex.byID[entry.ID] = entry
+		achievementIndex.byAchieve[entry.AchievementID] = append(achievementIndex.byAchieve[entry.AchievementID], entry)
+		achievementIndex.achieveByID[entry.AchievementID] = achievementEntry{ID: entry.AchievementID, Faction: -1}
+	}
+	achievementIndex.mu.Unlock()
+
+	// 1. Duel criteria
+	state.updateAchievementCriteria(criteriaTypeWinDuel, 0, 1)
+	if _, earned := state.earnedAchievements[7001]; !earned {
+		t.Fatal("WIN_DUEL not completed")
+	}
+	state.updateAchievementCriteria(criteriaTypeLoseDuel, 0, 1)
+	if _, earned := state.earnedAchievements[7002]; !earned {
+		t.Fatal("LOSE_DUEL not completed")
+	}
+
+	// 2. Auction criteria
+	state.updateAchievementCriteria(criteriaTypeCreateAuction, 0, 1)
+	if _, earned := state.earnedAchievements[7003]; !earned {
+		t.Fatal("CREATE_AUCTION not completed")
+	}
+	state.setAchievementCriteria(criteriaTypeHighestAuctionBid, 0, 1500)
+	if _, earned := state.earnedAchievements[7004]; !earned {
+		t.Fatal("HIGHEST_AUCTION_BID not completed")
+	}
+	state.updateAchievementCriteria(criteriaTypeWonAuctions, 0, 1)
+	if _, earned := state.earnedAchievements[7005]; !earned {
+		t.Fatal("WON_AUCTIONS not completed")
+	}
+
+	// 3. Stat criteria (health & armor)
+	state.setAchievementCriteria(criteriaTypeHighestHealth, 0, 2000)
+	if _, earned := state.earnedAchievements[7006]; !earned {
+		t.Fatal("HIGHEST_HEALTH not completed")
+	}
+	state.setAchievementCriteria(criteriaTypeHighestArmor, 0, 2500)
+	if _, earned := state.earnedAchievements[7007]; !earned {
+		t.Fatal("HIGHEST_ARMOR not completed")
+	}
+
+	// 4. Combat damage & healing extremes
+	state.setAchievementCriteria(criteriaTypeHighestHitDealt, 0, 600)
+	if _, earned := state.earnedAchievements[7008]; !earned {
+		t.Fatal("HIGHEST_HIT_DEALT not completed")
+	}
+	state.setAchievementCriteria(criteriaTypeHighestHitReceived, 0, 450)
+	if _, earned := state.earnedAchievements[7009]; !earned {
+		t.Fatal("HIGHEST_HIT_RECEIVED not completed")
+	}
+	state.updateAchievementCriteria(criteriaTypeTotalDamageReceived, 0, 1000)
+	if _, earned := state.earnedAchievements[7010]; !earned {
+		t.Fatal("TOTAL_DAMAGE_RECEIVED not completed")
+	}
+	state.setAchievementCriteria(criteriaTypeHighestHealCasted, 0, 900)
+	if _, earned := state.earnedAchievements[7011]; !earned {
+		t.Fatal("HIGHEST_HEAL_CASTED not completed")
+	}
+	state.updateAchievementCriteria(criteriaTypeTotalHealingReceived, 0, 1200)
+	if _, earned := state.earnedAchievements[7012]; !earned {
+		t.Fatal("TOTAL_HEALING_RECEIVED not completed")
+	}
+	state.setAchievementCriteria(criteriaTypeHighestHealingRecv, 0, 700)
+	if _, earned := state.earnedAchievements[7013]; !earned {
+		t.Fatal("HIGHEST_HEALING_RECEIVED not completed")
+	}
+
+	// 5. Quest abandon & flight paths
+	state.updateAchievementCriteria(criteriaTypeQuestAbandoned, 0, 1)
+	if _, earned := state.earnedAchievements[7014]; !earned {
+		t.Fatal("QUEST_ABANDONED not completed")
+	}
+	state.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
+	if _, earned := state.earnedAchievements[7015]; !earned {
+		t.Fatal("FLIGHT_PATHS_TAKEN not completed")
+	}
+
+	// 6. Reputation standings
+	state.updateAchievementCriteria(criteriaTypeHonoredRep, 0, 1)
+	if _, earned := state.earnedAchievements[7016]; !earned {
+		t.Fatal("HONORED_REPUTATION not completed")
+	}
+	state.updateAchievementCriteria(criteriaTypeReveredRep, 0, 1)
+	if _, earned := state.earnedAchievements[7017]; !earned {
+		t.Fatal("REVERED_REPUTATION not completed")
+	}
+}

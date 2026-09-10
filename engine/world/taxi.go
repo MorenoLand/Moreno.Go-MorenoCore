@@ -332,6 +332,7 @@ func (s *session) handleActivateTaxi(ctx context.Context, payload []byte) bool {
 		mount = mountDisplay
 	}
 	s.startTaxiFlight(pathID, mount, nearest == sourceNode)
+	s.updateAchievementCriteria(criteriaTypeFlightPathsTaken, 0, 1)
 	s.debug("taxi flight activated", "account", s.accountName, "master", guid, "source", sourceNode, "dest", destNode, "cost", price)
 	return reply(taxiErrOK)
 }

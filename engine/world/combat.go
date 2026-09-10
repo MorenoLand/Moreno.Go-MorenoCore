@@ -1566,10 +1566,14 @@ func (s *session) endDuel(won bool, winnerGUID uint64, fled bool) {
 		// Spells: Winner casts 52852 (Victory cheer)
 		if winnerSess != nil {
 			winnerSess.castVisualSpell(52852)
+			winnerSess.updateAchievementCriteria(criteriaTypeWinDuel, 0, 1)
 		}
 		// Loser casts 7267 (Beg / surrender kneel) if won normally
 		if !fled && loserSess != nil {
 			loserSess.castVisualSpell(7267)
+		}
+		if loserSess != nil {
+			loserSess.updateAchievementCriteria(criteriaTypeLoseDuel, 0, 1)
 		}
 	}
 
