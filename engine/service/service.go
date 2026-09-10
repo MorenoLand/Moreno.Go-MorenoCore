@@ -88,8 +88,13 @@ func (s *Service) Run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("%s listen %s: %w", s.Kind, s.Address, err)
 	}
-	defer listener.Close()
-	logger.Info("service listening", "service", s.Kind, "address", listener.Addr().String(), "database", s.Store.Name, "backend", s.Store.Backend)
+	storeName := ""
+	storeBackend := ""
+	if s.Store != nil {
+		storeName = s.Store.Name
+		storeBackend = string(s.Store.Backend)
+	}
+	logger.Info("service listening", "service", s.Kind, "address", listener.Addr().String(), "database", storeName, "backend", storeBackend)
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()

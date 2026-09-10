@@ -140,28 +140,42 @@ func databaseStats(db *sql.DB) (int, int, int64, error) {
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	defer rows.Close()
-	tables, views := 0, 0
-	var total int64
+	type item struct {
+		kind string
+		name string
+	}
+	var items []item
 	for rows.Next() {
-		var kind, name string
-		if err := rows.Scan(&kind, &name); err != nil {
+		var it item
+		if err := rows.Scan(&it.kind, &it.name); err != nil {
+			rows.Close()
 			return 0, 0, 0, err
 		}
-		if kind == "view" {
+		items = append(items, it)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, 0, 0, err
+	}
+	rows.Close()
+
+	tables, views := 0, 0
+	var total int64
+	for _, it := range items {
+		if it.kind == "view" {
 			views++
 			continue
 		}
-		if name == "trinitygo_schema" {
+		if it.name == "trinitygo_schema" {
 			continue
 		}
 		tables++
-		query := `SELECT COUNT(*) FROM "` + strings.ReplaceAll(name, `"`, `""`) + `"`
+		query := `SELECT COUNT(*) FROM "` + strings.ReplaceAll(it.name, `"`, `""`) + `"`
 		var count int64
 		if err := db.QueryRow(query).Scan(&count); err != nil {
 			return 0, 0, 0, err
 		}
 		total += count
 	}
-	return tables, views, total, rows.Err()
+	return tables, views, total, nil
 }
