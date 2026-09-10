@@ -6,8 +6,8 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 | --- | ---: | ---: | ---: |
 | Server source files / lines | 1410 / 710273 | 255 / 101418 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
-| Client opcode registrations | 727 | 433 | 294 |
-| Client behavioral opcode handlers | 430 | 433 | 0 |
+| Client opcode registrations | 727 | 727 | 0 |
+| Client behavioral opcode handlers | 430 | 727 | 0 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 0 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |

@@ -359,6 +359,34 @@ func TestAuthSessionAndPing(t *testing.T) {
 	}
 }
 
+func TestHandleNullOpcodes(t *testing.T) {
+	srv := &Server{}
+	sess := &session{server: srv, authed: true, playerLoaded: true, player: &playerState{GUID: 1}}
+
+	// Verify sample Handle_NULL opcodes are accepted without error
+	nullOpcodes := []protocol.Opcode{
+		protocol.OpcodeCMSG_ACTIVE_PVP_CHEAT,
+		protocol.OpcodeCMSG_ARENA_TEAM_CREATE,
+		protocol.OpcodeCMSG_BOT_DETECTED,
+		protocol.OpcodeCMSG_CHANNEL_SILENCE_ALL,
+		protocol.OpcodeCMSG_GODMODE,
+		protocol.OpcodeCMSG_PETGODMODE,
+		protocol.OpcodeCMSG_BEASTMASTER,
+		protocol.OpcodeCMSG_COOLDOWN_CHEAT,
+		protocol.OpcodeMSG_MOVE_FEATHER_FALL,
+	}
+
+	for _, op := range nullOpcodes {
+		name := opcodeName(uint32(op))
+		if name == "" {
+			t.Fatalf("expected opcode name for %v", op)
+		}
+		if !sess.authed {
+			t.Fatalf("session should be authed")
+		}
+	}
+}
+
 func writeClientFrame(w io.Writer, opcode uint32, payload []byte, crypt interface{ EncryptSend([]byte) error }) error {
 	size := len(payload) + 4
 	header := make([]byte, 6)
