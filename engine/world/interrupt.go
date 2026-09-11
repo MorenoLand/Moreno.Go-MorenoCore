@@ -14,7 +14,7 @@ const (
 	channelInterruptFlagInterrupt = 0x08 // CHANNEL_INTERRUPT_FLAG_INTERRUPT (SharedDefines.h:1126)
 	spellPreventionTypeSilence    = 1    // SPELL_PREVENTION_TYPE_SILENCE (SharedDefines.h:1134)
 	spellPreventionTypePacify     = 2    // SPELL_PREVENTION_TYPE_PACIFY (SharedDefines.h:1135)
-	spellFailedInterrupted        = 24   // SPELL_FAILED_INTERRUPTED (SharedDefines.h:1006)
+	spellFailedInterrupted        = 40   // SPELL_FAILED_INTERRUPTED (SharedDefines.h:1023)
 )
 
 // isInterruptSpell identifies primary interrupt spells that abort active casts and lock spell schools.

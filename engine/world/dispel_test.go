@@ -934,7 +934,7 @@ func TestDispel_SilencePreventsCasting(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Attempt to cast Fireball (133, magic spell) while silenced -> should fail with SPELL_FAILED_SILENCED (48)
+	// Attempt to cast Fireball (133, magic spell) while silenced -> should fail with SPELL_FAILED_SILENCED (104)
 	castPkt := protocol.NewBuffer(32)
 	castPkt.WriteU8(1)
 	castPkt.WriteU32(133)
@@ -951,7 +951,7 @@ func TestDispel_SilencePreventsCasting(t *testing.T) {
 	_, _ = r.ReadU8()  // castID
 	_, _ = r.ReadU32() // spellID
 	failReason, _ := r.ReadU8()
-	if failReason != 48 { // SPELL_FAILED_SILENCED = 48
-		t.Fatalf("expected fail reason SPELL_FAILED_SILENCED (48), got %d", failReason)
+	if failReason != spellFailedSilenced {
+		t.Fatalf("expected fail reason SPELL_FAILED_SILENCED (104), got %d", failReason)
 	}
 }

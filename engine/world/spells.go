@@ -20,10 +20,13 @@ const (
 	spellAttr3ReqOffhand uint32 = 0x01000000 // SPELL_ATTR3_REQ_OFFHAND: Require offhand weapon (SharedDefines.h:547)
 	spellAttr3ReqWand    uint32 = 0x00400000 // SPELL_ATTR3_REQ_WAND: Requires equipped Wand (SharedDefines.h:545)
 
-	spellFailedEquippedItemClass         uint8 = 29 // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
-	spellFailedEquippedItemClassMainhand uint8 = 30 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
-	spellFailedEquippedItemClassOffhand  uint8 = 31 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
-	spellFailedNotInFront                uint8 = 61 // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
+	spellFailedEquippedItemClass         uint8 = 29  // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
+	spellFailedEquippedItemClassMainhand uint8 = 30  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
+	spellFailedEquippedItemClassOffhand  uint8 = 31  // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
+	spellFailedNotInFront                uint8 = 61  // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
+	spellFailedBadTargets                uint8 = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
+	spellFailedNotReady                  uint8 = 67  // SPELL_FAILED_NOT_READY (SharedDefines.h:1049)
+	spellFailedSilenced                  uint8 = 104 // SPELL_FAILED_SILENCED (SharedDefines.h:1086)
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
@@ -56,21 +59,45 @@ func isAreaEnemySpell(spell wotlk.Spell) bool {
 		if eff.Effect == 0 {
 			continue
 		}
-		if eff.ImplicitTargetA == 15 || eff.ImplicitTargetA == 16 || eff.ImplicitTargetB == 15 || eff.ImplicitTargetB == 16 || eff.ImplicitTargetA == 22 || eff.ImplicitTargetB == 22 {
+		if eff.Effect == 27 && eff.ImplicitTargetA == 18 {
+			return true
+		}
+		if isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) {
 			return true
 		}
 	}
 	return false
 }
 
-func (s *session) spellAreaEnemyTargets(spell wotlk.Spell) []uint64 {
+func isAreaEnemyTargetType(target uint32) bool {
+	switch target {
+	case 15, 16, 22, 24, 28, 54:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) []uint64 {
 	if s == nil || s.player == nil || s.server == nil || !isAreaEnemySpell(spell) || s.server.Data == nil {
 		return nil
 	}
 	radius := float32(0)
+	cone := false
+	destinationCenter := false
 	for _, eff := range spell.Effects {
-		if eff.Effect == 0 || (eff.ImplicitTargetA != 15 && eff.ImplicitTargetA != 16 && eff.ImplicitTargetA != 22 && eff.ImplicitTargetB != 15 && eff.ImplicitTargetB != 16 && eff.ImplicitTargetB != 22) {
+		areaTargetA := isAreaEnemyTargetType(eff.ImplicitTargetA) || (eff.Effect == 27 && eff.ImplicitTargetA == 18)
+		areaTargetB := isAreaEnemyTargetType(eff.ImplicitTargetB) || (eff.Effect == 27 && eff.ImplicitTargetB == 18)
+		if eff.Effect == 0 || (!areaTargetA && !areaTargetB) {
 			continue
+		}
+		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
+			if targetType == 24 || targetType == 54 {
+				cone = true
+			}
+			if targetType == 16 || targetType == 28 {
+				destinationCenter = true
+			}
 		}
 		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > radius {
 			radius = value
@@ -79,9 +106,30 @@ func (s *session) spellAreaEnemyTargets(spell wotlk.Spell) []uint64 {
 	if radius <= 0 {
 		return nil
 	}
+	centerX, centerY, centerZ := s.player.X, s.player.Y, s.player.Z
+	if destinationCenter && target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		centerX, centerY, centerZ = target.Destination.X, target.Destination.Y, target.Destination.Z
+	} else if destinationCenter && target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+		if destination, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
+			centerX, centerY, centerZ = destination.X, destination.Y, destination.Z
+		}
+	}
 	player := playerPos{Map: s.player.Map, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
 	targets := make([]uint64, 0)
 	seen := make(map[uint64]struct{})
+	accept := func(guid uint64, mapID uint32, x, y, z float32, faction, unitFlags, flagsExtra, health uint32) {
+		if mapID != player.Map || health == 0 || creatureCombatDisabled(unitFlags, flagsExtra) || distance3D(x, y, z, centerX, centerY, centerZ) > float64(radius) || !s.server.isHostileFaction(faction, player) {
+			return
+		}
+		if cone && !hasInArc(s.player.Orientation, s.player.X, s.player.Y, x, y, math.Pi/2) {
+			return
+		}
+		if _, ok := seen[guid]; ok {
+			return
+		}
+		seen[guid] = struct{}{}
+		targets = append(targets, guid)
+	}
 	s.server.motionMu.Lock()
 	motions := make([]*creatureMotion, 0, len(s.server.creatureMotion))
 	for _, motion := range s.server.creatureMotion {
@@ -91,14 +139,20 @@ func (s *session) spellAreaEnemyTargets(spell wotlk.Spell) []uint64 {
 	}
 	s.server.motionMu.Unlock()
 	for _, motion := range motions {
-		if motion.Map != player.Map || motion.Health == 0 || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) || distance3D(motion.X, motion.Y, motion.Z, player.X, player.Y, player.Z) > float64(radius) || !s.server.isHostileFaction(motion.Faction, player) {
-			continue
+		accept(motion.GUID, motion.Map, motion.X, motion.Y, motion.Z, motion.Faction, motion.UnitFlags, motion.FlagsExtra, motion.Health)
+	}
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.map, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0), COALESCE(t.unit_flags, 0), COALESCE(t.flags_extra, 0), COALESCE(c.curhealth, 0) FROM creature AS c JOIN creature_template AS t ON t.entry = c.id WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?`, player.Map, float64(centerX-radius), float64(centerX+radius), float64(centerY-radius), float64(centerY+radius))
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var low, entry, mapID, faction, unitFlags, flagsExtra, health int64
+				var x, y, z float64
+				if rows.Scan(&low, &entry, &mapID, &x, &y, &z, &faction, &unitFlags, &flagsExtra, &health) == nil {
+					accept(creatureWorldGUID(uint32(low), uint32(entry)), uint32(mapID), float32(x), float32(y), float32(z), uint32(faction), uint32(unitFlags), uint32(flagsExtra), uint32(health))
+				}
+			}
 		}
-		if _, ok := seen[motion.GUID]; ok {
-			continue
-		}
-		seen[motion.GUID] = struct{}{}
-		targets = append(targets, motion.GUID)
 	}
 	return targets
 }
@@ -177,23 +231,23 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	}
 	nowUnix := time.Now().Unix()
 	if s.isSchoolLocked(spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_NOT_READY = 47
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "school lockout active")
 		return true
 	}
 	if s.hasAuraType(18) && (spell.SchoolMask > 1 || spell.SchoolMask == 0) && spell.PreventionType != spellPreventionTypePacify {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 48), true) // SPELL_FAILED_SILENCED = 48
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedSilenced), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "silenced")
 		return true
 	}
 	if s.isGCDActive(spell) {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_NOT_READY = 47
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
 		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "global cooldown active")
 		return true
 	}
 	for _, cd := range s.player.Cooldowns {
 		if cd.Spell == spellID && cd.End > nowUnix {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_NOT_READY = 47
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotReady), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "on cooldown")
 			return true
 		}
@@ -201,7 +255,7 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	// Self-cast only spells (e.g. Demon Skin, Demon Armor, Ice Barrier) must always target the caster
 	if isSelfCastOnly(spell) {
 		if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 && target.UnitGUID != s.playerGUID {
-			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 2), true) // SPELL_FAILED_BAD_TARGETS = 2
+			_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedBadTargets), true)
 			s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "self-cast only spell cannot target other units")
 			return true
 		}
@@ -397,7 +451,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 	areaSpell := isAreaEnemySpell(spell)
 	if areaSpell {
-		hitTargets = s.spellAreaEnemyTargets(spell)
+		hitTargets = s.spellAreaEnemyTargets(ctx, spell, target)
 	}
 	targetGUID := uint64(0)
 	if len(hitTargets) > 0 {
@@ -606,12 +660,20 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					durationMs = 1800000 // 30 min default for passive buffs
 				}
 				periodMs := eff.AuraPeriod
-				if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 24 || eff.Aura == 89) {
+				if periodMs == 0 && (eff.Aura == 3 || eff.Aura == 8 || eff.Aura == 23 || eff.Aura == 24 || eff.Aura == 89) {
 					periodMs = 3000
 				}
 				amount := uint32(eff.BasePoints + 1)
+				if amount <= 1 && isAreaEnemySpell(spell) {
+					for _, areaEffect := range spell.Effects {
+						if areaEffect.Effect == 27 && areaEffect.BasePoints >= 0 {
+							amount = uint32(areaEffect.BasePoints + 1)
+							break
+						}
+					}
+				}
 				if amount == 0 {
-					if eff.Aura == 3 || eff.Aura == 89 {
+					if eff.Aura == 3 || eff.Aura == 23 || eff.Aura == 89 {
 						amount = uint32(10 + int(s.player.Level)*2)
 					} else if eff.Aura == 8 || eff.Aura == 20 {
 						amount = uint32(15 + int(s.player.Level)*3)
@@ -619,7 +681,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 				// Spell power bonus for periodic effects and absorption shields (TrinityCore Unit::SpellDamageBonusDone / SpellHealingBonusDone)
 				if s.player != nil && s.player.SpellPower > 0 {
-					if periodMs > 0 && (eff.Aura == 3 || eff.Aura == 89 || eff.Aura == 8 || eff.Aura == 20) {
+					if periodMs > 0 && (eff.Aura == 3 || eff.Aura == 23 || eff.Aura == 89 || eff.Aura == 8 || eff.Aura == 20) {
 						tickBonus := uint32(math.Round(float64(s.player.SpellPower) * (float64(periodMs) / 15000.0)))
 						amount += tickBonus
 					} else if eff.Aura == SpellAuraSchoolAbsorb || eff.Aura == SpellAuraManaShield || eff.Aura == SpellAuraMagicAbsorb {
@@ -634,7 +696,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 
 				for _, effectTarget := range hitTargets {
 					auraTarget := s.playerGUID
-					if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) || isReflected {
+					if isHarmfulSpell(spell) && isAreaEnemySpell(spell) && effectTarget != 0 && effectTarget != s.playerGUID {
+						auraTarget = effectTarget
+					} else if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) || isReflected {
 						auraTarget = s.playerGUID
 					} else if eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) {
 						if effectTarget != 0 && effectTarget != s.playerGUID {
@@ -1263,7 +1327,7 @@ func (s *session) interruptCurrentCast() {
 		s.activeCast = nil
 		s.castMu.Unlock()
 
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 24), true) // SPELL_FAILED_INTERRUPTED = 24
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
 		return
 	}
 	s.castMu.Unlock()
@@ -1285,12 +1349,12 @@ func (s *session) handleCancelCast(payload []byte) bool {
 		s.activeCast = nil
 		s.castMu.Unlock()
 
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, 24), true) // SPELL_FAILED_INTERRUPTED = 24
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(curCastID, curSpellID, spellFailedInterrupted), true)
 		return true
 	}
 	s.castMu.Unlock()
 
-	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 24), true)
+	_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedInterrupted), true)
 	return true
 }
 
@@ -1343,6 +1407,8 @@ func isHarmfulAura(auraType uint32) bool {
 	switch auraType {
 	case 3: // SPELL_AURA_PERIODIC_DAMAGE
 		return true
+	case 23: // persistent-area periodic damage data
+		return true
 	case 5: // SPELL_AURA_MOD_CONFUSE
 		return true
 	case 6: // SPELL_AURA_MOD_CHARM
@@ -1377,6 +1443,9 @@ func isHarmfulSpell(spell wotlk.Spell) bool {
 			return true
 		}
 		if eff.Effect == 6 && isHarmfulAura(eff.Aura) {
+			return true
+		}
+		if eff.Effect == 27 && isHarmfulAura(eff.Aura) {
 			return true
 		}
 		if eff.ImplicitTargetA == 6 || eff.ImplicitTargetA == 15 || eff.ImplicitTargetA == 16 {
@@ -1996,7 +2065,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	}
 
 	switch aura.AuraType {
-	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
+	case 3, 23, 89: // SPELL_AURA_PERIODIC_DAMAGE, persistent-area damage, percent damage
 		dmg := aura.Amount
 		resisted := uint32(0)
 		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {

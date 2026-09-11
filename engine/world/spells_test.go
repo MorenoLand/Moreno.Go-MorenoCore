@@ -374,9 +374,11 @@ func TestSpellAreaEnemyTargetsExcludeCaster(t *testing.T) {
 	}
 	hostileGUID := creatureWorldGUID(100, 68)
 	friendlyGUID := creatureWorldGUID(101, 68)
+	rearHostileGUID := creatureWorldGUID(102, 68)
 	server := &Server{Data: wotlk.NewStore(dbcDir), creatureMotion: map[uint64]*creatureMotion{
-		hostileGUID:  {GUID: hostileGUID, Map: 0, X: 3, Y: 0, Z: 0, Faction: 14, Health: 100, MaxHealth: 100},
-		friendlyGUID: {GUID: friendlyGUID, Map: 0, X: 3, Y: 1, Z: 0, Faction: 1, Health: 100, MaxHealth: 100},
+		hostileGUID:     {GUID: hostileGUID, Map: 0, X: 3, Y: 0, Z: 0, Faction: 14, Health: 100, MaxHealth: 100},
+		friendlyGUID:    {GUID: friendlyGUID, Map: 0, X: 3, Y: 1, Z: 0, Faction: 1, Health: 100, MaxHealth: 100},
+		rearHostileGUID: {GUID: rearHostileGUID, Map: 0, X: -3, Y: 0, Z: 0, Faction: 14, Health: 100, MaxHealth: 100},
 	}}
 	sess := &session{server: server, playerGUID: 1, player: &playerState{GUID: 1, Map: 0, Race: 1, Class: 8, Level: 21, X: 0, Y: 0, Z: 0}}
 	spell := wotlk.Spell{ID: 122, SchoolMask: 16, Effects: [3]wotlk.SpellEffect{{Effect: 2, ImplicitTargetA: 22, RadiusIndex: 13}, {Effect: 6, Aura: 26, ImplicitTargetA: 22, RadiusIndex: 13}}}
@@ -386,10 +388,29 @@ func TestSpellAreaEnemyTargetsExcludeCaster(t *testing.T) {
 	if !server.isHostileFaction(14, playerPos{Race: 1}) {
 		t.Fatal("expected faction 14 to be hostile to race 1")
 	}
-	targets := sess.spellAreaEnemyTargets(spell)
-	if len(targets) != 1 || targets[0] != hostileGUID {
-		t.Fatalf("area targets=%v, want only hostile creature %x", targets, hostileGUID)
+	targets := sess.spellAreaEnemyTargets(context.Background(), spell, protocol.SpellTargetData{})
+	if len(targets) != 2 || !containsGUID(targets, hostileGUID) || !containsGUID(targets, rearHostileGUID) || containsGUID(targets, friendlyGUID) {
+		t.Fatalf("area targets=%v, want both hostile creatures", targets)
 	}
+	coneSpell := wotlk.Spell{ID: 51490, SchoolMask: 8, Effects: [3]wotlk.SpellEffect{{Effect: 2, ImplicitTargetA: 24, RadiusIndex: 13}}}
+	coneTargets := sess.spellAreaEnemyTargets(context.Background(), coneSpell, protocol.SpellTargetData{})
+	if len(coneTargets) != 1 || coneTargets[0] != hostileGUID {
+		t.Fatalf("cone targets=%v, want only front hostile creature %x", coneTargets, hostileGUID)
+	}
+	groundSpell := wotlk.Spell{ID: 5740, SchoolMask: 4, Effects: [3]wotlk.SpellEffect{{Effect: 27, BasePoints: 41, ImplicitTargetA: 28, RadiusIndex: 13}, {Effect: 6, Aura: 23, ImplicitTargetA: 1, AuraPeriod: 2000}}}
+	groundTargets := sess.spellAreaEnemyTargets(context.Background(), groundSpell, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagDestLocation, Destination: protocol.SpellTargetLocation{X: 3, Y: 0, Z: 0}})
+	if len(groundTargets) != 2 {
+		t.Fatalf("ground targets=%v, want both hostile creatures around destination", groundTargets)
+	}
+}
+
+func containsGUID(values []uint64, want uint64) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestSpellCastPowerDeductionAndBroadcast(t *testing.T) {
@@ -549,7 +570,7 @@ func TestCancelCastInterruptsSpellTimerAndSendsFailed(t *testing.T) {
 	cid, _ := r.ReadU8()
 	sid, _ := r.ReadU32()
 	res, _ := r.ReadU8()
-	if cid != 1 || sid != 133 || res != 24 { // 24 = SPELL_FAILED_INTERRUPTED
+	if cid != 1 || sid != 133 || res != spellFailedInterrupted {
 		t.Fatalf("unexpected fields: castID=%d spellID=%d result=%d (expected 24)", cid, sid, res)
 	}
 

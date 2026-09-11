@@ -2730,7 +2730,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if err := s.write(opcodeAuthResponse, authBuf.Bytes(), true); err != nil {
 		return false
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_ADDON_INFO), []byte{0, 0, 0, 0}, true); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_ADDON_INFO), buildAddonInfoResponse(b.Bytes()[b.Position():]), true); err != nil {
 		return false
 	}
 
