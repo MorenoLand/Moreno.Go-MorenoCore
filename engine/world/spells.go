@@ -1396,6 +1396,7 @@ type activeAura struct {
 	StackCount         uint8
 	RemainingCharges   uint8
 	AuraInterruptFlags uint32
+	TriggerSpell       uint32
 	DRGroup            DiminishingGroup
 	DamageTaken        uint32
 	Timer              *time.Timer
@@ -1406,8 +1407,6 @@ type activeAura struct {
 func isHarmfulAura(auraType uint32) bool {
 	switch auraType {
 	case 3: // SPELL_AURA_PERIODIC_DAMAGE
-		return true
-	case 23: // persistent-area periodic damage data
 		return true
 	case 5: // SPELL_AURA_MOD_CONFUSE
 		return true
@@ -1445,7 +1444,7 @@ func isHarmfulSpell(spell wotlk.Spell) bool {
 		if eff.Effect == 6 && isHarmfulAura(eff.Aura) {
 			return true
 		}
-		if eff.Effect == 27 && isHarmfulAura(eff.Aura) {
+		if eff.Effect == 27 && (eff.TriggerSpell != 0 || eff.Aura == 3 || eff.Aura == 89 || isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) || eff.ImplicitTargetA == 18 || eff.ImplicitTargetB == 18) {
 			return true
 		}
 		if eff.ImplicitTargetA == 6 || eff.ImplicitTargetA == 15 || eff.ImplicitTargetA == 16 {
@@ -1840,6 +1839,9 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 
 	positive := !isHarmfulAura(eff.Aura) && eff.ImplicitTargetA != 6
+	if isAreaEnemySpell(spell) {
+		positive = false
+	}
 
 	// Target is a player (self or other online player)
 	var targetSess *session
@@ -1930,6 +1932,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			Positive:           positive,
 			CasterLevel:        s.player.Level,
 			AuraInterruptFlags: spell.AuraInterruptFlags,
+			TriggerSpell:       eff.TriggerSpell,
 			DRGroup:            drGroup,
 		}
 		targetSess.activeAuras[spell.ID] = aura
@@ -1990,20 +1993,21 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 	}
 	slot := uint8(len(s.server.activeCreatureAuras[targetGUID]) % 64)
 	aura := &activeAura{
-		SpellID:     spell.ID,
-		DispelType:  spell.DispelType,
-		Mechanic:    spell.Mechanic,
-		AuraType:    eff.Aura,
-		CasterGUID:  s.playerGUID,
-		TargetGUID:  targetGUID,
-		SchoolMask:  schoolMask,
-		Amount:      amount,
-		DurationMs:  durationMs,
-		PeriodMs:    periodMs,
-		RemainingMs: durationMs,
-		Slot:        slot,
-		Positive:    positive,
-		CasterLevel: s.player.Level,
+		SpellID:      spell.ID,
+		DispelType:   spell.DispelType,
+		Mechanic:     spell.Mechanic,
+		AuraType:     eff.Aura,
+		CasterGUID:   s.playerGUID,
+		TargetGUID:   targetGUID,
+		SchoolMask:   schoolMask,
+		Amount:       amount,
+		DurationMs:   durationMs,
+		PeriodMs:     periodMs,
+		RemainingMs:  durationMs,
+		Slot:         slot,
+		Positive:     positive,
+		CasterLevel:  s.player.Level,
+		TriggerSpell: eff.TriggerSpell,
 	}
 	s.server.activeCreatureAuras[targetGUID][spell.ID] = aura
 	s.server.auraMu.Unlock()
@@ -2065,7 +2069,7 @@ func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
 	}
 
 	switch aura.AuraType {
-	case 3, 23, 89: // SPELL_AURA_PERIODIC_DAMAGE, persistent-area damage, percent damage
+	case 3, 89: // SPELL_AURA_PERIODIC_DAMAGE, SPELL_AURA_PERIODIC_DAMAGE_PERCENT
 		dmg := aura.Amount
 		resisted := uint32(0)
 		if aura.SchoolMask&1 != 0 && ts.player.Armor > 0 {
@@ -2348,6 +2352,16 @@ func (s *session) executePeriodicTickOnCreature(aura *activeAura) bool {
 			}
 			s.server.motionMu.Unlock()
 			s.server.broadcastCreatureValuesUpdate(target.Map, target.GUID, map[int]uint32{unitFieldHealth: newHP})
+		}
+		return true
+
+	case 23: // SPELL_AURA_PERIODIC_TRIGGER_SPELL
+		if aura.TriggerSpell != 0 && s.server != nil && s.server.Data != nil {
+			if trigger, found, err := s.server.Data.Spell(aura.TriggerSpell); err == nil && found {
+				if damage, ok := creatureSpellDamage(trigger); ok && damage > 0 {
+					s.executeSpellDamage(ctx, aura.TargetGUID, aura.TriggerSpell, damage)
+				}
+			}
 		}
 		return true
 
