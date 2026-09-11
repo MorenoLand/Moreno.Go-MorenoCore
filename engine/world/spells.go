@@ -23,6 +23,7 @@ const (
 	spellFailedEquippedItemClass         uint8 = 29 // SPELL_FAILED_EQUIPPED_ITEM_CLASS (SharedDefines.h:1011)
 	spellFailedEquippedItemClassMainhand uint8 = 30 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_MAINHAND (SharedDefines.h:1012)
 	spellFailedEquippedItemClassOffhand  uint8 = 31 // SPELL_FAILED_EQUIPPED_ITEM_CLASS_OFFHAND (SharedDefines.h:1013)
+	spellFailedNotInFront                uint8 = 61 // SPELL_FAILED_NOT_INFRONT (SharedDefines.h:1042)
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
@@ -283,10 +284,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 
 			// 2. Target facing caster requirement (SPELL_ATTR0_CU_REQ_TARGET_FACING_CASTER = 0x10000):
 			// Target must have caster in its frontal 180° arc (e.g. Gouge).
-			// Returns SPELL_FAILED_NOT_INFRONT = 58 ("You must be in front of your target.").
+			// Returns SPELL_FAILED_NOT_INFRONT = 61 ("You must be in front of your target.").
 			if customAttr&SpellCustomAttrReqTargetFacingCaster != 0 {
 				if !hasInArc(tgt.Orientation, tgt.X, tgt.Y, s.player.X, s.player.Y, math.Pi) {
-					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 58), true) // SPELL_FAILED_NOT_INFRONT = 58
+					_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotInFront), true)
 					s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "target not facing caster")
 					return true
 				}

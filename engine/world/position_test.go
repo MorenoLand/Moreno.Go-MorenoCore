@@ -328,7 +328,7 @@ func TestSpellCast_GougeFacingRequirement(t *testing.T) {
 	protocol.WriteSpellTargetData(castPkt, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID})
 
 	// Case A: Target is facing +X (away from caster at 0, 0).
-	// Gouge requires target to face caster -> fails with SPELL_FAILED_NOT_INFRONT (58).
+	// Gouge requires target to face caster -> fails with SPELL_FAILED_NOT_INFRONT (61).
 	sess.handleCastSpell(ctx, castPkt.Bytes())
 
 	pkt := readPacketTimeout(t, frames)
@@ -339,8 +339,8 @@ func TestSpellCast_GougeFacingRequirement(t *testing.T) {
 	_, _ = reader.ReadU8()
 	_, _ = reader.ReadU32()
 	failReason, _ := reader.ReadU8()
-	if failReason != 58 { // SPELL_FAILED_NOT_INFRONT = 58
-		t.Fatalf("expected fail reason SPELL_FAILED_NOT_INFRONT (58), got %d", failReason)
+	if failReason != spellFailedNotInFront {
+		t.Fatalf("expected fail reason SPELL_FAILED_NOT_INFRONT (61), got %d", failReason)
 	}
 
 	// Case B: Target turns to face caster (Orientation = math.Pi).
