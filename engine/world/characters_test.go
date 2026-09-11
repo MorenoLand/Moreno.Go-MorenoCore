@@ -311,6 +311,41 @@ func TestPlayerStartAllSpellsConfigGating(t *testing.T) {
 	}
 }
 
+func TestCompleteLogoutCleansStateBeforeCompletionPacket(t *testing.T) {
+	root, err := packageRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stores := makeMemoryStores(t, root)
+	server := NewServer(stores, slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{server: server, conn: serverConn, accountID: 7, playerGUID: 9, playerLoaded: true, player: &playerState{GUID: 9, Name: "Logout", Level: 20, Health: 100, MaxHealth: 100}, activeAuras: map[uint32]*activeAura{123: {SpellID: 123, Slot: 0, CasterGUID: 9}}, auras: map[uint32]struct{}{123: {}}, auraSlots: map[uint32]uint8{123: 0}}
+	done := make(chan error, 1)
+	go func() { done <- sess.completeLogout(context.Background()) }()
+	seenCompletion := false
+	for {
+		opcode, _, readErr := readServerFrame(clientConn, nil)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if opcode == uint16(protocol.OpcodeSMSG_LOGOUT_COMPLETE) {
+			seenCompletion = true
+			break
+		}
+		if seenCompletion {
+			t.Fatalf("cleanup packet arrived after logout completion: 0x%x", opcode)
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !seenCompletion || sess.playerLoaded || sess.player != nil {
+		t.Fatalf("logout state loaded=%v player=%v", sess.playerLoaded, sess.player)
+	}
+}
+
 func makeMemoryStores(t *testing.T, root string) *database.Set {
 	t.Helper()
 	open := func(name string) *database.Store {

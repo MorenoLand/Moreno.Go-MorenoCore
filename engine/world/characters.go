@@ -1692,6 +1692,17 @@ func (s *session) completeLogout(ctx context.Context) error {
 		return nil
 	}
 	s.triggerLogout(ctx)
+	s.releaseActiveLoot()
+	if s.trade != nil {
+		_ = s.handleCancelTrade(ctx)
+	}
+	if s.server != nil {
+		s.server.removeSessionChannels(s)
+	}
+	if s.player != nil && s.player.PetGUID != 0 {
+		s.unsummonPet(ctx, petSaveAsCurrent)
+	}
+	s.clearActiveAuras()
 	var firstErr error
 	if err := s.savePlayerState(ctx, 0); err != nil {
 		firstErr = err
@@ -1706,10 +1717,6 @@ func (s *session) completeLogout(ctx context.Context) error {
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGOUT_COMPLETE), nil, true); err != nil {
 		return err
 	}
-	if s.player != nil && s.player.PetGUID != 0 {
-		s.unsummonPet(ctx, petSaveAsCurrent)
-	}
-	s.clearActiveAuras()
 	s.playerLoaded = false
 	s.player = nil
 	s.logoutAt = time.Time{}
