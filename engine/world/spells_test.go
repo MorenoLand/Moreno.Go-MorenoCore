@@ -300,6 +300,17 @@ func TestCalculateSpellPowerCost_ManaCostPct(t *testing.T) {
 	}
 }
 
+func TestSpellDamageUsesDBCBasePointsWithoutLevelFallback(t *testing.T) {
+	const creatureGUID = uint64(100)
+	srv := &Server{creatureMotion: map[uint64]*creatureMotion{creatureGUID: {GUID: creatureGUID, Health: 100, MaxHealth: 100, Level: 1}}, sessions: make(map[*session]struct{})}
+	sess := &session{server: srv, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Level: 80, CombatRatings: [25]uint32{CombatRatingHitSpell: 1000}}}
+	spell := wotlk.Spell{ID: 123, Effects: [3]wotlk.SpellEffect{{Effect: 2, BasePoints: 0}}}
+	sess.finishSpellCast(context.Background(), 1, spell.ID, spell, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: creatureGUID})
+	if got := srv.creatureMotion[creatureGUID].Health; got != 99 {
+		t.Fatalf("health=%d, want 99 after one DBC damage point", got)
+	}
+}
+
 func TestIsSelfCastOnly(t *testing.T) {
 	// Demon Armor (all active effects target TARGET_UNIT_CASTER = 1)
 	selfSpell := wotlk.Spell{

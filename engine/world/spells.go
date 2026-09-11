@@ -518,17 +518,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			switch eff.Effect {
 			case 2, 17, 31, 58, 87: // Damage effects (School damage, Weapon damage, etc.)
 				damage := uint32(eff.BasePoints + 1)
-				if damage <= 1 {
-					damage = uint32(20 + int(s.player.Level)*10)
-				}
 				if targetGUID != 0 && (targetGUID != s.playerGUID || isReflected) {
 					s.executeSpellDamage(effCtx, targetGUID, spellID, damage)
 				}
 			case 10, 136, 105: // Heal effects
 				heal := uint32(eff.BasePoints + 1)
-				if heal == 0 {
-					heal = uint32(30 + int(s.player.Level)*15)
-				}
 				s.executeSpellHeal(effCtx, targetGUID, spellID, heal)
 			case 6, 27, 35: // Apply Aura
 				durationMs := uint32(0)
