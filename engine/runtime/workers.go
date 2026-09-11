@@ -56,17 +56,21 @@ func (p *WorkerPool) Close() {
 	p.mu.Lock()
 	if !p.closed {
 		p.closed = true
-		p.cancel()
+		close(p.tasks)
 	}
 	p.mu.Unlock()
 	p.wg.Wait()
+	p.cancel()
 }
 
 func (p *WorkerPool) worker() {
 	defer p.wg.Done()
 	for {
 		select {
-		case task := <-p.tasks:
+		case task, ok := <-p.tasks:
+			if !ok {
+				return
+			}
 			if task != nil {
 				_ = task(p.ctx)
 			}

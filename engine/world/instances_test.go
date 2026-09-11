@@ -199,6 +199,16 @@ func TestItemsQuestsAndSpells(t *testing.T) {
 	}
 
 	// Movement ACKs
+	movementPayload := protocol.NewBuffer(40)
+	movementPayload.WritePackedGUID(sess.playerGUID)
+	movementPayload.WriteU32(0)
+	movementPayload.WriteU16(0)
+	movementPayload.WriteU32(0)
+	movementPayload.WriteF32(0)
+	movementPayload.WriteF32(0)
+	movementPayload.WriteF32(0)
+	movementPayload.WriteF32(0)
+	movementPayload.WriteU32(0)
 	if !sess.handleMoveFeatherFallAck(ctx, nil) ||
 		!sess.handleMoveHoverAck(ctx, nil) ||
 		!sess.handleMoveWaterWalkAck(ctx, nil) ||
@@ -206,8 +216,8 @@ func TestItemsQuestsAndSpells(t *testing.T) {
 		!sess.handleMoveNotActiveMover(ctx, nil) ||
 		!sess.handleMoveFallReset(ctx, nil) ||
 		!sess.handleMoveSplineDone(ctx, nil) ||
-		!sess.handleMoveChngTransport(ctx, nil) ||
-		!sess.handleMoveSetFly(ctx, nil) ||
+		!sess.handleMoveChngTransport(ctx, movementPayload.Bytes()) ||
+		!sess.handleMoveSetFly(ctx, movementPayload.Bytes()) ||
 		!sess.handleSummonResponse(ctx, nil) ||
 		!sess.handleMountSpecialAnim(ctx, nil) {
 		t.Fatal("movement ack handlers returned false")

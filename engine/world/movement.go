@@ -518,12 +518,12 @@ func (s *session) handleMoveSplineDone(ctx context.Context, payload []byte) bool
 
 // handleMoveChngTransport processes CMSG_MOVE_CHNG_TRANSPORT (0x38D).
 func (s *session) handleMoveChngTransport(ctx context.Context, payload []byte) bool {
-	return true
+	return s.handleMovement(ctx, uint32(protocol.OpcodeCMSG_MOVE_CHNG_TRANSPORT), payload)
 }
 
 // handleMoveSetFly processes CMSG_MOVE_SET_FLY (0x0D6).
 func (s *session) handleMoveSetFly(ctx context.Context, payload []byte) bool {
-	return true
+	return s.handleMovement(ctx, uint32(protocol.OpcodeCMSG_MOVE_SET_FLY), payload)
 }
 
 // handleMoveTimeSkipped processes CMSG_MOVE_TIME_SKIPPED (0x2CE).

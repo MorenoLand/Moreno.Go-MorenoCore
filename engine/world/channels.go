@@ -1002,20 +1002,39 @@ func (s *session) handleGetChannelMemberCount(ctx context.Context, payload []byt
 
 // handleDeclineChannelInvite processes CMSG_DECLINE_CHANNEL_INVITE (0x264).
 func (s *session) handleDeclineChannelInvite(ctx context.Context, payload []byte) bool {
+	s.debug("channel invite declined", "account", s.accountName)
 	return true
 }
 
 // handleSetActiveVoiceChannel processes CMSG_SET_ACTIVE_VOICE_CHANNEL (0x3D3).
 func (s *session) handleSetActiveVoiceChannel(ctx context.Context, payload []byte) bool {
+	r := protocol.NewReader(payload)
+	if _, err := r.ReadU32(); err != nil {
+		return false
+	}
+	if _, err := r.ReadCString(); err != nil {
+		return false
+	}
 	return true
 }
 
 // handleVoiceSessionEnable processes CMSG_VOICE_SESSION_ENABLE (0x3AF).
 func (s *session) handleVoiceSessionEnable(ctx context.Context, payload []byte) bool {
+	r := protocol.NewReader(payload)
+	if _, err := r.ReadU8(); err != nil {
+		return false
+	}
+	if _, err := r.ReadU8(); err != nil {
+		return false
+	}
 	return true
 }
 
 // handleSetChannelWatch processes CMSG_SET_CHANNEL_WATCH (0x3EF).
 func (s *session) handleSetChannelWatch(ctx context.Context, payload []byte) bool {
+	r := protocol.NewReader(payload)
+	if _, err := r.ReadCString(); err != nil {
+		return false
+	}
 	return true
 }
