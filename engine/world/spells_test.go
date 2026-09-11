@@ -388,7 +388,7 @@ func TestSpellCastPowerDeductionAndBroadcast(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op1 != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && op1 != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+	if op1 != uint16(protocol.OpcodeSMSG_POWER_UPDATE) {
 		t.Fatalf("expected power update, got 0x%x", op1)
 	}
 	op2, _, err := readServerFrame(casterClientConn, nil)
@@ -404,7 +404,7 @@ func TestSpellCastPowerDeductionAndBroadcast(t *testing.T) {
 	if observer.err != nil {
 		t.Fatal(observer.err)
 	}
-	if observer.opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && observer.opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+	if observer.opcode != uint16(protocol.OpcodeSMSG_POWER_UPDATE) {
 		t.Fatalf("expected observer to receive power update, got 0x%x", observer.opcode)
 	}
 

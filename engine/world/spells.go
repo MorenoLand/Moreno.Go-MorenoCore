@@ -424,14 +424,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		} else {
 			s.player.Powers[pType] = 0
 		}
-		fields := map[int]uint32{
-			unitFieldPower1 + int(pType): s.player.Powers[pType],
-		}
+		powerPacket := protocol.NewBuffer(13)
+		powerPacket.WritePackedGUID(s.playerGUID)
+		powerPacket.WriteU8(uint8(pType))
+		powerPacket.WriteU32(s.player.Powers[pType])
+		_ = s.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), true)
 		if s.server != nil {
-			if pVal, pErr := s.server.buildPlayerValuesUpdate(s.playerGUID, fields); pErr == nil && pVal != nil {
-				_ = s.write(pVal.Opcode, pVal.Payload.Bytes(), true)
-				s.server.broadcastToNearby(pVal.Opcode, pVal.Payload.Bytes(), s)
-			}
+			s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), powerPacket.Bytes(), s)
 		}
 		if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 			col := fmt.Sprintf("power%d", pType+1)
