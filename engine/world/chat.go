@@ -213,7 +213,12 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	}
 	s.sessionsMu.RUnlock()
 	for _, target := range targets {
-		outType, senderGUID, receiverGUID := chatType, source.playerGUID, uint64(0)
+		receiverGUID := uint64(0)
+		switch chatType {
+		case chatSay, chatYell, chatEmote, chatChannel:
+			receiverGUID = source.playerGUID
+		}
+		outType, senderGUID := chatType, source.playerGUID
 		if receiver != nil {
 			if target == receiver {
 				receiverGUID = source.playerGUID

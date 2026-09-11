@@ -67,7 +67,7 @@ func TestBroadcastSayUsesSenderReceiverGUID(t *testing.T) {
 	if _, err := reader.ReadU32(); err != nil {
 		t.Fatal(err)
 	}
-	if value, err := reader.ReadU64(); err != nil || value != 0 {
+	if value, err := reader.ReadU64(); err != nil || value != 99 {
 		t.Fatalf("receiver=%d err=%v", value, err)
 	}
 	<-done
@@ -187,7 +187,7 @@ func TestBroadcastGMChatIncludesChatTag(t *testing.T) {
 			}
 		}
 	}
-	if value, err := reader.ReadU64(); err != nil || value != 0 {
+	if value, err := reader.ReadU64(); err != nil || value != 99 {
 		t.Fatalf("receiver=%d err=%v", value, err)
 	}
 	if _, err := reader.ReadU32(); err != nil {
