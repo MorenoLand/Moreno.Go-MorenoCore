@@ -536,6 +536,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 				maxMP = uint32(curMana)
 			}
 			s.spawnPet(ctx, uint32(petID), uint32(entry), petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
+			_ = s.sendTalentsInfo(true)
 		}
 	}
 	s.sendNewMailNotification(ctx)
