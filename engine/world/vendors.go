@@ -91,7 +91,7 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 
 func vendorStockValue(maxCount int64) int32 {
 	if maxCount <= 0 {
-		return 0
+		return -1
 	}
 	if maxCount > int64(^uint32(0)>>1) {
 		return int32(^uint32(0) >> 1)

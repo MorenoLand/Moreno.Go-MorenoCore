@@ -79,8 +79,8 @@ func TestVendorBuyingAndSelling(t *testing.T) {
 	}
 }
 
-func TestVendorInfiniteStockUsesZeroWireCount(t *testing.T) {
-	if got := vendorStockValue(0); got != 0 {
+func TestVendorInfiniteStockUsesUnlimitedSentinel(t *testing.T) {
+	if got := vendorStockValue(0); got != -1 {
 		t.Fatalf("infinite stock=%d", got)
 	}
 	if got := vendorStockValue(7); got != 7 {
@@ -88,7 +88,7 @@ func TestVendorInfiniteStockUsesZeroWireCount(t *testing.T) {
 	}
 }
 
-func TestVendorListEncodesUnlimitedStockAsZero(t *testing.T) {
+func TestVendorListEncodesUnlimitedStockAsFFFFFFFF(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestVendorListEncodesUnlimitedStockAsZero(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if stock, err := reader.ReadU32(); err != nil || stock != 0 {
+	if stock, err := reader.ReadU32(); err != nil || stock != ^uint32(0) {
 		t.Fatalf("unlimited stock=%d err=%v", stock, err)
 	}
 }
