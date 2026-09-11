@@ -105,6 +105,22 @@ func (s *session) sendGuildCommandResult(cmdType uint32, param string, errCode u
 	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_COMMAND_RESULT), buf.Bytes(), true)
 }
 
+func (s *session) sendGuildLoginInfo(ctx context.Context) {
+	if s == nil || s.player == nil || s.player.GuildID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	var motd string
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT motd FROM guild WHERE guildid = ? LIMIT 1", s.player.GuildID).Scan(&motd); err != nil {
+		return
+	}
+	event := protocol.NewBuffer(len(motd) + 8)
+	event.WriteU8(5)
+	event.WriteU8(1)
+	event.WriteCString(motd)
+	_ = s.write(uint16(protocol.OpcodeSMSG_GUILD_EVENT), event.Bytes(), true)
+	_ = s.handleGuildRoster(ctx)
+}
+
 type guildRankInfo struct {
 	RankID    uint32
 	Name      string

@@ -62,6 +62,21 @@ type mailItemRecord struct {
 	Durability    uint32
 }
 
+func (s *session) sendNewMailNotification(ctx context.Context) {
+	if s == nil || s.playerGUID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	var unread int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM mail
+		WHERE receiver = ? AND deliver_time <= ? AND expire_time > ? AND (COALESCE(checked, 0) & 1) = 0`, s.playerGUID, time.Now().Unix(), time.Now().Unix()).Scan(&unread)
+	if err != nil || unread == 0 {
+		return
+	}
+	packet := protocol.NewBuffer(4)
+	packet.WriteF32(0)
+	_ = s.write(uint16(protocol.OpcodeSMSG_RECEIVED_MAIL), packet.Bytes(), true)
+}
+
 func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return true

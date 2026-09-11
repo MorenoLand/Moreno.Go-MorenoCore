@@ -365,6 +365,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_MOTD), buildMotd(s.server.Config.Motd), true); err != nil {
 		return false
 	}
+	s.sendGuildLoginInfo(ctx)
 	if err := s.write(uint16(protocol.OpcodeSMSG_LEARNED_DANCE_MOVES), buildLearnedDanceMoves(), true); err != nil {
 		return false
 	}
@@ -536,6 +537,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			s.spawnPet(ctx, uint32(petID), uint32(entry), petName, uint32(level), uint32(modelID), uint32(curHealth), maxHP, uint32(curMana), maxMP, uint8(reactState))
 		}
 	}
+	s.sendNewMailNotification(ctx)
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true
 }
