@@ -348,6 +348,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.mounts = mounts
 	s.breathTimer = -1
 	s.fatigueTimer = -1
+	s.playerGUID = guid
+	s.player = &state
+	s.playerLoaded = true
 
 	// Stream core login verification and capabilities
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD), buildLoginVerifyWorld(state), true); err != nil {
@@ -369,6 +372,12 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE), buildBindPointUpdate(&state), true); err != nil {
+		return false
+	}
+	if err := s.sendContactList(ctx, uint32(socialFlagFriend|socialFlagIgnored|socialFlagMuted)); err != nil {
+		return false
+	}
+	if err := s.sendTalentsInfo(false); err != nil {
 		return false
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_INITIAL_SPELLS), buildInitialSpells(state), true); err != nil {
@@ -428,9 +437,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", s.accountID); err != nil {
 		return false
 	}
-	s.playerGUID = guid
-	s.player = &state
-	s.playerLoaded = true
 	s.lastFallZ = state.Z
 	s.lastFallTime = 0
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())

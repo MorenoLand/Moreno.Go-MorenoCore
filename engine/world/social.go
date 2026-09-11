@@ -62,14 +62,20 @@ const (
 func (s *session) sendContactList(ctx context.Context, flags uint32) error {
 	cdb := s.server.CharactersStore.DB
 	if cdb == nil {
-		return nil
+		b := protocol.NewBuffer(8)
+		b.WriteU32(flags)
+		b.WriteU32(0)
+		return s.write(uint16(protocol.OpcodeSMSG_CONTACT_LIST), b.Bytes(), true)
 	}
 	rows, err := cdb.QueryContext(ctx,
 		"SELECT friend, flags, note FROM character_social WHERE guid = ?",
 		s.playerGUID)
 	if err != nil {
 		if missingTable(err) || errors.Is(err, sql.ErrNoRows) {
-			return nil
+			b := protocol.NewBuffer(8)
+			b.WriteU32(flags)
+			b.WriteU32(0)
+			return s.write(uint16(protocol.OpcodeSMSG_CONTACT_LIST), b.Bytes(), true)
 		}
 		return err
 	}

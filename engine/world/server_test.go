@@ -183,6 +183,20 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if bindOpcode != uint16(protocol.OpcodeSMSG_BIND_POINT_UPDATE) || len(bindPayload) != 20 {
 		t.Fatalf("bind point update opcode=%x payload=%d", bindOpcode, len(bindPayload))
 	}
+	contactOpcode, _, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contactOpcode != uint16(protocol.OpcodeSMSG_CONTACT_LIST) {
+		t.Fatalf("contact list opcode=%x", contactOpcode)
+	}
+	talentsOpcode, _, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if talentsOpcode != uint16(protocol.OpcodeSMSG_TALENTS_INFO) {
+		t.Fatalf("talents opcode=%x", talentsOpcode)
+	}
 	initialSpellsOpcode, initialSpellsPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
