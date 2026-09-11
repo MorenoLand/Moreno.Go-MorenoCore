@@ -19,6 +19,7 @@ const (
 	chatWhisper        = 0x07
 	chatEmote          = 0x0A
 	chatChannel        = 0x11
+	chatWhisperInform  = 0x09
 	chatAFK            = 0x17
 	chatDND            = 0x18
 	chatIgnored        = 0x19
@@ -117,6 +118,9 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if language != languageAddon && isGM && (s.gmChat || s.player.ExtraFlags&playerExtraGMChat != 0) {
 		language = languageUniversal
 	}
+	if typeID == chatWhisper && language != languageAddon {
+		language = languageUniversal
+	}
 	values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, scripting.PlayerEventChat, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
 	if hookErr != nil {
 		s.debug("lua chat hook failed", "account", s.accountName, "error", hookErr)
@@ -209,9 +213,13 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 	}
 	s.sessionsMu.RUnlock()
 	for _, target := range targets {
-		receiverGUID := uint64(0)
+		outType, senderGUID, receiverGUID := chatType, source.playerGUID, uint64(0)
 		if receiver != nil {
-			receiverGUID = receiver.playerGUID
+			if target == receiver {
+				receiverGUID = source.playerGUID
+			} else {
+				outType, senderGUID, receiverGUID = chatWhisperInform, receiver.playerGUID, receiver.playerGUID
+			}
 		}
 		tag := source.chatTag()
 		isGM := tag&0x04 != 0
@@ -221,7 +229,7 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			opcode = uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT)
 			senderName = source.player.Name
 		}
-		payload := protocol.BuildChatMessageWithOptions(chatType, language, source.playerGUID, receiverGUID, message, channel, isGM, senderName, tag)
+		payload := protocol.BuildChatMessageWithOptions(outType, language, senderGUID, receiverGUID, message, channel, isGM, senderName, tag)
 		if err := target.write(opcode, payload, true); err != nil {
 			target.debug("chat delivery failed", "account", target.accountName, "error", err)
 		}

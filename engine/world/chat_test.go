@@ -73,6 +73,77 @@ func TestBroadcastSayUsesSenderReceiverGUID(t *testing.T) {
 	<-done
 }
 
+func TestBroadcastWhisperUsesReferenceDirections(t *testing.T) {
+	sourceServer, sourceClient := net.Pipe()
+	targetServer, targetClient := net.Pipe()
+	defer sourceServer.Close()
+	defer sourceClient.Close()
+	defer targetServer.Close()
+	defer targetClient.Close()
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
+	source := &session{server: server, conn: sourceServer, authed: true, playerLoaded: true, playerGUID: 101, player: &playerState{GUID: 101, Name: "Source", Map: 0}}
+	target := &session{server: server, conn: targetServer, authed: true, playerLoaded: true, playerGUID: 202, player: &playerState{GUID: 202, Name: "Target", Map: 0}}
+	server.sessions[source] = struct{}{}
+	server.sessions[target] = struct{}{}
+	result := make(chan struct {
+		opcode  uint16
+		payload []byte
+		err     error
+	}, 2)
+	read := func(conn net.Conn) {
+		opcode, payload, err := readServerFrame(conn, nil)
+		result <- struct {
+			opcode  uint16
+			payload []byte
+			err     error
+		}{opcode, payload, err}
+	}
+	go read(sourceClient)
+	go read(targetClient)
+	go server.broadcastChat(source, target, chatWhisper, languageUniversal, "hello", "")
+	packets := <-result
+	if packets.err != nil {
+		t.Fatal(packets.err)
+	}
+	other := <-result
+	if other.err != nil {
+		t.Fatal(other.err)
+	}
+	seenWhisper, seenInform := false, false
+	for _, packet := range []struct {
+		opcode  uint16
+		payload []byte
+	}{{packets.opcode, packets.payload}, {other.opcode, other.payload}} {
+		if packet.opcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) {
+			t.Fatalf("opcode=%x", packet.opcode)
+		}
+		reader := protocol.NewReader(packet.payload)
+		messageType, err := reader.ReadU8()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = reader.ReadU32()
+		senderGUID, err := reader.ReadU64()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = reader.ReadU32()
+		receiverGUID, err := reader.ReadU64()
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch messageType {
+		case chatWhisper:
+			seenWhisper = senderGUID == source.playerGUID && receiverGUID == source.playerGUID
+		case chatWhisperInform:
+			seenInform = senderGUID == target.playerGUID && receiverGUID == target.playerGUID
+		}
+	}
+	if !seenWhisper || !seenInform {
+		t.Fatalf("whisper directions missing whisper=%v inform=%v", seenWhisper, seenInform)
+	}
+}
+
 func TestBroadcastGMChatIncludesChatTag(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
