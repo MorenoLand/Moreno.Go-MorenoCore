@@ -83,6 +83,10 @@ func buildReport(reference, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	goTestOpcodes, err := goTestHandlers(repo)
+	if err != nil {
+		return "", err
+	}
 	goSessionHandlers, goTrivialHandlers, err := goSessionHandlerAudit(filepath.Join(repo, "engine", "world"))
 	if err != nil {
 		return "", err
@@ -155,6 +159,7 @@ func buildReport(reference, repo string) (string, error) {
 	fmt.Fprintf(&report, "| Client behavioral opcode bindings (reference, non-NULL) | %d | — | — |\n", len(refBehavioralOpcodes))
 	fmt.Fprintf(&report, "| Go session handler definitions | — | %d | — |\n", goSessionHandlers)
 	fmt.Fprintf(&report, "| Go trivial session handlers (`return true/false`) | — | %d | — |\n", len(goTrivialHandlers))
+	fmt.Fprintf(&report, "| Go registered opcodes with static test references | — | %d | — |\n", len(intersection(goOpcodes, goTestOpcodes)))
 	fmt.Fprintf(&report, "| Achievement criteria types | %d | %d | %d |\n", 124, 124, 0)
 	fmt.Fprintf(&report, "| Prepared statement identifiers | %d | %d | %d |\n", len(refStatements), len(goStatements), len(difference(refStatements, goStatements)))
 	fmt.Fprintf(&report, "| Prepared statement SQL mismatches | — | — | %d |\n", len(sqlDifferences(refStatementSQL, goStatementSQL)))
@@ -163,6 +168,7 @@ func buildReport(reference, repo string) (string, error) {
 	fmt.Fprintf(&report, "| Test source files / lines | %d / %d | %d / %d | — |\n", refTests.Files, refTests.Lines, goTests.Files, goTests.Lines)
 	fmt.Fprintf(&report, "\n## Missing behavioral client opcode handlers\n\n%s\n", list(difference(refBehavioralOpcodes, goOpcodes)))
 	fmt.Fprintf(&report, "## Go session handlers with trivial return bodies\n\n%s\n", list(goTrivialHandlers))
+	fmt.Fprintf(&report, "## Go registered opcodes without static test references\n\n%s\n", list(difference(goOpcodes, goTestOpcodes)))
 	fmt.Fprintf(&report, "## Reference client opcodes intentionally bound to Handle_NULL\n\n%s\n", list(refNullOpcodes))
 	fmt.Fprintf(&report, "## Missing prepared statements\n\n%s\n", list(difference(refStatements, goStatements)))
 	fmt.Fprintf(&report, "## Prepared statement SQL mismatches\n\n%s\n", list(sqlDifferences(refStatementSQL, goStatementSQL)))
@@ -296,6 +302,37 @@ func goHandlers(root string) ([]string, error) {
 		}
 		if strings.Contains(text, "opcodeAuthSession") {
 			values["CMSG_AUTH_SESSION"] = struct{}{}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func goTestHandlers(root string) ([]string, error) {
+	values := make(map[string]struct{})
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" || !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, match := range goOpcodePattern.FindAllStringSubmatch(string(data), -1) {
+			if len(match) > 1 && (strings.HasPrefix(match[1], "CMSG_") || strings.HasPrefix(match[1], "MSG_") || strings.HasPrefix(match[1], "UMSG_")) {
+				values[match[1]] = struct{}{}
+			}
 		}
 		return nil
 	})
@@ -493,6 +530,20 @@ func difference(reference, implementation []string) []string {
 		}
 	}
 	return missing
+}
+
+func intersection(left, right []string) []string {
+	known := make(map[string]struct{}, len(right))
+	for _, value := range right {
+		known[value] = struct{}{}
+	}
+	result := make([]string, 0)
+	for _, value := range left {
+		if _, ok := known[value]; ok {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func list(values []string) string {
