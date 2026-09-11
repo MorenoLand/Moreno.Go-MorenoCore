@@ -946,3 +946,9 @@ func (w *wardenSession) forceChecks(ids []uint16) {
 	w.currentChecks = make([]uint16, len(ids))
 	copy(w.currentChecks, ids)
 }
+
+func (w *wardenSession) hasDataSent() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.dataSent
+}

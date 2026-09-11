@@ -334,11 +334,11 @@ func TestWardenFullHandshakeAndChecks(t *testing.T) {
 	sendWardenPacket(t, clientConn, clientEncrypt, sess, resPkt.Bytes())
 
 	deadline := time.Now().Add(2 * time.Second)
-	for sess.warden.dataSent && time.Now().Before(deadline) {
+	for sess.warden.hasDataSent() && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if sess.warden.dataSent {
+	if sess.warden.hasDataSent() {
 		t.Fatal("dataSent should be false after valid check result received")
 	}
 }
