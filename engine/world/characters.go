@@ -1698,6 +1698,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 		_ = s.handleCancelTrade(ctx)
 	}
 	if s.server != nil {
+		s.server.removeSessionFromGroup(s)
 		s.server.removeSessionChannels(s)
 	}
 	if s.player != nil && s.player.PetGUID != 0 {

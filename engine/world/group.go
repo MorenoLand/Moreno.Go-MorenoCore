@@ -234,6 +234,42 @@ func (s *Server) getGroup(id uint64) *groupState {
 	return s.findGroupByID(id)
 }
 
+func (s *Server) removeSessionFromGroup(member *session) {
+	if s == nil || member == nil || member.groupID == 0 {
+		return
+	}
+	g := s.findGroupByID(member.groupID)
+	if g == nil {
+		member.groupID = 0
+		member.pendingGroupLeader = 0
+		return
+	}
+	s.groupsMu.Lock()
+	index := -1
+	for i, value := range g.Members {
+		if value.GUID == member.playerGUID {
+			index = i
+			break
+		}
+	}
+	if index >= 0 {
+		g.Members = append(g.Members[:index], g.Members[index+1:]...)
+	}
+	member.groupID = 0
+	member.pendingGroupLeader = 0
+	s.onPlayerLeaveGroupRolls(member.playerGUID, g.ID)
+	if len(g.Members) == 0 {
+		delete(s.groups, g.ID)
+		s.groupsMu.Unlock()
+		return
+	}
+	if g.LeaderGUID == member.playerGUID {
+		g.LeaderGUID = g.Members[0].GUID
+	}
+	s.groupsMu.Unlock()
+	s.broadcastGroupList(g)
+}
+
 func (s *Server) broadcastGroupList(g *groupState) {
 	g.counter++
 	s.sessionsMu.RLock()
