@@ -296,9 +296,63 @@ func buildInitialSpells(state playerState) []byte {
 	return packet.Bytes()
 }
 
-func buildUnlearnSpells() []byte {
-	packet := protocol.NewBuffer(4)
-	packet.WriteU32(0)
+func (s *session) buildUnlearnSpells(ctx context.Context, state playerState) []byte {
+	active := make(map[uint32]struct{}, len(state.Spells))
+	inactive := make([]uint32, 0)
+	for _, spell := range state.Spells {
+		if spell.Active && !spell.Disabled {
+			active[spell.ID] = struct{}{}
+		} else if !spell.Active && !spell.Disabled {
+			inactive = append(inactive, spell.ID)
+		}
+	}
+	nextRanks := make(map[uint32]uint32)
+	if s != nil && s.server != nil && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		if rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT r1.spell_id, r2.spell_id
+			FROM spell_ranks AS r1 JOIN spell_ranks AS r2
+			ON r1.first_spell_id = r2.first_spell_id AND r2.rank = r1.rank + 1`); err == nil {
+			for rows.Next() {
+				var current, next uint32
+				if rows.Scan(&current, &next) == nil {
+					nextRanks[current] = next
+				}
+			}
+			rows.Close()
+		}
+	}
+	result := make([]uint32, 0, len(inactive))
+	for _, spellID := range inactive {
+		next, ok := nextRanks[spellID]
+		if !ok {
+			continue
+		}
+		if _, ok := active[next]; !ok {
+			continue
+		}
+		if s != nil && s.server != nil && s.server.Data != nil {
+			abilities, found, err := s.server.Data.SkillLineAbilities(spellID)
+			if err != nil || !found || len(abilities) == 0 {
+				continue
+			}
+			superseded := false
+			for _, ability := range abilities {
+				if ability.SupercededBySpell != 0 {
+					superseded = true
+					break
+				}
+			}
+			if superseded {
+				continue
+			}
+		}
+		result = append(result, spellID)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	packet := protocol.NewBuffer(4 + len(result)*4)
+	packet.WriteU32(uint32(len(result)))
+	for _, spellID := range result {
+		packet.WriteU32(spellID)
+	}
 	return packet.Bytes()
 }
 

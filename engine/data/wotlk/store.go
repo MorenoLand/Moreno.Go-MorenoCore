@@ -871,11 +871,16 @@ func (s *Store) GemProperties(id uint32) (GemPropertiesEntry, bool, error) {
 
 // SkillLineAbilityEntry represents a record from SkillLineAbility.dbc.
 type SkillLineAbilityEntry struct {
-	ID        uint32
-	SkillLine uint32
-	Spell     uint32
-	RaceMask  uint32
-	ClassMask uint32
+	ID                uint32
+	SkillLine         uint32
+	Spell             uint32
+	RaceMask          uint32
+	ClassMask         uint32
+	MinSkillLineRank  uint32
+	SupercededBySpell uint32
+	AcquireMethod     uint32
+	TrivialRankHigh   uint32
+	TrivialRankLow    uint32
 }
 
 func (s *Store) loadSkillLineAbilities() {
@@ -895,13 +900,23 @@ func (s *Store) loadSkillLineAbilities() {
 		spell, _ := rec.Uint32(2)
 		raceMask, _ := rec.Uint32(3)
 		classMask, _ := rec.Uint32(4)
+		minSkillLineRank, _ := rec.Uint32(7)
+		supercededBySpell, _ := rec.Uint32(8)
+		acquireMethod, _ := rec.Uint32(9)
+		trivialRankHigh, _ := rec.Uint32(10)
+		trivialRankLow, _ := rec.Uint32(11)
 		if spell > 0 {
 			m[spell] = append(m[spell], SkillLineAbilityEntry{
-				ID:        id,
-				SkillLine: skillLine,
-				Spell:     spell,
-				RaceMask:  raceMask,
-				ClassMask: classMask,
+				ID:                id,
+				SkillLine:         skillLine,
+				Spell:             spell,
+				RaceMask:          raceMask,
+				ClassMask:         classMask,
+				MinSkillLineRank:  minSkillLineRank,
+				SupercededBySpell: supercededBySpell,
+				AcquireMethod:     acquireMethod,
+				TrivialRankHigh:   trivialRankHigh,
+				TrivialRankLow:    trivialRankLow,
 			})
 		}
 	}

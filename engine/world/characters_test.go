@@ -346,6 +346,32 @@ func TestCompleteLogoutCleansStateBeforeCompletionPacket(t *testing.T) {
 	}
 }
 
+func TestBuildUnlearnSpellsUsesKnownNextRank(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE spell_ranks (first_spell_id INTEGER, spell_id INTEGER, rank INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO spell_ranks VALUES (100, 100, 1), (100, 200, 2)"); err != nil {
+		t.Fatal(err)
+	}
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	sess := &session{server: &Server{WorldStore: store}}
+	payload := sess.buildUnlearnSpells(context.Background(), playerState{Spells: []learnedSpell{{ID: 100, Active: false}, {ID: 200, Active: true}}})
+	reader := protocol.NewReader(payload)
+	count, err := reader.ReadU32()
+	if err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	spellID, err := reader.ReadU32()
+	if err != nil || spellID != 100 {
+		t.Fatalf("spell=%d err=%v", spellID, err)
+	}
+}
+
 func makeMemoryStores(t *testing.T, root string) *database.Set {
 	t.Helper()
 	open := func(name string) *database.Store {
