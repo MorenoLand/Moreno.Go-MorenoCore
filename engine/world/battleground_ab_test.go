@@ -129,20 +129,26 @@ func TestABNodeCaptureLifecycle(t *testing.T) {
 	if !handled {
 		t.Fatal("expected handleABBannerUse to return true")
 	}
-	if ab.Nodes[ABNodeStables].State != ABNodeStateContestedAlliance {
-		t.Fatalf("expected Stables state Contested Alliance, got %d", ab.Nodes[ABNodeStables].State)
+	ab.mu.Lock()
+	state, bases := ab.Nodes[ABNodeStables].State, ab.AllianceBasesCount
+	ab.mu.Unlock()
+	if state != ABNodeStateContestedAlliance {
+		t.Fatalf("expected Stables state Contested Alliance, got %d", state)
 	}
-	if ab.AllianceBasesCount != 0 {
-		t.Fatalf("expected Alliance bases count 0 while contested, got %d", ab.AllianceBasesCount)
+	if bases != 0 {
+		t.Fatalf("expected Alliance bases count 0 while contested, got %d", bases)
 	}
 
 	// 2. Wait for fast capture timer to expire -> Controlled Alliance
 	time.Sleep(30 * time.Millisecond)
-	if ab.Nodes[ABNodeStables].State != ABNodeStateControlledAlliance {
-		t.Fatalf("expected Stables state Controlled Alliance after timer, got %d", ab.Nodes[ABNodeStables].State)
+	ab.mu.Lock()
+	state, bases = ab.Nodes[ABNodeStables].State, ab.AllianceBasesCount
+	ab.mu.Unlock()
+	if state != ABNodeStateControlledAlliance {
+		t.Fatalf("expected Stables state Controlled Alliance after timer, got %d", state)
 	}
-	if ab.AllianceBasesCount != 1 {
-		t.Fatalf("expected Alliance bases count 1, got %d", ab.AllianceBasesCount)
+	if bases != 1 {
+		t.Fatalf("expected Alliance bases count 1, got %d", bases)
 	}
 
 	// 3. Horde assaults Alliance-controlled Stables -> Contested Horde
@@ -151,12 +157,15 @@ func TestABNodeCaptureLifecycle(t *testing.T) {
 	if !handled {
 		t.Fatal("expected handleABBannerUse to return true")
 	}
-	if ab.Nodes[ABNodeStables].State != ABNodeStateContestedHorde {
-		t.Fatalf("expected Stables state Contested Horde, got %d", ab.Nodes[ABNodeStables].State)
+	ab.mu.Lock()
+	state, bases = ab.Nodes[ABNodeStables].State, ab.AllianceBasesCount
+	ab.mu.Unlock()
+	if state != ABNodeStateContestedHorde {
+		t.Fatalf("expected Stables state Contested Horde, got %d", state)
 	}
 	// Alliance immediately loses the base count
-	if ab.AllianceBasesCount != 0 {
-		t.Fatalf("expected Alliance bases count to decrease to 0, got %d", ab.AllianceBasesCount)
+	if bases != 0 {
+		t.Fatalf("expected Alliance bases count to decrease to 0, got %d", bases)
 	}
 
 	// 4. Alliance defends before timer expires -> returns immediately to Controlled Alliance!
@@ -165,11 +174,14 @@ func TestABNodeCaptureLifecycle(t *testing.T) {
 	if !handled {
 		t.Fatal("expected handleABBannerUse to return true")
 	}
-	if ab.Nodes[ABNodeStables].State != ABNodeStateControlledAlliance {
-		t.Fatalf("expected Stables to return immediately to Controlled Alliance on defense, got %d", ab.Nodes[ABNodeStables].State)
+	ab.mu.Lock()
+	state, bases = ab.Nodes[ABNodeStables].State, ab.AllianceBasesCount
+	ab.mu.Unlock()
+	if state != ABNodeStateControlledAlliance {
+		t.Fatalf("expected Stables to return immediately to Controlled Alliance on defense, got %d", state)
 	}
-	if ab.AllianceBasesCount != 1 {
-		t.Fatalf("expected Alliance bases count back to 1, got %d", ab.AllianceBasesCount)
+	if bases != 1 {
+		t.Fatalf("expected Alliance bases count back to 1, got %d", bases)
 	}
 
 	// 5. Out of range check (player too far from banner)
@@ -179,7 +191,10 @@ func TestABNodeCaptureLifecycle(t *testing.T) {
 		t.Fatal("expected handleABBannerUse to return true even if out of range")
 	}
 	// State should NOT have changed
-	if ab.Nodes[ABNodeStables].State != ABNodeStateControlledAlliance {
+	ab.mu.Lock()
+	state = ab.Nodes[ABNodeStables].State
+	ab.mu.Unlock()
+	if state != ABNodeStateControlledAlliance {
 		t.Fatal("expected state unchanged when player is out of range")
 	}
 }

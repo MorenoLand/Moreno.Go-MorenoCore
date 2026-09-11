@@ -187,8 +187,11 @@ func TestEOTSFlagPickupDropAndReturn(t *testing.T) {
 
 	// 4. Runner 2 leaves battlefield -> flag drops and auto-returns
 	srv.handleEOTSPlayerLeave(runner2)
-	if eots.FlagState != EOTSFlagStateDropped {
-		t.Fatalf("expected dropped flag after carrier left, got %d", eots.FlagState)
+	eots.mu.Lock()
+	flagState := eots.FlagState
+	eots.mu.Unlock()
+	if flagState != EOTSFlagStateDropped {
+		t.Fatalf("expected dropped flag after carrier left, got %d", flagState)
 	}
 
 	// Override return timer to fast expiry for testing
@@ -206,8 +209,11 @@ func TestEOTSFlagPickupDropAndReturn(t *testing.T) {
 	eots.mu.Unlock()
 
 	time.Sleep(25 * time.Millisecond)
-	if eots.FlagState != EOTSFlagStateAtCenter {
-		t.Fatalf("expected flag returned to center, got %d", eots.FlagState)
+	eots.mu.Lock()
+	flagState = eots.FlagState
+	eots.mu.Unlock()
+	if flagState != EOTSFlagStateAtCenter {
+		t.Fatalf("expected flag returned to center, got %d", flagState)
 	}
 }
 

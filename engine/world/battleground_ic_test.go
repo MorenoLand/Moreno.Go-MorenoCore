@@ -181,30 +181,42 @@ func TestICNodeAssaultAndDefend(t *testing.T) {
 
 	// Alliance assaults the Docks banner
 	srv.handleICGameObjectUse(ctx, allySess, 100, ICGameObjectBannerDocks)
-	if ic.Nodes[ICNodeDocks].State != ICNodeStateConflictA {
-		t.Fatalf("expected Docks to be in ConflictA (1), got %d", ic.Nodes[ICNodeDocks].State)
+	ic.mu.Lock()
+	state, faction := ic.Nodes[ICNodeDocks].State, ic.Nodes[ICNodeDocks].Faction
+	ic.mu.Unlock()
+	if state != ICNodeStateConflictA {
+		t.Fatalf("expected Docks to be in ConflictA (1), got %d", state)
 	}
 
 	// Wait for capture timer to resolve
 	time.Sleep(75 * time.Millisecond)
 
-	if ic.Nodes[ICNodeDocks].State != ICNodeStateControlledA {
-		t.Fatalf("expected Docks to be ControlledA (3), got %d", ic.Nodes[ICNodeDocks].State)
+	ic.mu.Lock()
+	state, faction = ic.Nodes[ICNodeDocks].State, ic.Nodes[ICNodeDocks].Faction
+	ic.mu.Unlock()
+	if state != ICNodeStateControlledA {
+		t.Fatalf("expected Docks to be ControlledA (3), got %d", state)
 	}
-	if ic.Nodes[ICNodeDocks].Faction != ICTeamAlliance {
-		t.Fatalf("expected Docks faction to be Alliance (0), got %d", ic.Nodes[ICNodeDocks].Faction)
+	if faction != ICTeamAlliance {
+		t.Fatalf("expected Docks faction to be Alliance (0), got %d", faction)
 	}
 
 	// Horde now assaults the Docks
 	srv.handleICGameObjectUse(ctx, hordeSess, 101, ICGameObjectBannerDocksA)
-	if ic.Nodes[ICNodeDocks].State != ICNodeStateConflictH {
-		t.Fatalf("expected Docks to be in ConflictH (2), got %d", ic.Nodes[ICNodeDocks].State)
+	ic.mu.Lock()
+	state = ic.Nodes[ICNodeDocks].State
+	ic.mu.Unlock()
+	if state != ICNodeStateConflictH {
+		t.Fatalf("expected Docks to be in ConflictH (2), got %d", state)
 	}
 
 	// Alliance defends the Docks before capture timer expires!
 	srv.handleICGameObjectUse(ctx, allySess, 102, ICGameObjectBannerDocksHCont)
-	if ic.Nodes[ICNodeDocks].State != ICNodeStateControlledA {
-		t.Fatalf("expected Docks to be defended and reverted to ControlledA (3), got %d", ic.Nodes[ICNodeDocks].State)
+	ic.mu.Lock()
+	state = ic.Nodes[ICNodeDocks].State
+	ic.mu.Unlock()
+	if state != ICNodeStateControlledA {
+		t.Fatalf("expected Docks to be defended and reverted to ControlledA (3), got %d", state)
 	}
 }
 

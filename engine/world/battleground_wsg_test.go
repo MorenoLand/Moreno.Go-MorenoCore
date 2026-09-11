@@ -354,7 +354,10 @@ func TestGameObject_DoorAndButtonInteraction(t *testing.T) {
 	// Test scheduleGameObjectReset
 	srv.scheduleGameObjectReset(buttonGUID, 10*time.Millisecond)
 	time.Sleep(25 * time.Millisecond)
-	if button.State != GameObjectStateReady {
-		t.Fatalf("expected button state to reset to Ready (1), got %d", button.State)
+	srv.objectsMu.RLock()
+	state := button.State
+	srv.objectsMu.RUnlock()
+	if state != GameObjectStateReady {
+		t.Fatalf("expected button state to reset to Ready (1), got %d", state)
 	}
 }

@@ -251,21 +251,27 @@ func TestAlteracValley_GraveyardAssaultDefenseAndCapture(t *testing.T) {
 
 	// 1. Alliance assaults Iceblood Graveyard
 	srv.handleAVGameObjectUse(ctx, allySess, 200, AVObjectBannerH)
-	if av.Nodes[nodeID].State != AVNodeStateContestedAlliance {
-		t.Fatalf("expected ContestedAlliance (1), got %d", av.Nodes[nodeID].State)
+	av.mu.Lock()
+	state, owner, hordeReinforcements := av.Nodes[nodeID].State, av.Nodes[nodeID].Owner, av.HordeReinforcements
+	av.mu.Unlock()
+	if state != AVNodeStateContestedAlliance {
+		t.Fatalf("expected ContestedAlliance (1), got %d", state)
 	}
 
 	// 2. Capture timer expires -> Fully controlled by Alliance
 	time.Sleep(100 * time.Millisecond)
-	if av.Nodes[nodeID].State != AVNodeStateControlled {
-		t.Fatalf("expected Controlled (0), got %d", av.Nodes[nodeID].State)
+	av.mu.Lock()
+	state, owner, hordeReinforcements = av.Nodes[nodeID].State, av.Nodes[nodeID].Owner, av.HordeReinforcements
+	av.mu.Unlock()
+	if state != AVNodeStateControlled {
+		t.Fatalf("expected Controlled (0), got %d", state)
 	}
-	if av.Nodes[nodeID].Owner != AVTeamAlliance {
-		t.Fatalf("expected Alliance owner, got %d", av.Nodes[nodeID].Owner)
+	if owner != AVTeamAlliance {
+		t.Fatalf("expected Alliance owner, got %d", owner)
 	}
 	// Graveyards do NOT deduct reinforcements when captured (reinforcements only deduct on towers/captains/players)
-	if av.HordeReinforcements != 600 {
-		t.Fatalf("expected Horde reinforcements to remain 600, got %d", av.HordeReinforcements)
+	if hordeReinforcements != 600 {
+		t.Fatalf("expected Horde reinforcements to remain 600, got %d", hordeReinforcements)
 	}
 
 	// 3. Horde player assaults back
@@ -273,13 +279,19 @@ func TestAlteracValley_GraveyardAssaultDefenseAndCapture(t *testing.T) {
 	hordeSess.player.Y = av.Nodes[nodeID].Y
 	hordeSess.player.Z = av.Nodes[nodeID].Z
 	srv.handleAVGameObjectUse(ctx, hordeSess, 200, AVObjectBannerA)
-	if av.Nodes[nodeID].State != AVNodeStateContestedHorde {
-		t.Fatalf("expected ContestedHorde (2), got %d", av.Nodes[nodeID].State)
+	av.mu.Lock()
+	state = av.Nodes[nodeID].State
+	av.mu.Unlock()
+	if state != AVNodeStateContestedHorde {
+		t.Fatalf("expected ContestedHorde (2), got %d", state)
 	}
 	// Timer expires -> Fully controlled by Horde again
 	time.Sleep(100 * time.Millisecond)
-	if av.Nodes[nodeID].State != AVNodeStateControlled || av.Nodes[nodeID].Owner != AVTeamHorde {
-		t.Fatalf("expected Horde controlled, got state %d owner %d", av.Nodes[nodeID].State, av.Nodes[nodeID].Owner)
+	av.mu.Lock()
+	state, owner = av.Nodes[nodeID].State, av.Nodes[nodeID].Owner
+	av.mu.Unlock()
+	if state != AVNodeStateControlled || owner != AVTeamHorde {
+		t.Fatalf("expected Horde controlled, got state %d owner %d", state, owner)
 	}
 }
 
