@@ -25,6 +25,7 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
 )
 
 const (
@@ -49,6 +50,7 @@ type Server struct {
 	CharactersStore         *database.Store
 	WorldStore              *database.Store
 	Logger                  *slog.Logger
+	TraceRecorder           *protocoltrace.Recorder
 	RealmID                 uint32
 	Config                  config.Config
 	Features                *Features
@@ -627,6 +629,9 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			return
 		}
 		state.debug("world packet received", "account", state.accountName, "opcode", opcodeName(header.Opcode), "size", len(payload))
+		if state.server != nil && state.server.TraceRecorder != nil {
+			state.server.TraceRecorder.Record(protocoltrace.ClientToServer, header.Opcode, payload, opcodeName(header.Opcode))
+		}
 		if !state.logoutAt.IsZero() && !time.Now().Before(state.logoutAt) {
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
@@ -2842,6 +2847,9 @@ func (s *session) decrypt(data []byte) error {
 }
 
 func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
+	if s != nil && s.server != nil && s.server.TraceRecorder != nil {
+		s.server.TraceRecorder.Record(protocoltrace.ServerToClient, uint32(opcode), payload, opcodeName(uint32(opcode)))
+	}
 	if s == nil || s.conn == nil {
 		return nil
 	}

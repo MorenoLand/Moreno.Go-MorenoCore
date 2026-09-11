@@ -21,6 +21,7 @@ func Run(kind *service.Kind) int {
 	workDirAlias := fs.String("work-dir", "", "alias for -work")
 	backend := fs.String("backend", "", "database backend: sqlite, mysql, or mariadb")
 	dataDir := fs.String("data-dir", "", "runtime data directory")
+	tracePath := fs.String("trace", "", "write a world protocol trace JSONL file on shutdown")
 	showVersion := fs.Bool("version", false, "show version")
 	debug := fs.Bool("debug", false, "enable basic authentication and runtime debug logs")
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -56,6 +57,9 @@ func Run(kind *service.Kind) int {
 	if *dataDir != "" {
 		c.DataDir = *dataDir
 	}
+	if *tracePath != "" {
+		c.ProtocolTracePath = *tracePath
+	}
 	c.ResolvePaths()
 	if err := c.Validate(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -85,6 +89,7 @@ func RunCombined() int {
 	workDirAlias := fs.String("work-dir", "", "alias for -work")
 	backend := fs.String("backend", "", "database backend: sqlite, mysql, or mariadb")
 	dataDir := fs.String("data-dir", "", "runtime data directory")
+	tracePath := fs.String("trace", "", "write a world protocol trace JSONL file on shutdown")
 	showVersion := fs.Bool("version", false, "show version")
 	debug := fs.Bool("debug", false, "enable basic authentication and runtime debug logs")
 	authOnly := fs.Bool("auth", false, "run only the authentication service")
@@ -121,6 +126,9 @@ func RunCombined() int {
 	}
 	if *dataDir != "" {
 		c.DataDir = *dataDir
+	}
+	if *tracePath != "" {
+		c.ProtocolTracePath = *tracePath
 	}
 	c.ResolvePaths()
 	if err := c.Validate(); err != nil {

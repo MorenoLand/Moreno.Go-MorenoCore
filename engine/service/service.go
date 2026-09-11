@@ -9,12 +9,14 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/auth"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/world"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
 )
 
 type Kind string
@@ -39,6 +41,12 @@ func RunCombined(ctx context.Context, c config.Config, logger *slog.Logger) erro
 	defer stores.Close()
 	authServer := auth.NewServer(stores.Auth, logger, c.RealmID, c)
 	worldServer := world.NewServer(stores, logger, c.RealmID, c)
+	traceRecorder, err := configureProtocolTrace(c.ProtocolTracePath)
+	if err != nil {
+		return err
+	}
+	worldServer.TraceRecorder = traceRecorder
+	defer persistProtocolTrace(c.ProtocolTracePath, traceRecorder)
 	if err := worldServer.Initialize(ctx); err != nil {
 		return err
 	}
@@ -73,10 +81,40 @@ func RunSingle(ctx context.Context, c config.Config, kind Kind, logger *slog.Log
 		return (&Service{Kind: kind, Address: fmt.Sprintf(":%d", c.RealmServerPort), Store: stores.Auth, Handler: server.Handle}).Run(ctx, logger)
 	}
 	server := world.NewServer(stores, logger, c.RealmID, c)
+	traceRecorder, err := configureProtocolTrace(c.ProtocolTracePath)
+	if err != nil {
+		return err
+	}
+	server.TraceRecorder = traceRecorder
+	defer persistProtocolTrace(c.ProtocolTracePath, traceRecorder)
 	if err := server.Initialize(ctx); err != nil {
 		return err
 	}
 	return (&Service{Kind: kind, Address: fmt.Sprintf(":%d", c.WorldServerPort), Store: stores.World, Handler: server.Handle}).Run(ctx, logger)
+}
+
+func configureProtocolTrace(path string) (*protocoltrace.Recorder, error) {
+	if path == "" {
+		return nil, nil
+	}
+	return protocoltrace.NewRecorder("worldserver"), nil
+}
+
+func persistProtocolTrace(path string, recorder *protocoltrace.Recorder) {
+	if path == "" || recorder == nil {
+		return
+	}
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return
+		}
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	_ = recorder.Snapshot().Write(file)
 }
 
 func authHandler(store *database.Store, logger *slog.Logger, realmID uint32) func(context.Context, net.Conn) {
