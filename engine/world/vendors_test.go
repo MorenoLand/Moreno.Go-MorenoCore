@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -85,6 +86,23 @@ func TestVendorInfiniteStockUsesUnlimitedSentinel(t *testing.T) {
 	}
 	if got := vendorStockValue(7); got != 7 {
 		t.Fatalf("finite stock=%d", got)
+	}
+}
+
+func TestVendorLimitedStockTracksBundleConsumption(t *testing.T) {
+	srv := &Server{}
+	if got := srv.currentVendorStock(101, 5001, 4, time.Minute, 2); got != 4 {
+		t.Fatalf("initial stock=%d", got)
+	}
+	if got, ok := srv.consumeVendorStock(101, 5001, 2); !ok || got != 2 {
+		t.Fatalf("after bundle purchase stock=%d ok=%v", got, ok)
+	}
+	if got := srv.currentVendorStock(101, 5001, 4, time.Minute, 2); got != 2 {
+		t.Fatalf("tracked stock=%d", got)
+	}
+	srv.restoreVendorStock(101, 5001, 2)
+	if got := srv.currentVendorStock(101, 5001, 4, time.Minute, 2); got != 4 {
+		t.Fatalf("restored stock=%d", got)
 	}
 }
 

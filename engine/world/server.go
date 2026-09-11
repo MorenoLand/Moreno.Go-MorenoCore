@@ -97,6 +97,8 @@ type Server struct {
 	creatureRespawns        map[uint32]creatureRespawn
 	lootMu                  sync.Mutex
 	creatureLoot            map[uint64]*activeLootState
+	vendorMu                sync.Mutex
+	vendorStock             map[vendorStockKey]*vendorStockState
 	statsMu                 sync.RWMutex
 	creatureStatsCache      map[uint32]creatureStats
 	groupRolls              map[string]*activeGroupRoll
