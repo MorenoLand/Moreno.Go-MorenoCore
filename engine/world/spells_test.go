@@ -365,6 +365,16 @@ func TestSpellCastPowerDeductionAndBroadcast(t *testing.T) {
 		Flags:    protocol.SpellTargetFlagUnit,
 		UnitGUID: 100,
 	}
+	type observerFrame struct {
+		opcode uint16
+		err    error
+	}
+	observerFrameCh := make(chan observerFrame, 1)
+	go func() {
+		_ = observerClientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		op, _, err := readServerFrame(observerClientConn, nil)
+		observerFrameCh <- observerFrame{opcode: op, err: err}
+	}()
 
 	done := make(chan struct{})
 	go func() {
@@ -372,31 +382,30 @@ func TestSpellCastPowerDeductionAndBroadcast(t *testing.T) {
 		close(done)
 	}()
 
-	// 1. Caster reads SMSG_SPELL_GO, then SMSG_UPDATE_OBJECT with power delta
+	// 1. Caster reads SMSG_UPDATE_OBJECT with power delta, then SMSG_SPELL_GO
 	_ = casterClientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	op1, _, err := readServerFrame(casterClientConn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op1 != uint16(protocol.OpcodeSMSG_SPELL_GO) {
-		t.Fatalf("expected SMSG_SPELL_GO, got 0x%x", op1)
+	if op1 != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && op1 != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected power update, got 0x%x", op1)
 	}
 	op2, _, err := readServerFrame(casterClientConn, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op2 != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && op2 != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
-		t.Fatalf("expected SMSG_UPDATE_OBJECT or SMSG_COMPRESSED_UPDATE_OBJECT, got 0x%x", op2)
+	if op2 != uint16(protocol.OpcodeSMSG_SPELL_GO) {
+		t.Fatalf("expected SMSG_SPELL_GO, got 0x%x", op2)
 	}
 
 	// 2. Observer receives broadcast of power update
-	_ = observerClientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	obsOp, _, err := readServerFrame(observerClientConn, nil)
-	if err != nil {
-		t.Fatal(err)
+	observer := <-observerFrameCh
+	if observer.err != nil {
+		t.Fatal(observer.err)
 	}
-	if obsOp != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && obsOp != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
-		t.Fatalf("expected observer to receive SMSG_UPDATE_OBJECT or SMSG_COMPRESSED_UPDATE_OBJECT, got 0x%x", obsOp)
+	if observer.opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && observer.opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("expected observer to receive power update, got 0x%x", observer.opcode)
 	}
 
 	<-done

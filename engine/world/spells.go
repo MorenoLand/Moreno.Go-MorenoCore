@@ -416,8 +416,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	castTimeStamp := uint32(time.Now().UnixMilli())
-	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, missStatus, target), true)
-
 	pType := spell.PowerType
 	cost := s.calculateSpellPowerCost(spell)
 	if pType < 7 && cost > 0 {
@@ -429,9 +427,9 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		fields := map[int]uint32{
 			unitFieldPower1 + int(pType): s.player.Powers[pType],
 		}
-		if pVal, pErr := s.server.buildPlayerValuesUpdate(s.playerGUID, fields); pErr == nil && pVal != nil {
-			_ = s.write(pVal.Opcode, pVal.Payload.Bytes(), true)
-			if s.server != nil {
+		if s.server != nil {
+			if pVal, pErr := s.server.buildPlayerValuesUpdate(s.playerGUID, fields); pErr == nil && pVal != nil {
+				_ = s.write(pVal.Opcode, pVal.Payload.Bytes(), true)
 				s.server.broadcastToNearby(pVal.Opcode, pVal.Payload.Bytes(), s)
 			}
 		}
@@ -440,6 +438,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), s.player.Powers[pType], s.playerGUID)
 		}
 	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, missStatus, target), true)
 
 	if targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) && s.server != nil {
 		// TrinityCore adds hostile spell threat even when the spell has no direct
