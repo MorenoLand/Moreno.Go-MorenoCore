@@ -339,8 +339,11 @@ func TestPeriodicAura_HealTickOnPlayer(t *testing.T) {
 	// Wait for ticks
 	time.Sleep(60 * time.Millisecond)
 
-	if sess.player.Health <= 50 {
-		t.Fatalf("expected player health to increase from HoT, got %d", sess.player.Health)
+	sess.playerStateMu.RLock()
+	health := sess.player.Health
+	sess.playerStateMu.RUnlock()
+	if health <= 50 {
+		t.Fatalf("expected player health to increase from HoT, got %d", health)
 	}
 
 	// Verify periodic heal log was emitted

@@ -211,6 +211,7 @@ type session struct {
 	sharingQuestID        uint32
 	sharingQuestSender    uint64
 	warden                *wardenSession
+	playerStateMu         sync.RWMutex
 }
 
 type activeCastState struct {

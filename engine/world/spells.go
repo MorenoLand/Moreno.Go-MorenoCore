@@ -1815,9 +1815,11 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			targetSess.schedulePlayerPeriodicTick(aura, periodMs)
 		}
 		if durationMs > 0 && durationMs < 18000000 {
+			targetSess.castMu.Lock()
 			aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
 				targetSess.expirePlayerAura(spell.ID)
 			})
+			targetSess.castMu.Unlock()
 		}
 		return
 	}
@@ -1883,13 +1885,21 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		s.scheduleCreaturePeriodicTick(aura, periodMs)
 	}
 	if durationMs > 0 && durationMs < 18000000 {
+		s.server.auraMu.Lock()
 		aura.Timer = time.AfterFunc(time.Duration(durationMs)*time.Millisecond, func() {
 			s.expireCreatureAura(targetGUID, spell.ID, slot)
 		})
+		s.server.auraMu.Unlock()
 	}
 }
 
 func (ts *session) schedulePlayerPeriodicTick(aura *activeAura, periodMs uint32) {
+	ts.castMu.Lock()
+	ts.schedulePlayerPeriodicTickLocked(aura, periodMs)
+	ts.castMu.Unlock()
+}
+
+func (ts *session) schedulePlayerPeriodicTickLocked(aura *activeAura, periodMs uint32) {
 	aura.TickTimer = time.AfterFunc(time.Duration(periodMs)*time.Millisecond, func() {
 		ts.castMu.Lock()
 		if aura.Stopped || ts.player == nil || ts.player.Health == 0 {
@@ -1909,7 +1919,7 @@ func (ts *session) schedulePlayerPeriodicTick(aura *activeAura, periodMs uint32)
 		if stillRunning {
 			ts.castMu.Lock()
 			if !aura.Stopped {
-				ts.schedulePlayerPeriodicTick(aura, periodMs)
+				ts.schedulePlayerPeriodicTickLocked(aura, periodMs)
 			}
 			ts.castMu.Unlock()
 		}
@@ -1917,6 +1927,8 @@ func (ts *session) schedulePlayerPeriodicTick(aura *activeAura, periodMs uint32)
 }
 
 func (ts *session) executePeriodicTickOnPlayer(aura *activeAura) {
+	ts.playerStateMu.Lock()
+	defer ts.playerStateMu.Unlock()
 	if ts.player == nil || ts.player.Health == 0 {
 		return
 	}
@@ -2039,6 +2051,15 @@ func (ts *session) expirePlayerAura(spellID uint32) {
 }
 
 func (s *session) scheduleCreaturePeriodicTick(aura *activeAura, periodMs uint32) {
+	if s.server == nil {
+		return
+	}
+	s.server.auraMu.Lock()
+	s.scheduleCreaturePeriodicTickLocked(aura, periodMs)
+	s.server.auraMu.Unlock()
+}
+
+func (s *session) scheduleCreaturePeriodicTickLocked(aura *activeAura, periodMs uint32) {
 	aura.TickTimer = time.AfterFunc(time.Duration(periodMs)*time.Millisecond, func() {
 		if s.server == nil {
 			return
@@ -2064,7 +2085,7 @@ func (s *session) scheduleCreaturePeriodicTick(aura *activeAura, periodMs uint32
 		if stillRunning {
 			s.server.auraMu.Lock()
 			if !aura.Stopped {
-				s.scheduleCreaturePeriodicTick(aura, periodMs)
+				s.scheduleCreaturePeriodicTickLocked(aura, periodMs)
 			}
 			s.server.auraMu.Unlock()
 		}
