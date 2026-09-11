@@ -95,6 +95,8 @@ type Server struct {
 	motionMu                sync.Mutex
 	creatureMotion          map[uint64]*creatureMotion
 	creatureRespawns        map[uint32]creatureRespawn
+	transportMu             sync.Mutex
+	transports              map[uint32]*continentTransport
 	lootMu                  sync.Mutex
 	creatureLoot            map[uint64]*activeLootState
 	vendorMu                sync.Mutex
@@ -269,7 +271,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 	if len(settings) != 0 {
 		c = settings[0]
 	}
-	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[uint64]map[uint32]struct{}), activeCreatureAuras: make(map[uint64]map[uint32]*activeAura), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), creatureMotion: make(map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), creatureLoot: make(map[uint64]*activeLootState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[string]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory)}
+	server := &Server{AuthStore: stores.Auth, CharactersStore: stores.Characters, WorldStore: stores.World, Logger: logger, RealmID: realmID, Config: c, Features: NewFeatures(c, stores, logger), Data: wotlk.NewStore(filepath.Join(c.GameDataDir, "dbc")), sessions: make(map[*session]struct{}), hiddenGameObjects: make(map[uint64]struct{}), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState), wsgState: make(map[uint32]*wsgBattlegroundState), abState: make(map[uint32]*abBattlegroundState), eotsState: make(map[uint32]*eotsBattlegroundState), avState: make(map[uint32]*avBattlegroundState), saState: make(map[uint32]*saBattlegroundState), icState: make(map[uint32]*icBattlegroundState), activeTotems: make(map[uint64][4]*activeTotem), creatureAuras: make(map[uint64]map[uint32]struct{}), activeCreatureAuras: make(map[uint64]map[uint32]*activeAura), channels: make(map[string]*worldChannel), groups: make(map[uint64]*groupState), creatureMotion: make(map[uint64]*creatureMotion), creatureRespawns: make(map[uint32]creatureRespawn), transports: make(map[uint32]*continentTransport), creatureLoot: make(map[uint64]*activeLootState), creatureStatsCache: make(map[uint32]creatureStats), groupRolls: make(map[string]*activeGroupRoll), wardenCheckMgr: newWardenCheckMgr(), vehicleKits: make(map[uint64]*VehicleKit), vehicleSeatAddons: make(map[uint32]*VehicleSeatAddon), vehicleAccessories: make(map[uint32][]VehicleAccessory)}
 	server.Features.LFG.SetDungeonValidator(func(id uint32) bool {
 		dungeon, found, err := server.Data.LFGDungeon(id)
 		return err == nil && found && wotlk.IsSupportedLFGType(dungeon.TypeID)
@@ -287,6 +289,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	}
 	s.loadVehicleSeatAddons(ctx)
 	s.loadVehicleAccessories(ctx)
+	s.loadContinentTransports(ctx)
 	go s.runWorldTick(ctx)
 	return nil
 }
@@ -334,6 +337,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			return
 		case <-ticker.C:
 			now := time.Now()
+			s.updateContinentTransports(now)
 			s.updateActiveCreatures(ctx)
 			s.updatePlayerCombat(ctx)
 			s.updatePlayerRegeneration(ctx, now)

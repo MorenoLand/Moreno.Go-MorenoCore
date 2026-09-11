@@ -206,6 +206,7 @@ func (s *Store) TaxiPathLinks(from, to uint32) (uint32, uint32, bool, error) {
 
 // TaxiSplinePoint is one TaxiPathNode.dbc vertex of a flight path.
 type TaxiSplinePoint struct {
+	MapID int32
 	X     float32
 	Y     float32
 	Z     float32
@@ -237,6 +238,7 @@ func (s *Store) TaxiPathPoints(pathID uint32) ([]TaxiSplinePoint, error) {
 			continue
 		}
 		point := TaxiSplinePoint{}
+		point.MapID, _ = record.Int32(3)
 		if point.X, err = record.Float32(4); err != nil {
 			continue
 		}

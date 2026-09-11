@@ -10,16 +10,17 @@ import (
 )
 
 const (
-	gameObjectTypeMask       uint32 = 0x00000021
-	gameObjectUpdateFlags    uint16 = 0x0350
-	gameObjectValuesCount           = 18
-	gameObjectDisplayID             = 8
-	gameObjectFlags                 = 9
-	gameObjectParentRotation        = 10
-	gameObjectDynamic               = 14
-	gameObjectFaction               = 15
-	gameObjectLevel                 = 16
-	gameObjectBytes1                = 17
+	gameObjectTypeMask             uint32 = 0x00000021
+	gameObjectUpdateFlags          uint16 = 0x0350
+	gameObjectValuesCount                 = 18
+	transportGameObjectUpdateFlags uint16 = 0x0252
+	gameObjectDisplayID                   = 8
+	gameObjectFlags                       = 9
+	gameObjectParentRotation              = 10
+	gameObjectDynamic                     = 14
+	gameObjectFaction                     = 15
+	gameObjectLevel                       = 16
+	gameObjectBytes1                      = 17
 )
 
 // Game object types mirroring TrinityCore GameobjectTypes (GameObject.h:60).
@@ -86,26 +87,27 @@ type dynamicGameObjectState struct {
 }
 
 type gameObjectSpawn struct {
-	GUID           uint32
-	Entry          uint32
-	Map            uint32
-	X              float32
-	Y              float32
-	Z              float32
-	Orientation    float32
-	RotationX      float32
-	RotationY      float32
-	RotationZ      float32
-	RotationW      float32
-	State          uint8
-	AnimProgress   uint8
-	ArtKit         uint8
-	Type           uint8
-	DisplayID      uint32
-	Size           float32
-	Flags          uint32
-	Faction        uint32
-	ParentRotation [4]float32
+	GUID              uint32
+	Entry             uint32
+	Map               uint32
+	X                 float32
+	Y                 float32
+	Z                 float32
+	Orientation       float32
+	RotationX         float32
+	RotationY         float32
+	RotationZ         float32
+	RotationW         float32
+	State             uint8
+	AnimProgress      uint8
+	ArtKit            uint8
+	Type              uint8
+	DisplayID         uint32
+	Size              float32
+	Flags             uint32
+	Faction           uint32
+	ParentRotation    [4]float32
+	TransportProgress uint32
 }
 
 func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerState) (*protocol.Packet, int, error) {
@@ -213,6 +215,10 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 		count++
 	}
 	s.objectsMu.RUnlock()
+	for _, transport := range s.nearbyTransportSpawns(state, distance) {
+		updates.AddUpdateBlock(buildGameObjectUpdate(transport))
+		count++
+	}
 	if count == 0 {
 		return nil, 0, nil
 	}
@@ -221,6 +227,9 @@ func (s *Server) buildNearbyGameObjectUpdates(ctx context.Context, state playerS
 }
 
 func buildGameObjectUpdate(spawn gameObjectSpawn) []byte {
+	if spawn.Type == GameObjectTypeMOTransport {
+		return buildTransportGameObjectUpdate(spawn, true)
+	}
 	rawGUID := gameObjectGUID(spawn.GUID, spawn.Entry)
 	values := make([]uint32, gameObjectValuesCount)
 	values[0] = uint32(rawGUID)
@@ -264,6 +273,66 @@ func buildGameObjectUpdate(spawn gameObjectSpawn) []byte {
 	for index, value := range values {
 		if mask.Has(index) {
 			block.WriteU32(value)
+		}
+	}
+	return block.Bytes()
+}
+
+func buildGameObjectMovementUpdate(spawn gameObjectSpawn) []byte {
+	if spawn.Type != GameObjectTypeMOTransport {
+		return nil
+	}
+	return buildTransportGameObjectUpdate(spawn, false)
+}
+
+func buildTransportGameObjectUpdate(spawn gameObjectSpawn, create bool) []byte {
+	rawGUID := gameObjectGUID(spawn.GUID, spawn.Entry)
+	values := make([]uint32, gameObjectValuesCount)
+	values[0] = uint32(rawGUID)
+	values[1] = uint32(rawGUID >> 32)
+	values[2] = gameObjectTypeMask
+	values[objectFieldEntry] = spawn.Entry
+	values[4] = math.Float32bits(spawn.Size)
+	values[gameObjectDisplayID] = spawn.DisplayID
+	values[gameObjectFlags] = spawn.Flags
+	values[gameObjectParentRotation] = math.Float32bits(spawn.ParentRotation[0])
+	values[gameObjectParentRotation+1] = math.Float32bits(spawn.ParentRotation[1])
+	values[gameObjectParentRotation+2] = math.Float32bits(spawn.ParentRotation[2])
+	values[gameObjectParentRotation+3] = math.Float32bits(spawn.ParentRotation[3])
+	values[gameObjectDynamic] = 0xFFFF0000
+	values[gameObjectFaction] = spawn.Faction
+	values[gameObjectBytes1] = uint32(spawn.State) | uint32(spawn.Type)<<8 | uint32(spawn.ArtKit)<<16 | uint32(spawn.AnimProgress)<<24
+	block := protocol.NewBuffer(256)
+	if create {
+		block.WriteU8(protocol.UpdateCreateObject2)
+	} else {
+		block.WriteU8(protocol.UpdateMovement)
+	}
+	block.WritePackedGUID(rawGUID)
+	if create {
+		block.WriteU8(5)
+	}
+	block.WriteU16(transportGameObjectUpdateFlags)
+	block.WriteF32(spawn.X)
+	block.WriteF32(spawn.Y)
+	block.WriteF32(spawn.Z)
+	block.WriteF32(spawn.Orientation)
+	block.WriteU32(spawn.GUID)
+	block.WriteU32(spawn.TransportProgress)
+	block.WriteU64(packGameObjectRotation(spawn.RotationX, spawn.RotationY, spawn.RotationZ, spawn.RotationW))
+	if create {
+		mask := protocol.NewUpdateMask(len(values))
+		for index, value := range values {
+			if value != 0 {
+				_ = mask.Set(index)
+			}
+		}
+		block.WriteU8(uint8(mask.BlockCount()))
+		mask.AppendTo(block)
+		for index, value := range values {
+			if mask.Has(index) {
+				block.WriteU32(value)
+			}
 		}
 	}
 	return block.Bytes()
