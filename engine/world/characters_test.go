@@ -372,6 +372,25 @@ func TestBuildUnlearnSpellsUsesKnownNextRank(t *testing.T) {
 	}
 }
 
+func TestLogoutRejectsPlayerCombatFlag(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{conn: serverConn, playerLoaded: true, player: &playerState{GUID: 9, PlayerFlags: 0, UnitFlags: unitFlagInCombat}}
+	done := make(chan bool, 1)
+	go func() { done <- sess.handleLogoutRequest(context.Background()) }()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE) || len(payload) != 5 || payload[0] != 1 {
+		t.Fatalf("opcode=%x payload=%x", opcode, payload)
+	}
+	if !<-done || !sess.logoutAt.IsZero() {
+		t.Fatalf("logout result or deadline invalid result=%v deadline=%v", sess.playerLoaded, sess.logoutAt)
+	}
+}
+
 func makeMemoryStores(t *testing.T, root string) *database.Set {
 	t.Helper()
 	open := func(name string) *database.Store {

@@ -1618,7 +1618,8 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 		return true
 	}
 	s.releaseActiveLoot()
-	inCombat := s.attackTarget != 0 && (s.player == nil || s.player.PlayerFlags&playerFlagResting == 0)
+	inCombat := s.attackTarget != 0 || (s.player != nil && s.player.UnitFlags&unitFlagInCombat != 0)
+	inCombat = inCombat && (s.player == nil || s.player.PlayerFlags&playerFlagResting == 0)
 	if inCombat && s.security == 0 {
 		response := protocol.NewBuffer(5)
 		response.WriteU32(1) // reason 1 = InCombat (ERR_LOGOUT_IN_COMBAT)
