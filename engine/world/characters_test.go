@@ -234,6 +234,8 @@ func TestPlayerStartAllSpellsConfigGating(t *testing.T) {
 		`CREATE TABLE playercreateinfo_action (race INTEGER NOT NULL, class INTEGER NOT NULL, button INTEGER NOT NULL, action INTEGER NOT NULL, type INTEGER NOT NULL)`,
 		`CREATE TABLE playercreateinfo_cast_spell (raceMask INTEGER NOT NULL, classMask INTEGER NOT NULL, spell INTEGER NOT NULL, note TEXT)`,
 		`INSERT INTO playercreateinfo_spell_custom VALUES (1, 1, 12294, 'Mortal Strike Rank 1')`,
+		`INSERT INTO playercreateinfo_action VALUES (1, 1, 0, 1001, 0)`,
+		`INSERT INTO playercreateinfo_cast_spell VALUES (1, 1, 1002, 'stance')`,
 	} {
 		if _, err := wdb.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -265,6 +267,18 @@ func TestPlayerStartAllSpellsConfigGating(t *testing.T) {
 	for _, sp := range spells {
 		if sp.ID == 12294 {
 			t.Fatalf("expected custom trainer spell 12294 NOT in loaded spells with PlayerStartAllSpells=false")
+		}
+	}
+	for _, id := range []uint32{1001, 1002} {
+		found := false
+		for _, sp := range spells {
+			if sp.ID == id && sp.Active && !sp.Disabled {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected starter spell %d in loaded spells", id)
 		}
 	}
 
