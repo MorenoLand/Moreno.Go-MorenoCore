@@ -1459,12 +1459,17 @@ func (s *session) handlePetLearnTalent(ctx context.Context, payload []byte) bool
 }
 
 func (s *session) handlePetNameQuery(ctx context.Context, payload []byte) bool {
-	if len(payload) < 12 {
+	if len(payload) < 5 {
 		return true
 	}
 	r := protocol.NewReader(payload)
-	petNumber, _ := r.ReadU32()
-	_, _ = r.ReadU64() // petGUID
+	petNumber, err := r.ReadU32()
+	if err != nil {
+		return false
+	}
+	if _, err := r.ReadPackedGUID(); err != nil {
+		return false
+	}
 
 	petName := ""
 	var saveTime uint32

@@ -6,6 +6,20 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+func TestReadQueryEntryAndPackedGUID(t *testing.T) {
+	const guid = uint64(0xF130000012345678)
+	packet := protocol.NewBuffer(16)
+	packet.WriteU32(68)
+	packet.WritePackedGUID(guid)
+	entry, gotGUID, err := readQueryEntryAndGUID(packet.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != 68 || gotGUID != guid {
+		t.Fatalf("entry=%d guid=%x", entry, gotGUID)
+	}
+}
+
 func TestBuildCreatureQueryResponse(t *testing.T) {
 	data := creatureQueryData{Entry: 68, Name: "Stormwind Guard", Subname: "", IconName: "", Flags: 0x10, Type: 7, Family: 0, Rank: 1, KillCredits: [creatureKillCredits]uint32{1, 2}, Models: [creatureModels]uint32{3167, 0, 0, 0}, Health: 1.5, Mana: 2.5, Leader: true, QuestItems: [creatureQuestItems]uint32{11, 12}, MovementID: 42}
 	reader := protocol.NewReader(buildCreatureQueryResponse(data, true))

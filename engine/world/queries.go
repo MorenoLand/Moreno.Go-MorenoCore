@@ -49,13 +49,8 @@ type gameObjectQueryData struct {
 }
 
 func (s *session) handleCreatureQuery(ctx context.Context, payload []byte) bool {
-	reader := protocol.NewReader(payload)
-	entry, err := reader.ReadU32()
+	entry, _, err := readQueryEntryAndGUID(payload)
 	if err != nil {
-		s.debug("creature query rejected", "account", s.accountName, "error", err)
-		return false
-	}
-	if _, err := reader.ReadU64(); err != nil && len(payload) > 4 {
 		s.debug("creature query rejected", "account", s.accountName, "error", err)
 		return false
 	}
@@ -136,13 +131,8 @@ func buildCreatureQueryResponse(data creatureQueryData, allow bool) []byte {
 }
 
 func (s *session) handleGameObjectQuery(ctx context.Context, payload []byte) bool {
-	reader := protocol.NewReader(payload)
-	entry, err := reader.ReadU32()
+	entry, _, err := readQueryEntryAndGUID(payload)
 	if err != nil {
-		s.debug("gameobject query rejected", "account", s.accountName, "error", err)
-		return false
-	}
-	if _, err := reader.ReadU64(); err != nil && len(payload) > 4 {
 		s.debug("gameobject query rejected", "account", s.accountName, "error", err)
 		return false
 	}
@@ -157,6 +147,19 @@ func (s *session) handleGameObjectQuery(ctx context.Context, payload []byte) boo
 	}
 	s.debug("gameobject query response", "account", s.accountName, "entry", entry, "name", data.Name)
 	return s.write(uint16(protocol.OpcodeSMSG_GAMEOBJECT_QUERY_RESPONSE), buildGameObjectQueryResponse(data, true), true) == nil
+}
+
+func readQueryEntryAndGUID(payload []byte) (uint32, uint64, error) {
+	reader := protocol.NewReader(payload)
+	entry, err := reader.ReadU32()
+	if err != nil {
+		return 0, 0, err
+	}
+	if reader.Remaining() == 0 {
+		return entry, 0, nil
+	}
+	guid, err := reader.ReadPackedGUID()
+	return entry, guid, err
 }
 
 func (s *session) loadGameObjectQueryData(ctx context.Context, entry uint32) (gameObjectQueryData, error) {
