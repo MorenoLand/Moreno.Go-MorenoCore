@@ -1681,8 +1681,9 @@ func (s *session) completeLogout(ctx context.Context) error {
 	}
 	s.triggerLogout(ctx)
 	var firstErr error
-	if err := s.savePlayerPosition(ctx); err != nil {
+	if err := s.savePlayerState(ctx, 0); err != nil {
 		firstErr = err
+		_ = s.savePlayerPosition(ctx)
 	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID); err != nil && firstErr == nil {
 		firstErr = err
@@ -1735,6 +1736,28 @@ func (s *session) savePlayerPosition(ctx context.Context) error {
 		return nil
 	}
 	_, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHARACTER_POSITION", s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map, s.player.Zone, s.player.GUID)
+	return err
+}
+
+func (s *session) savePlayerState(ctx context.Context, online uint32) error {
+	if !s.playerLoaded || s.player == nil || s.server == nil || s.server.CharactersStore == nil {
+		return nil
+	}
+	state := s.player
+	taxi := make([]string, len(state.TaxiMask))
+	for i, value := range state.TaxiMask {
+		taxi[i] = strconv.FormatUint(uint64(value), 10)
+	}
+	titles := make([]string, len(state.KnownTitles))
+	for i, value := range state.KnownTitles {
+		titles[i] = strconv.FormatUint(uint64(value), 10)
+	}
+	explored := strings.Builder{}
+	for _, value := range state.ExploredZones {
+		fmt.Fprintf(&explored, "%02x%02x%02x%02x", byte(value), byte(value>>8), byte(value>>16), byte(value>>24))
+	}
+	args := []any{state.Name, state.Race, state.Class, state.Gender, state.Level, state.XP, state.Money, state.Skin, state.Face, state.HairStyle, state.HairColor, state.FacialStyle, state.BankBagSlots, 0, state.PlayerFlags, state.Map, 0, 0, state.X, state.Y, state.Z, state.Orientation, 0, 0, 0, 0, 0, strings.Join(taxi, " "), state.Cinematic, 0, 0, 0, 0, 0, state.ResetTalentsCost, state.ResetTalentsTime, state.ExtraFlags, 0, state.AtLogin, state.Zone, s.deathExpireTime, "", state.ArenaPoints, state.TotalHonorPoints, state.TodayHonorPoints, state.YesterdayHonorPoints, state.TotalKills, state.TodayKills, state.YesterdayKills, state.ChosenTitle, state.KnownCurrency, state.WatchedFaction, state.DrunkenState, state.Health, state.Powers[0], state.Powers[1], state.Powers[2], state.Powers[3], state.Powers[4], state.Powers[5], state.Powers[6], s.latency.Load(), state.TalentGroupsCount, state.ActiveTalentGroup, explored.String(), state.Equipment, state.AmmoID, strings.Join(titles, " "), state.ActionBars, 0, online, state.GUID}
+	_, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHARACTER", args...)
 	return err
 }
 

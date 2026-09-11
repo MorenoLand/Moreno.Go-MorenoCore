@@ -2954,8 +2954,9 @@ func (s *session) logout() {
 	s.releaseActiveLoot()
 	if s.playerLoaded {
 		s.triggerLogout(ctx)
-		if err := s.savePlayerPosition(ctx); err != nil {
+		if err := s.savePlayerState(ctx, 0); err != nil {
 			s.debug("player position save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
+			_ = s.savePlayerPosition(ctx)
 		}
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID)
 		if s.server != nil {
