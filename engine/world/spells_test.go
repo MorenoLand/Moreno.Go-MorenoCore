@@ -491,6 +491,22 @@ func TestCancelCastInterruptsSpellTimerAndSendsFailed(t *testing.T) {
 	}
 }
 
+func TestCastSpellRejectsReentryWhileCastIsActive(t *testing.T) {
+	sess := &session{}
+	sess.castMu.Lock()
+	sess.activeCast = &activeCastState{CastID: 1, SpellID: 686}
+	sess.castMu.Unlock()
+	if !sess.castInProgress() {
+		t.Fatal("expected an active cast to block spell re-entry")
+	}
+	sess.castMu.Lock()
+	sess.activeCast.Cancelled = true
+	sess.castMu.Unlock()
+	if sess.castInProgress() {
+		t.Fatal("expected a cancelled cast to stop blocking spell re-entry")
+	}
+}
+
 func TestHandleTotemDestroyed(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()

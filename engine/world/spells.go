@@ -257,6 +257,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
+	if s.castInProgress() {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
+		return true
+	}
+
 	// Interrupt any existing spell cast (TC: Unit::InterruptNonMeleeSpells)
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
@@ -296,6 +302,12 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 
 	s.debug("spell cast accepted", "account", s.accountName, "spell", spellID, "cast_id", castID, "cast_time", castTime, "cost", cost)
 	return true
+}
+
+func (s *session) castInProgress() bool {
+	s.castMu.Lock()
+	defer s.castMu.Unlock()
+	return s.activeCast != nil && !s.activeCast.Cancelled
 }
 
 func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uint32, spell wotlk.Spell, target protocol.SpellTargetData) {
@@ -3245,4 +3257,3 @@ func (s *session) checkSpellEquippedItemRequirements(ctx context.Context, spell 
 
 	return 0, true
 }
-
