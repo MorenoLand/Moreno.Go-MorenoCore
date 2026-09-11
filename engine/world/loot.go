@@ -88,11 +88,11 @@ type activeGroupRoll struct {
 }
 
 func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	targetGUID, err := reader.ReadU64()
+	targetGUID, err := reader.ReadPackedGUID()
 	if err != nil {
 		return false
 	}
@@ -602,11 +602,11 @@ func buildLootItemPushResult(playerGUID uint64, bag uint8, slot, entry, count, i
 }
 
 func (s *session) handleLootRelease(payload []byte) bool {
-	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
+	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	targetGUID, err := reader.ReadU64()
+	targetGUID, err := reader.ReadPackedGUID()
 	if err != nil {
 		return false
 	}

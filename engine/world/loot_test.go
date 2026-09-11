@@ -45,7 +45,7 @@ func TestLootingMoneyAndItems(t *testing.T) {
 	// 1. Send CMSG_LOOT
 	targetGUID := creatureWorldGUID(1, 303)
 	lootBuf := protocol.NewBuffer(8)
-	lootBuf.WriteU64(targetGUID)
+	lootBuf.WritePackedGUID(targetGUID)
 	if !sess.handleLoot(context.Background(), lootBuf.Bytes()) {
 		t.Fatal("handleLoot failed")
 	}
@@ -75,7 +75,7 @@ func TestLootingMoneyAndItems(t *testing.T) {
 
 	// 4. Release loot
 	releaseBuf := protocol.NewBuffer(8)
-	releaseBuf.WriteU64(targetGUID)
+	releaseBuf.WritePackedGUID(targetGUID)
 	if !sess.handleLootRelease(releaseBuf.Bytes()) {
 		t.Fatal("handleLootRelease failed")
 	}
@@ -225,7 +225,7 @@ func TestGameObjectLooting(t *testing.T) {
 
 	goGUID := uint64(50) | uint64(1001)<<24 | uint64(0xF110)<<48
 	payload := protocol.NewBuffer(8)
-	payload.WriteU64(goGUID)
+	payload.WritePackedGUID(goGUID)
 
 	done := make(chan struct{})
 	go func() {
@@ -323,7 +323,7 @@ func TestGameObjectLooting(t *testing.T) {
 
 	// Release loot
 	releaseBuf := protocol.NewBuffer(8)
-	releaseBuf.WriteU64(goGUID)
+	releaseBuf.WritePackedGUID(goGUID)
 	if !sess.handleLootRelease(releaseBuf.Bytes()) {
 		t.Fatal("handleLootRelease failed")
 	}
@@ -790,7 +790,7 @@ func TestRoundRobinLootParity(t *testing.T) {
 
 	// 2. Player 1 releases without taking it -> RoundRobinPlayer becomes 0 (open to everyone)
 	relBuf := protocol.NewBuffer(8)
-	relBuf.WriteU64(targetGUID)
+	relBuf.WritePackedGUID(targetGUID)
 	sess1.handleLootRelease(relBuf.Bytes())
 	if loot.RoundRobinPlayer != 0 {
 		t.Fatalf("expected RoundRobinPlayer to be cleared, got %d", loot.RoundRobinPlayer)
