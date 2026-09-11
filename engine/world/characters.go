@@ -444,11 +444,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.lastFallZ = state.Z
 	s.lastFallTime = 0
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
-	timePacket := protocol.NewBuffer(12)
-	timePacket.WritePackedTime(time.Now())
-	timePacket.WriteF32(0.5)
-	timePacket.WriteU32(0)
-	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), timePacket.Bytes(), true); err != nil {
+	timePacket := buildLoginSetTimeSpeed(time.Now())
+	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), timePacket, true); err != nil {
 		return false
 	}
 	s.server.Features.OnPlayerLogin()
@@ -542,6 +539,14 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.sendNewMailNotification(ctx)
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true
+}
+
+func buildLoginSetTimeSpeed(now time.Time) []byte {
+	packet := protocol.NewBuffer(12)
+	packet.WriteU32(uint32(now.Unix()))
+	packet.WriteF32(0.5)
+	packet.WriteU32(0)
+	return packet.Bytes()
 }
 
 // handleNextCinematicCamera processes CMSG_NEXT_CINEMATIC_CAMERA (0x0FB).

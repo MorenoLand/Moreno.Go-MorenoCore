@@ -200,6 +200,20 @@ func TestCreatureHostileAggroAndCombat(t *testing.T) {
 	}
 }
 
+func TestCreatureDoesNotAttackDuringPursuitSpline(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Map: 0, X: 5, Health: 100, MaxHealth: 100}}
+	server := &Server{sessions: map[*session]struct{}{sess: {}}, creatureMotion: make(map[uint64]*creatureMotion)}
+	motion := &creatureMotion{GUID: creatureWorldGUID(100, 68), Entry: 68, Map: 0, X: 5, TargetGUID: 1, InCombat: true, Moving: true, MoveEnds: time.Now().Add(time.Second), Health: 100, MaxHealth: 100, MinDamage: 50, MaxDamage: 50, AttackTime: 1000}
+	players := []playerPos{{Map: 0, X: 5, GUID: 1, Sess: sess}}
+	server.stepCreatureMotion(context.Background(), motion, players, time.Now().Add(100*time.Millisecond))
+	if sess.player.Health != 100 {
+		t.Fatalf("player health=%d while movement spline was active", sess.player.Health)
+	}
+}
+
 func TestCreatureSpellCastingInCombat(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

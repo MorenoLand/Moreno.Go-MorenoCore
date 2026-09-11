@@ -471,6 +471,12 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		s.updatePetMotion(ctx, motion, players, now)
 		return
 	}
+	if motion.Moving {
+		if now.Before(motion.MoveEnds) {
+			return
+		}
+		motion.Moving = false
+	}
 
 	// 1. If currently in combat with a target:
 	if motion.InCombat && motion.TargetGUID != 0 {

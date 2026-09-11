@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -66,6 +67,26 @@ func TestCharacterCreatePersistsReferenceDefaults(t *testing.T) {
 	}
 	if realmCount != 1 {
 		t.Fatalf("realm characters=%d", realmCount)
+	}
+}
+
+func TestLoginSetTimeSpeedUsesUnixGameTime(t *testing.T) {
+	now := time.Unix(1770000000, 0)
+	reader := protocol.NewReader(buildLoginSetTimeSpeed(now))
+	gameTime, err := reader.ReadU32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	speed, err := reader.ReadF32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	holidayOffset, err := reader.ReadU32()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gameTime != uint32(now.Unix()) || speed != 0.5 || holidayOffset != 0 {
+		t.Fatalf("time packet gameTime=%d speed=%v holidayOffset=%d", gameTime, speed, holidayOffset)
 	}
 }
 

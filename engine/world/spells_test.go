@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -344,6 +345,50 @@ func TestIsSelfCastOnly(t *testing.T) {
 	}
 	if isSelfCastOnly(enemySpell) {
 		t.Error("expected enemySpell to NOT be identified as self-cast only")
+	}
+
+	sourceSpell := wotlk.Spell{ID: 122, Effects: [3]wotlk.SpellEffect{{Effect: 2, ImplicitTargetA: 22}}}
+	if isSelfCastOnly(sourceSpell) {
+		t.Error("expected source-target Frost Nova effect to NOT be identified as self-cast only")
+	}
+}
+
+func TestSpellAreaEnemyTargetsExcludeCaster(t *testing.T) {
+	dbcDir := t.TempDir()
+	const fieldCount = 4
+	record := make([]uint32, fieldCount)
+	record[0] = 13
+	record[1] = math.Float32bits(10)
+	recordBytes := make([]byte, fieldCount*4)
+	for i, value := range record {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:(i+1)*4], value)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "SpellRadius.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hostileGUID := creatureWorldGUID(100, 68)
+	friendlyGUID := creatureWorldGUID(101, 68)
+	server := &Server{Data: wotlk.NewStore(dbcDir), creatureMotion: map[uint64]*creatureMotion{
+		hostileGUID:  {GUID: hostileGUID, Map: 0, X: 3, Y: 0, Z: 0, Faction: 14, Health: 100, MaxHealth: 100},
+		friendlyGUID: {GUID: friendlyGUID, Map: 0, X: 3, Y: 1, Z: 0, Faction: 1, Health: 100, MaxHealth: 100},
+	}}
+	sess := &session{server: server, playerGUID: 1, player: &playerState{GUID: 1, Map: 0, Race: 1, Class: 8, Level: 21, X: 0, Y: 0, Z: 0}}
+	spell := wotlk.Spell{ID: 122, SchoolMask: 16, Effects: [3]wotlk.SpellEffect{{Effect: 2, ImplicitTargetA: 22, RadiusIndex: 13}, {Effect: 6, Aura: 26, ImplicitTargetA: 22, RadiusIndex: 13}}}
+	if radius, found, err := server.Data.SpellRadius(13, 21); err != nil || !found || radius != 10 {
+		t.Fatalf("radius=%v found=%v err=%v", radius, found, err)
+	}
+	if !server.isHostileFaction(14, playerPos{Race: 1}) {
+		t.Fatal("expected faction 14 to be hostile to race 1")
+	}
+	targets := sess.spellAreaEnemyTargets(spell)
+	if len(targets) != 1 || targets[0] != hostileGUID {
+		t.Fatalf("area targets=%v, want only hostile creature %x", targets, hostileGUID)
 	}
 }
 

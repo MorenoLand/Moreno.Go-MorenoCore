@@ -799,6 +799,39 @@ func (s *Store) SpellDuration(id uint32, level uint32) (int32, bool, error) {
 	return duration, true, nil
 }
 
+func (s *Store) SpellRadius(id, level uint32) (float32, bool, error) {
+	if id == 0 {
+		return 0, true, nil
+	}
+	file, err := s.File("SpellRadius")
+	if err != nil {
+		return 0, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return 0, false, nil
+	}
+	radius, err := record.Float32(1)
+	if err != nil {
+		return 0, false, err
+	}
+	perLevel, err := record.Float32(2)
+	if err != nil {
+		return 0, false, err
+	}
+	maxRadius, err := record.Float32(3)
+	if err != nil {
+		return 0, false, err
+	}
+	if level > 0 {
+		radius += perLevel * float32(level)
+		if maxRadius > 0 && radius > maxRadius {
+			radius = maxRadius
+		}
+	}
+	return radius, true, nil
+}
+
 func (s *Store) Map(id uint32) (MapEntry, bool, error) {
 	file, err := s.File("Map")
 	if err != nil {

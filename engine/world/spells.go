@@ -31,9 +31,7 @@ const (
 	itemSubclassArmorShield  = 6
 )
 
-// isSelfCastOnly checks if all active spell effects are self/caster targeting.
-// Dynamically resolves from Spell.dbc effect targets:
-// 1 = TARGET_UNIT_CASTER, 18 = TARGET_DEST_CASTER, 22 = TARGET_SRC_CASTER.
+// isSelfCastOnly checks if all active spell effects target the caster unit.
 func isSelfCastOnly(spell wotlk.Spell) bool {
 	hasEffect := false
 	for _, eff := range spell.Effects {
@@ -41,13 +39,67 @@ func isSelfCastOnly(spell wotlk.Spell) bool {
 			continue
 		}
 		hasEffect = true
-		// In TrinityCore SpellInfo::IsSelfCast:
-		// Every active effect must target TARGET_UNIT_CASTER (1), TARGET_DEST_CASTER (18), or TARGET_SRC_CASTER (22).
-		if eff.ImplicitTargetA != 1 && eff.ImplicitTargetA != 18 && eff.ImplicitTargetA != 22 {
+		// TrinityCore SpellInfo::IsSelfCast requires TARGET_UNIT_CASTER (1) for every active effect.
+		if eff.ImplicitTargetA != 1 {
 			return false
 		}
 	}
 	return hasEffect
+}
+
+func isAreaEnemySpell(spell wotlk.Spell) bool {
+	if !isHarmfulSpell(spell) {
+		return false
+	}
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 {
+			continue
+		}
+		if eff.ImplicitTargetA == 15 || eff.ImplicitTargetA == 16 || eff.ImplicitTargetB == 15 || eff.ImplicitTargetB == 16 || eff.ImplicitTargetA == 22 || eff.ImplicitTargetB == 22 {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *session) spellAreaEnemyTargets(spell wotlk.Spell) []uint64 {
+	if s == nil || s.player == nil || s.server == nil || !isAreaEnemySpell(spell) || s.server.Data == nil {
+		return nil
+	}
+	radius := float32(0)
+	for _, eff := range spell.Effects {
+		if eff.Effect == 0 || (eff.ImplicitTargetA != 15 && eff.ImplicitTargetA != 16 && eff.ImplicitTargetA != 22 && eff.ImplicitTargetB != 15 && eff.ImplicitTargetB != 16 && eff.ImplicitTargetB != 22) {
+			continue
+		}
+		if value, ok, err := s.server.Data.SpellRadius(eff.RadiusIndex, uint32(s.player.Level)); err == nil && ok && value > radius {
+			radius = value
+		}
+	}
+	if radius <= 0 {
+		return nil
+	}
+	player := playerPos{Map: s.player.Map, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	targets := make([]uint64, 0)
+	seen := make(map[uint64]struct{})
+	s.server.motionMu.Lock()
+	motions := make([]*creatureMotion, 0, len(s.server.creatureMotion))
+	for _, motion := range s.server.creatureMotion {
+		if motion != nil {
+			motions = append(motions, motion)
+		}
+	}
+	s.server.motionMu.Unlock()
+	for _, motion := range motions {
+		if motion.Map != player.Map || motion.Health == 0 || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) || distance3D(motion.X, motion.Y, motion.Z, player.X, player.Y, player.Z) > float64(radius) || !s.server.isHostileFaction(motion.Faction, player) {
+			continue
+		}
+		if _, ok := seen[motion.GUID]; ok {
+			continue
+		}
+		seen[motion.GUID] = struct{}{}
+		targets = append(targets, motion.GUID)
+	}
+	return targets
 }
 
 func (s *session) calculateSpellPowerCost(spell wotlk.Spell) uint32 {
@@ -332,15 +384,24 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}()
 	}
 
-	hitTargets := []uint64{s.playerGUID}
+	hitTargets := make([]uint64, 0, 1)
 	if isSelfCastOnly(spell) {
-		hitTargets[0] = s.playerGUID
+		hitTargets = append(hitTargets, s.playerGUID)
 	} else if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
-		hitTargets[0] = target.UnitGUID
+		hitTargets = append(hitTargets, target.UnitGUID)
 	} else if s.selection != 0 {
-		hitTargets[0] = s.selection
+		hitTargets = append(hitTargets, s.selection)
+	} else if !isHarmfulSpell(spell) {
+		hitTargets = append(hitTargets, s.playerGUID)
 	}
-	targetGUID := hitTargets[0]
+	areaSpell := isAreaEnemySpell(spell)
+	if areaSpell {
+		hitTargets = s.spellAreaEnemyTargets(spell)
+	}
+	targetGUID := uint64(0)
+	if len(hitTargets) > 0 {
+		targetGUID = hitTargets[0]
+	}
 
 	// Auto-repeat ranged spells (e.g. Auto Shot, Shoot Wand) (TC: CURRENT_AUTOREPEAT_SPELL)
 	if (spell.AttributesEx1&0x20 != 0) || spellID == 75 || spellID == 5019 {
@@ -355,7 +416,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	// Spell hit check for offensive spells targeting another unit
 	var missStatus []protocol.SpellMissStatus
 	isReflected := false
-	if targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
+	if !areaSpell && targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
 		var targetSess *session
 		if s.server != nil {
 			targetSess = s.server.findSessionByGUID(targetGUID)
@@ -404,7 +465,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				}
 			}
 		}
-	} else if targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
+	} else if !areaSpell && targetGUID != 0 && targetGUID != s.playerGUID && !isHarmfulSpell(spell) {
 		var targetSess *session
 		if s.server != nil {
 			targetSess = s.server.findSessionByGUID(targetGUID)
@@ -439,11 +500,6 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, missStatus, target), true)
 
-	if targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) && s.server != nil {
-		// TrinityCore adds hostile spell threat even when the spell has no direct
-		// damage effect or the target resists/misses the spell.
-		s.server.triggerCreatureAggro(ctx, targetGUID, s.playerGUID)
-	}
 	if len(hitTargets) == 0 {
 		// Spell missed, do not trigger channel, cooldown, or effects
 		return
@@ -510,6 +566,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if len(missStatus) > 0 && !isReflected {
 			return
 		}
+		if s.server != nil && isHarmfulSpell(spell) {
+			for _, effectTarget := range hitTargets {
+				if effectTarget != 0 && effectTarget != s.playerGUID {
+					s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID)
+				}
+			}
+		}
 		interruptHandled := false
 		for _, eff := range spell.Effects {
 			if eff.Effect == 0 {
@@ -518,12 +581,16 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			switch eff.Effect {
 			case 2, 17, 31, 58, 87: // Damage effects (School damage, Weapon damage, etc.)
 				damage := uint32(eff.BasePoints + 1)
-				if targetGUID != 0 && (targetGUID != s.playerGUID || isReflected) {
-					s.executeSpellDamage(effCtx, targetGUID, spellID, damage)
+				for _, effectTarget := range hitTargets {
+					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
+						s.executeSpellDamage(effCtx, effectTarget, spellID, damage)
+					}
 				}
 			case 10, 136, 105: // Heal effects
 				heal := uint32(eff.BasePoints + 1)
-				s.executeSpellHeal(effCtx, targetGUID, spellID, heal)
+				for _, effectTarget := range hitTargets {
+					s.executeSpellHeal(effCtx, effectTarget, spellID, heal)
+				}
 			case 6, 27, 35: // Apply Aura
 				durationMs := uint32(0)
 				if spell.DurationIndex > 0 && s.server != nil && s.server.Data != nil {
@@ -564,25 +631,23 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 					schoolMask = 1
 				}
 
-				auraTarget := s.playerGUID
-				if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) {
-					auraTarget = s.playerGUID
-				} else if isReflected {
-					auraTarget = s.playerGUID
-				} else if eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) {
-					if targetGUID != 0 && targetGUID != s.playerGUID {
-						auraTarget = targetGUID
+				for _, effectTarget := range hitTargets {
+					auraTarget := s.playerGUID
+					if eff.ImplicitTargetA == 1 || isSelfCastOnly(spell) || isReflected {
+						auraTarget = s.playerGUID
+					} else if eff.ImplicitTargetA == 6 || isHarmfulAura(eff.Aura) {
+						if effectTarget != 0 && effectTarget != s.playerGUID {
+							auraTarget = effectTarget
+						}
+					} else if eff.ImplicitTargetA == 21 {
+						if effectTarget != 0 {
+							auraTarget = effectTarget
+						}
+					} else if effectTarget != 0 && effectTarget != s.playerGUID && isHarmfulSpell(spell) {
+						auraTarget = effectTarget
 					}
-				} else if eff.ImplicitTargetA == 21 {
-					if targetGUID != 0 {
-						auraTarget = targetGUID
-					}
-				} else {
-					if targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) {
-						auraTarget = targetGUID
-					}
+					s.applyAuraToTarget(effCtx, auraTarget, spell, eff, durationMs, periodMs, amount, schoolMask)
 				}
-				s.applyAuraToTarget(effCtx, auraTarget, spell, eff, durationMs, periodMs, amount, schoolMask)
 			case spellEffectResurrectNew: // SPELL_EFFECT_RESURRECT_NEW: self resurrect chain
 				s.applySelfResurrectEffect(spell)
 			case 5: // SPELL_EFFECT_TELEPORT_UNITS (e.g. Hearthstone 8690, Astral Recall 556)
