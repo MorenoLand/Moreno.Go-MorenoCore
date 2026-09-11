@@ -56,7 +56,7 @@ func TestLogonAndRealmList(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
 	go server.Handle(context.Background(), serverConn)
-	challenge := buildChallenge("TEST")
+	challenge := buildChallenge(" TEST ")
 	if _, err := clientConn.Write(challenge); err != nil {
 		t.Fatal(err)
 	}

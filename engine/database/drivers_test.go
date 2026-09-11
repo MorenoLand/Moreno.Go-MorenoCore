@@ -93,3 +93,35 @@ func TestSQLitePathFallsBackToDataDir(t *testing.T) {
 		t.Fatalf("dsn=%s want=%s", got, want)
 	}
 }
+
+func TestSQLitePathResolvesFromBinWorkingDirectoryWithoutWorkFlag(t *testing.T) {
+	root := t.TempDir()
+	workDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "auth.db"), []byte("SQLite format 3\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(workDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+	c := config.Default()
+	c.Backend = "sqlite"
+	if err := c.Set("DataDir", "bin"); err != nil {
+		t.Fatal(err)
+	}
+	c.ResolvePaths()
+	_, dsn, backend, err := connection(c.Backend, c.AuthDatabaseFile, "", c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backend != BackendSQLite || filepath.Clean(dsn) != filepath.Clean(filepath.Join("..", "bin", "auth.db")) {
+		t.Fatalf("backend=%v dsn=%s", backend, dsn)
+	}
+}

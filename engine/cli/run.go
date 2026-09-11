@@ -111,7 +111,14 @@ func RunCombined() int {
 	if effectiveWorkDir == "" {
 		effectiveWorkDir = os.Getenv("MORENOCORE_WORK")
 	}
-	selectedConfig := discoverConfig(*configPath, "", effectiveWorkDir)
+	configKind := service.World
+	if *authOnly {
+		configKind = service.Auth
+	}
+	if *worldOnly {
+		configKind = service.World
+	}
+	selectedConfig := discoverConfig(*configPath, configKind, effectiveWorkDir)
 	c, err := config.Load(selectedConfig)
 	if err != nil && !os.IsNotExist(err) {
 		fmt.Fprintln(os.Stderr, err)

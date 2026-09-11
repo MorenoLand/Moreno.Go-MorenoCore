@@ -29,6 +29,23 @@ func TestDiscoverConfigWorkDir(t *testing.T) {
 	}
 }
 
+func TestDiscoverConfigSelectsServiceSpecificFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	authPath := filepath.Join(tempDir, "authserver.conf")
+	worldPath := filepath.Join(tempDir, "worldserver.conf")
+	for _, path := range []string{authPath, worldPath} {
+		if err := os.WriteFile(path, []byte("[server]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := discoverConfig("", service.Auth, tempDir); got != authPath {
+		t.Fatalf("auth config=%q want=%q", got, authPath)
+	}
+	if got := discoverConfig("", service.World, tempDir); got != worldPath {
+		t.Fatalf("world config=%q want=%q", got, worldPath)
+	}
+}
+
 func TestNewLogger(t *testing.T) {
 	l1 := newLogger(false)
 	if l1 == nil {

@@ -187,7 +187,7 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	login = strings.ToUpper(login)
+	login = strings.TrimSpace(strings.ToUpper(login))
 	s.build = build
 	s.postBC = s.build > preBCMaxBuild
 	s.login = login
@@ -320,6 +320,7 @@ func (s *session) handleReconnectChallenge(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	login = strings.TrimSpace(strings.ToUpper(login))
 	s.build = build
 	s.postBC = build > preBCMaxBuild
 	s.login = login
