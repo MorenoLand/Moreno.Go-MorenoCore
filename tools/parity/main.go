@@ -19,6 +19,7 @@ type toolStatus struct {
 	Reference string
 	GoPath    string
 	Scaffold  bool
+	Findings  []string
 }
 
 var (
@@ -134,6 +135,7 @@ func buildReport(reference, repo string) (string, error) {
 		{Reference: "vmap4_extractor", GoPath: "tools/vmap4extractor"},
 		{Reference: "vmap4_assembler", GoPath: "tools/vmap4assembler"},
 		{Reference: "mmaps_generator", GoPath: "tools/mmaps-generator"},
+		{Reference: "mpq", GoPath: "tools/mpq"},
 	}
 	for index := range tools {
 		content, err := readGoFiles(filepath.Join(repo, tools[index].GoPath))
@@ -141,6 +143,7 @@ func buildReport(reference, repo string) (string, error) {
 			return "", err
 		}
 		tools[index].Scaffold = strings.Contains(strings.ToLower(content), "scaffolded") || strings.Contains(strings.ToLower(content), "not implemented")
+		tools[index].Findings = toolBehaviorFindings(tools[index].Reference, content)
 	}
 	var report strings.Builder
 	fmt.Fprintf(&report, "Generated from the checked-out reference and current MorenoCore source.\n\n")
@@ -166,13 +169,54 @@ func buildReport(reference, repo string) (string, error) {
 	fmt.Fprintf(&report, "## Missing schema tables/views\n\n### MySQL\n\n%s\n\n### SQLite\n\n%s\n", list(difference(keys(refSchema), keys(goMySQLSchema))), list(difference(keys(refSchema), keys(goSQLiteSchema))))
 	fmt.Fprintf(&report, "## Extraction tools\n\n| Reference tool | Go path | Status |\n| --- | --- | --- |\n")
 	for _, tool := range tools {
-		status := "implemented source"
+		status := "source present; fixture verification pending"
 		if tool.Scaffold {
 			status = "contains explicit scaffold/not implemented path"
+		} else if len(tool.Findings) > 0 {
+			status = "behavioral gaps detected"
 		}
 		fmt.Fprintf(&report, "| `%s` | `%s` | %s |\n", tool.Reference, tool.GoPath, status)
 	}
+	fmt.Fprintf(&report, "\n## Extraction tool quality findings\n\n")
+	for _, tool := range tools {
+		if len(tool.Findings) == 0 {
+			continue
+		}
+		fmt.Fprintf(&report, "### `%s`\n\n", tool.GoPath)
+		for _, finding := range tool.Findings {
+			fmt.Fprintf(&report, "- %s\n", finding)
+		}
+		fmt.Fprintln(&report)
+	}
 	return report.String(), nil
+}
+
+func toolBehaviorFindings(name, content string) []string {
+	findings := make([]string, 0)
+	lower := strings.ToLower(content)
+	switch name {
+	case "map_extractor":
+		if strings.Contains(content, "ExtractDBC") && !strings.Contains(content, "WDT") {
+			findings = append(findings, "source extracts DBC files but has no WDT/ADT/liquid/camera extraction path")
+		}
+	case "vmap4_extractor":
+		if strings.Contains(content, "os.WriteFile") || strings.Contains(content, "io.Copy") {
+			findings = append(findings, "source copies raw archive assets; VMAP geometry extraction/output parity is not demonstrated")
+		}
+	case "vmap4_assembler":
+		if strings.Contains(content, "data[:min(len(data), 64)]") {
+			findings = append(findings, "source writes only a 64-byte prefix instead of assembling VMAP4 geometry")
+		}
+	case "mmaps_generator":
+		if strings.Contains(lower, "dummyheader") || strings.Contains(content, `"MMAP"`) {
+			findings = append(findings, "source emits a dummy MMAP header instead of navmesh tiles")
+		}
+	case "mpq":
+		if strings.Contains(lower, "unsupported mpq compression") {
+			findings = append(findings, "source rejects required MPQ compression methods")
+		}
+	}
+	return findings
 }
 
 func countSources(root string) (sourceCounts, error) {
