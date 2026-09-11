@@ -26,7 +26,7 @@ type spellCooldown struct {
 }
 
 func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState) error {
-	spells, err := s.loadLearnedSpells(ctx, state.GUID, state.Race, state.Class)
+	spells, err := s.loadLearnedSpells(ctx, state.GUID, state.Race, state.Class, state.Level)
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func (s *session) loadPlayerPacketsState(ctx context.Context, state *playerState
 	return nil
 }
 
-func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, class uint8) ([]learnedSpell, error) {
+func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, class, level uint8) ([]learnedSpell, error) {
 	defaults := defaultRacialSpells(race)
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return defaults, nil
@@ -52,15 +52,25 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 		return defaults, nil
 	}
 	result := make([]learnedSpell, 0)
+	futureSpells := make([]uint32, 0)
 	for rows.Next() {
 		var spell, active, disabled int64
 		if err := rows.Scan(&spell, &active, &disabled); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
-		result = append(result, learnedSpell{ID: uint32(spell), Active: active != 0, Disabled: disabled != 0})
+		spellID := uint32(spell)
+		isActive := active != 0
+		if isActive && !s.spellAvailableAtLevel(spellID, level) {
+			isActive = false
+			futureSpells = append(futureSpells, spellID)
+		}
+		result = append(result, learnedSpell{ID: spellID, Active: isActive, Disabled: disabled != 0})
 	}
 	_ = rows.Close()
+	for _, spellID := range futureSpells {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_spell SET active = 0 WHERE guid = ? AND spell = ? AND active <> 0", guid, spellID)
+	}
 
 	for _, def := range defaults {
 		found := false
@@ -117,6 +127,17 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 		}
 	}
 	return result, nil
+}
+
+func (s *session) spellAvailableAtLevel(spellID uint32, level uint8) bool {
+	if s == nil || s.server == nil || s.server.Config.PlayerStartAllSpells || s.server.Data == nil || level == 0 {
+		return true
+	}
+	spell, found, err := s.server.Data.Spell(spellID)
+	if err != nil || !found || spell.SpellLevel == 0 || spell.SpellLevel <= uint32(level) {
+		return true
+	}
+	return false
 }
 
 func (s *session) loadStarterSpellIDs(ctx context.Context, race, class uint8) []uint32 {

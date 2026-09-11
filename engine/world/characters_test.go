@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"io"
 	"log/slog"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -234,6 +236,7 @@ func TestPlayerStartAllSpellsConfigGating(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cdb.Close()
+	cdb.SetMaxOpenConns(1)
 	wdb, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -281,7 +284,7 @@ func TestPlayerStartAllSpellsConfigGating(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("expected custom trainer spell 12294 NOT to be learned by default, got count=%d", count)
 	}
-	spells, err := sessDefault.loadLearnedSpells(ctx, 100, 1, 1)
+	spells, err := sessDefault.loadLearnedSpells(ctx, 100, 1, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +319,7 @@ func TestPlayerStartAllSpellsConfigGating(t *testing.T) {
 	if countAll != 1 {
 		t.Fatalf("expected custom trainer spell 12294 to be learned when PlayerStartAllSpells=true, got count=%d", countAll)
 	}
-	spellsAll, err := sessAll.loadLearnedSpells(ctx, 200, 1, 1)
+	spellsAll, err := sessAll.loadLearnedSpells(ctx, 200, 1, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,6 +333,75 @@ func TestPlayerStartAllSpellsConfigGating(t *testing.T) {
 	if !found {
 		t.Fatal("expected custom trainer spell 12294 in loaded spells with PlayerStartAllSpells=true")
 	}
+}
+
+func TestLearnedSpellsHideFutureSpellLevels(t *testing.T) {
+	cdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cdb.Close()
+	cdb.SetMaxOpenConns(1)
+	if _, err := cdb.Exec(`CREATE TABLE character_spell (guid INTEGER NOT NULL, spell INTEGER NOT NULL, active INTEGER NOT NULL DEFAULT 1, disabled INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (guid, spell))`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cdb.Exec(`INSERT INTO character_spell VALUES (1, 5001, 1, 0), (1, 5002, 1, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	dbcDir := t.TempDir()
+	const fieldCount = 234
+	records := make([]byte, fieldCount*4*2)
+	for i, values := range [][2]uint32{{5001, 10}, {5002, 70}} {
+		offset := i * fieldCount * 4
+		binary.LittleEndian.PutUint32(records[offset:], values[0])
+		binary.LittleEndian.PutUint32(records[offset+39*4:], values[1])
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 2)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "Spell.dbc"), append(header, append(records, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: cdb}
+	server := &Server{CharactersStore: store, Config: config.Config{}, Data: wotlk.NewStore(dbcDir)}
+	future, found, err := server.Data.Spell(5002)
+	if err != nil || !found || future.SpellLevel != 70 {
+		t.Fatalf("future spell=%+v found=%v err=%v", future, found, err)
+	}
+	sess := &session{server: server}
+	spells, err := sess.loadLearnedSpells(context.Background(), 1, 1, 1, 21)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spell := range spells {
+		if spell.ID == 5002 && spell.Active {
+			t.Fatal("future spell remained active at level 21")
+		}
+	}
+	var active int
+	if err := cdb.QueryRow("SELECT active FROM character_spell WHERE guid = 1 AND spell = 5002").Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if active != 0 {
+		t.Fatalf("future spell database active=%d", active)
+	}
+	if _, err := cdb.Exec("UPDATE character_spell SET active = 1 WHERE guid = 1 AND spell = 5002"); err != nil {
+		t.Fatal(err)
+	}
+	server.Config.PlayerStartAllSpells = true
+	spells, err = sess.loadLearnedSpells(context.Background(), 1, 1, 1, 21)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spell := range spells {
+		if spell.ID == 5002 && spell.Active {
+			return
+		}
+	}
+	t.Fatal("all-spells mode did not preserve future spell")
 }
 
 func TestCompleteLogoutCleansStateBeforeCompletionPacket(t *testing.T) {
