@@ -69,7 +69,9 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		defaultMenu, err := s.prepareCreatureGossip(ctx, guid, entry, npcFlags, objectUint32OrZero(creature, "GossipMenuID"))
 		if err != nil {
 			s.debug("default gossip load failed", "account", s.accountName, "entry", entry, "error", err)
-			return false
+			s.gossipClosed = true
+			_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
+			return true
 		}
 		if defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 0 {
 			if npcFlags&0x70 != 0 { // UNIT_NPC_FLAG_TRAINER (0x10, 0x20, 0x40)
@@ -239,6 +241,8 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 			defaultMenu, loadErr := s.prepareCreatureGossip(ctx, guid, entry, objectUint32OrZero(creature, "NPCFlags"), item.ActionMenuID)
 			if loadErr != nil {
 				s.debug("gossip submenu load failed", "account", s.accountName, "entry", entry, "menu", item.ActionMenuID, "error", loadErr)
+				s.gossipClosed = true
+				_ = s.write(uint16(protocol.OpcodeSMSG_GOSSIP_COMPLETE), nil, true)
 				return true
 			}
 			s.gossip = defaultMenu
