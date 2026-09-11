@@ -8,9 +8,21 @@ import (
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
+
+func TestCreatureSpellDamageUsesDBCEffects(t *testing.T) {
+	damage, found := creatureSpellDamage(wotlk.Spell{Effects: [3]wotlk.SpellEffect{{Effect: 2, BasePoints: 12}}})
+	if !found || damage != 13 {
+		t.Fatalf("damage=%d found=%v", damage, found)
+	}
+	zero, found := creatureSpellDamage(wotlk.Spell{Effects: [3]wotlk.SpellEffect{{Effect: 6, Aura: 3}}})
+	if found || zero != 0 {
+		t.Fatalf("non-damage effect damage=%d found=%v", zero, found)
+	}
+}
 
 func TestCreatureWaypointPatrol(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")

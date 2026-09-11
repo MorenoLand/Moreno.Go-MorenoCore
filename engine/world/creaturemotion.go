@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -534,20 +535,26 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), goPkt, target.Sess)
 			}
 
-			lvl := float64(motion.Level)
-			if lvl < 1 {
-				lvl = 1
-			}
-			baseDmg := lvl * 1.5
 			schoolMask := uint8(1)
+			damage, hasDBCSpell := uint32(0), false
 			if s != nil && s.Data != nil {
-				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found && spellInfo.SchoolMask != 0 {
-					schoolMask = uint8(spellInfo.SchoolMask)
+				if spellInfo, found, err := s.Data.Spell(spellID); err == nil && found {
+					if spellInfo.SchoolMask != 0 {
+						schoolMask = uint8(spellInfo.SchoolMask)
+					}
+					damage, hasDBCSpell = creatureSpellDamage(spellInfo)
 				}
 			}
-			damage := uint32(baseDmg + rand.Float64()*(baseDmg*0.5))
-			if damage < 1 {
-				damage = 1
+			if !hasDBCSpell {
+				lvl := float64(motion.Level)
+				if lvl < 1 {
+					lvl = 1
+				}
+				baseDmg := lvl * 1.5
+				damage = uint32(baseDmg + rand.Float64()*(baseDmg*0.5))
+				if damage < 1 {
+					damage = 1
+				}
 			}
 			overkill := uint32(0)
 			if target.Sess != nil && target.Sess.player != nil {
@@ -858,6 +865,22 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
 	motion.WaitUntil = motion.MoveEnds.Add(wait)
+}
+
+func creatureSpellDamage(spell wotlk.Spell) (uint32, bool) {
+	var damage uint32
+	found := false
+	for _, effect := range spell.Effects {
+		switch effect.Effect {
+		case 2, 17, 31, 58, 87:
+			found = true
+			value := effect.BasePoints + 1
+			if value > 0 {
+				damage += uint32(value)
+			}
+		}
+	}
+	return damage, found
 }
 
 func creatureCombatDisabled(unitFlags, flagsExtra uint32) bool {
