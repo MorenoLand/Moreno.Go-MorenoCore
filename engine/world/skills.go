@@ -194,6 +194,19 @@ func (s *session) sendTalentsInfo(pet bool) error {
 	return s.write(uint16(protocol.OpcodeSMSG_TALENTS_INFO), buf.Bytes(), true)
 }
 
+func (s *session) sendResyncRunes() error {
+	if s.player == nil || s.player.Class != 6 {
+		return nil
+	}
+	buf := protocol.NewBuffer(16)
+	buf.WriteU32(6)
+	for _, runeType := range []uint8{0, 0, 1, 1, 2, 2} {
+		buf.WriteU8(runeType)
+		buf.WriteU8(0)
+	}
+	return s.write(uint16(protocol.OpcodeSMSG_RESYNC_RUNES), buf.Bytes(), true)
+}
+
 // handleLearnTalent processes CMSG_LEARN_TALENT (0x251).
 // Reference: WorldSession::HandleLearnTalentOpcode (SkillHandler.cpp:27).
 func (s *session) handleLearnTalent(ctx context.Context, payload []byte) bool {
