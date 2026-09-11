@@ -2730,6 +2730,9 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if err := s.write(opcodeAuthResponse, authBuf.Bytes(), true); err != nil {
 		return false
 	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_ADDON_INFO), []byte{0, 0, 0, 0}, true); err != nil {
+		return false
+	}
 
 	if s.server.Config.WardenEnabled && len(account.SessionKey) == crypto.SRP6SessionKeyLength {
 		w, err := newWardenSession(s, account.SessionKey)

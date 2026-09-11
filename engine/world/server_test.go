@@ -94,6 +94,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if responseOpcode != opcodeAuthResponse || len(responsePayload) < 11 || responsePayload[0] != authOK || responsePayload[10] != 2 {
 		t.Fatalf("auth response opcode=%x payload=%x", responseOpcode, responsePayload)
 	}
+	addonOpcode, addonPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addonOpcode != uint16(protocol.OpcodeSMSG_ADDON_INFO) || !bytes.Equal(addonPayload, []byte{0, 0, 0, 0}) {
+		t.Fatalf("addon info opcode=%x payload=%x", addonOpcode, addonPayload)
+	}
 	ping := protocol.NewBuffer(8)
 	ping.WriteU32(123)
 	ping.WriteU32(45)
