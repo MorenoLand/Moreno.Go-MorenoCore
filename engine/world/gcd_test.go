@@ -90,7 +90,7 @@ func TestGCD_TriggerAndBlock(t *testing.T) {
 		t.Fatalf("expected GCD to be active immediately after starting cast")
 	}
 
-	// Immediately attempt second cast -> must be rejected with SPELL_FAILED_NOT_READY (47)
+	// Immediately attempt second cast -> the active cast takes precedence over the GCD
 	castPkt2 := protocol.NewBuffer(32)
 	castPkt2.WriteU8(2)
 	castPkt2.WriteU32(133)
@@ -107,8 +107,30 @@ func TestGCD_TriggerAndBlock(t *testing.T) {
 	_, _ = r.ReadU8()  // castID
 	_, _ = r.ReadU32() // spellID
 	failReason, _ := r.ReadU8()
-	if failReason != 47 { // SPELL_FAILED_NOT_READY = 47
-		t.Fatalf("expected fail reason 47 (NOT_READY), got %d", failReason)
+	if failReason != 105 { // SPELL_FAILED_SPELL_IN_PROGRESS = 105
+		t.Fatalf("expected fail reason 105 (SPELL_IN_PROGRESS), got %d", failReason)
+	}
+
+	if !sess.castInProgress() {
+		t.Fatal("expected the first timed cast to remain active after the GCD failure")
+	}
+	sess.gcdEnd = time.Now().UnixMilli() - 1
+	castPkt3 := protocol.NewBuffer(32)
+	castPkt3.WriteU8(3)
+	castPkt3.WriteU32(133)
+	castPkt3.WriteU8(0)
+	protocol.WriteSpellTargetData(castPkt3, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnitWireMask, UnitGUID: targetGUID})
+	sess.handleCastSpell(ctx, castPkt3.Bytes())
+	pktInProgress := readPacketTimeout(t, frames)
+	if pktInProgress.op != uint16(protocol.OpcodeSMSG_CAST_FAILED) {
+		t.Fatalf("expected SMSG_CAST_FAILED while the first cast is active, got 0x%04X", pktInProgress.op)
+	}
+	r = protocol.NewReader(pktInProgress.data)
+	_, _ = r.ReadU8()
+	_, _ = r.ReadU32()
+	failReason, _ = r.ReadU8()
+	if failReason != 105 { // SPELL_FAILED_SPELL_IN_PROGRESS = 105
+		t.Fatalf("expected fail reason 105 (SPELL_IN_PROGRESS), got %d", failReason)
 	}
 }
 

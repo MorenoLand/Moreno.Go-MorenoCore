@@ -117,6 +117,11 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		s.debug("spell cast ignored", "account", s.accountName, "spell", spellID, "reason", spellCastIgnoreReason(spell, found, learned))
 		return true
 	}
+	if s.castInProgress() {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
+		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
+		return true
+	}
 	nowUnix := time.Now().Unix()
 	if s.isSchoolLocked(spell) {
 		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 47), true) // SPELL_FAILED_NOT_READY = 47
@@ -257,12 +262,6 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	if s.castInProgress() {
-		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, 105), true) // SPELL_FAILED_SPELL_IN_PROGRESS = 105
-		s.debug("spell cast rejected", "account", s.accountName, "spell", spellID, "reason", "another spell cast is in progress")
-		return true
-	}
-
 	// Interrupt any existing spell cast (TC: Unit::InterruptNonMeleeSpells)
 	s.interruptCurrentCast()
 	s.interruptCurrentChannel()
@@ -290,7 +289,6 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 				s.castMu.Unlock()
 				return
 			}
-			s.activeCast = nil
 			s.castMu.Unlock()
 			s.finishSpellCast(context.Background(), castID, spellID, spell, target)
 		})
@@ -314,11 +312,25 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if s.player == nil {
 		return
 	}
+	var completedCast *activeCastState
 	s.castMu.Lock()
 	if s.activeCast != nil && s.activeCast.CastID == castID && s.activeCast.SpellID == spellID {
-		s.activeCast = nil
+		if s.activeCast.Cancelled {
+			s.castMu.Unlock()
+			return
+		}
+		completedCast = s.activeCast
 	}
 	s.castMu.Unlock()
+	if completedCast != nil {
+		defer func() {
+			s.castMu.Lock()
+			if s.activeCast == completedCast {
+				s.activeCast = nil
+			}
+			s.castMu.Unlock()
+		}()
+	}
 
 	hitTargets := []uint64{s.playerGUID}
 	if isSelfCastOnly(spell) {
