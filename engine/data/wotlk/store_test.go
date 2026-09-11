@@ -55,6 +55,42 @@ func TestAreaTableLoading(t *testing.T) {
 	}
 }
 
+func TestReputationsEnumerateFactionDefaults(t *testing.T) {
+	dbcDir := t.TempDir()
+	const fieldCount = 57
+	records := make([]uint32, fieldCount*2)
+	records[0] = 72
+	records[1] = 72
+	records[2] = 1
+	records[10] = 3000
+	records[14] = 1
+	records[fieldCount] = 73
+	records[fieldCount+1] = 73
+	records[fieldCount+2] = 1
+	records[fieldCount+10] = 0
+	records[fieldCount+14] = 1
+	recordBytes := make([]byte, len(records)*4)
+	for i, value := range records {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:(i+1)*4], value)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 2)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "Faction.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := NewStore(dbcDir).Reputations(1, 1)
+	if err != nil || len(result) != 2 {
+		t.Fatalf("reputations=%+v err=%v", result, err)
+	}
+	if result[0].ID != 72 || result[0].BaseStanding != 3000 || result[0].DefaultFlags != 1 || result[1].ID != 73 {
+		t.Fatalf("unexpected reputation defaults: %+v", result)
+	}
+}
+
 func TestTalentLoading(t *testing.T) {
 	dbcDir := t.TempDir()
 	const fieldCount = 23

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/dbc"
@@ -315,6 +316,33 @@ func (s *Store) Reputation(id uint32, race, class uint8) (Reputation, bool, erro
 		}
 	}
 	return rep, true, nil
+}
+
+func (s *Store) Reputations(race, class uint8) ([]Reputation, error) {
+	file, err := s.File("Faction")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Reputation, 0, 128)
+	for index := 0; index < file.Records(); index++ {
+		record, recordErr := file.Record(index)
+		if recordErr != nil {
+			continue
+		}
+		id, idErr := record.Uint32(0)
+		if idErr != nil {
+			continue
+		}
+		reputation, found, repErr := s.Reputation(id, race, class)
+		if repErr != nil {
+			return nil, repErr
+		}
+		if found && reputation.ReputationList >= 0 && reputation.ReputationList < 128 {
+			result = append(result, reputation)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ReputationList < result[j].ReputationList })
+	return result, nil
 }
 
 func (s *Store) FactionTemplate(id uint32) (FactionTemplate, bool, error) {

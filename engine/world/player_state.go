@@ -666,6 +666,16 @@ func (s *session) loadPlayerReputations(ctx context.Context, state *playerState)
 	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
 		return nil
 	}
+	defaults, err := s.server.Data.Reputations(state.Race, state.Class)
+	if err != nil {
+		return err
+	}
+	state.Reputations = make([]playerReputation, 0, len(defaults))
+	byFaction := make(map[uint32]int, len(defaults))
+	for _, reputation := range defaults {
+		byFaction[reputation.ID] = len(state.Reputations)
+		state.Reputations = append(state.Reputations, playerReputation{FactionID: reputation.ID, ListID: uint32(reputation.ReputationList), Base: reputation.BaseStanding, Flags: reputation.DefaultFlags})
+	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT faction, standing, flags FROM character_reputation WHERE guid = ? ORDER BY faction", state.GUID)
 	if err != nil {
 		if isMissingColumn(err) || strings.Contains(strings.ToLower(err.Error()), "no such table") {
@@ -679,14 +689,12 @@ func (s *session) loadPlayerReputations(ctx context.Context, state *playerState)
 		if err := rows.Scan(&faction, &standing, &flags); err != nil {
 			continue
 		}
-		reputation, found, err := s.server.Data.Reputation(uint32(faction), state.Race, state.Class)
-		if err != nil {
-			return err
-		}
-		if !found || reputation.ReputationList < 0 || reputation.ReputationList >= 128 {
+		index, found := byFaction[uint32(faction)]
+		if !found {
 			continue
 		}
-		state.Reputations = append(state.Reputations, playerReputation{FactionID: uint32(faction), ListID: uint32(reputation.ReputationList), Standing: int32(standing), Base: reputation.BaseStanding, Flags: uint8(flags)})
+		state.Reputations[index].Standing = int32(standing)
+		state.Reputations[index].Flags = uint8(flags)
 	}
 	return rows.Err()
 }
