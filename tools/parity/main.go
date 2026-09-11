@@ -22,14 +22,16 @@ type toolStatus struct {
 }
 
 var (
-	opcodePattern         = regexp.MustCompile(`DEFINE_(?:SERVER_)?(?:OPCODE_)?HANDLER\(\s*([A-Z0-9_]+)`)
-	nullOpcodePattern     = regexp.MustCompile(`DEFINE_HANDLER\(\s*([A-Z0-9_]+)[^;]*Handle_NULL`)
-	goCasePattern         = regexp.MustCompile(`(?ms)^\s*case\s+([^:]+):`)
-	goOpcodePattern       = regexp.MustCompile(`protocol\.Opcode([A-Z0-9_]+)`)
-	statementSQLPattern   = regexp.MustCompile(`(?s)PrepareStatement\(\s*([A-Z0-9_]+)\s*,\s*(.*?)(?:,\s*CONNECTION|\);)`)
-	stringLitPattern      = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
-	goStatementSQLPattern = regexp.MustCompile(`ID:\s*"([A-Z0-9_]+)"\s*,\s*SQL:\s*"((?:[^"\\]|\\.)*)"`)
-	schemaPattern         = regexp.MustCompile(`(?i)CREATE\s+(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?[\x60]?([A-Za-z0-9_]+)[\x60]?`)
+	opcodePattern                     = regexp.MustCompile(`DEFINE_(?:SERVER_)?(?:OPCODE_)?HANDLER\(\s*([A-Z0-9_]+)`)
+	nullOpcodePattern                 = regexp.MustCompile(`DEFINE_HANDLER\(\s*([A-Z0-9_]+)[^;]*Handle_NULL`)
+	goCasePattern                     = regexp.MustCompile(`(?ms)^\s*case\s+([^:]+):`)
+	goOpcodePattern                   = regexp.MustCompile(`protocol\.Opcode([A-Z0-9_]+)`)
+	goSessionHandlerPattern           = regexp.MustCompile(`(?ms)func\s+\(s\s+\*session\)\s+(handle[A-Z][A-Za-z0-9_]*)\s*\([^{}]*\)\s*[^{}]*\{\s*return\s+(true|false)\s*\}`)
+	goSessionHandlerDefinitionPattern = regexp.MustCompile(`(?m)func\s+\(s\s+\*session\)\s+(handle[A-Z][A-Za-z0-9_]*)\s*\(`)
+	statementSQLPattern               = regexp.MustCompile(`(?s)PrepareStatement\(\s*([A-Z0-9_]+)\s*,\s*(.*?)(?:,\s*CONNECTION|\);)`)
+	stringLitPattern                  = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
+	goStatementSQLPattern             = regexp.MustCompile(`ID:\s*"([A-Z0-9_]+)"\s*,\s*SQL:\s*"((?:[^"\\]|\\.)*)"`)
+	schemaPattern                     = regexp.MustCompile(`(?i)CREATE\s+(?:TABLE|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?[\x60]?([A-Za-z0-9_]+)[\x60]?`)
 )
 
 func main() {
@@ -77,6 +79,10 @@ func buildReport(reference, repo string) (string, error) {
 		return "", err
 	}
 	goOpcodes, err := goHandlers(filepath.Join(repo, "engine", "world"))
+	if err != nil {
+		return "", err
+	}
+	goSessionHandlers, goTrivialHandlers, err := goSessionHandlerAudit(filepath.Join(repo, "engine", "world"))
 	if err != nil {
 		return "", err
 	}
@@ -143,7 +149,9 @@ func buildReport(reference, repo string) (string, error) {
 	fmt.Fprintf(&report, "| Server source files / lines | %d / %d | %d / %d | — |\n", refServer.Files, refServer.Lines, goSources.Files, goSources.Lines)
 	fmt.Fprintf(&report, "| Tool source files / lines | %d / %d | — | — |\n", refTools.Files, refTools.Lines)
 	fmt.Fprintf(&report, "| Client opcode registrations | %d | %d | %d |\n", len(refOpcodes), len(goOpcodes), len(difference(refOpcodes, goOpcodes)))
-	fmt.Fprintf(&report, "| Client behavioral opcode handlers | %d | %d | %d |\n", len(refBehavioralOpcodes), len(goOpcodes), len(difference(refBehavioralOpcodes, goOpcodes)))
+	fmt.Fprintf(&report, "| Client behavioral opcode bindings (reference, non-NULL) | %d | — | — |\n", len(refBehavioralOpcodes))
+	fmt.Fprintf(&report, "| Go session handler definitions | — | %d | — |\n", goSessionHandlers)
+	fmt.Fprintf(&report, "| Go trivial session handlers (`return true/false`) | — | %d | — |\n", len(goTrivialHandlers))
 	fmt.Fprintf(&report, "| Achievement criteria types | %d | %d | %d |\n", 124, 124, 0)
 	fmt.Fprintf(&report, "| Prepared statement identifiers | %d | %d | %d |\n", len(refStatements), len(goStatements), len(difference(refStatements, goStatements)))
 	fmt.Fprintf(&report, "| Prepared statement SQL mismatches | — | — | %d |\n", len(sqlDifferences(refStatementSQL, goStatementSQL)))
@@ -151,6 +159,7 @@ func buildReport(reference, repo string) (string, error) {
 	fmt.Fprintf(&report, "| Script source files / lines | %d / %d | %d / %d | — |\n", refScripts.Files, refScripts.Lines, goScripts.Files, goScripts.Lines)
 	fmt.Fprintf(&report, "| Test source files / lines | %d / %d | %d / %d | — |\n", refTests.Files, refTests.Lines, goTests.Files, goTests.Lines)
 	fmt.Fprintf(&report, "\n## Missing behavioral client opcode handlers\n\n%s\n", list(difference(refBehavioralOpcodes, goOpcodes)))
+	fmt.Fprintf(&report, "## Go session handlers with trivial return bodies\n\n%s\n", list(goTrivialHandlers))
 	fmt.Fprintf(&report, "## Reference client opcodes intentionally bound to Handle_NULL\n\n%s\n", list(refNullOpcodes))
 	fmt.Fprintf(&report, "## Missing prepared statements\n\n%s\n", list(difference(refStatements, goStatements)))
 	fmt.Fprintf(&report, "## Prepared statement SQL mismatches\n\n%s\n", list(sqlDifferences(refStatementSQL, goStatementSQL)))
@@ -255,6 +264,39 @@ func goHandlers(root string) ([]string, error) {
 	}
 	sort.Strings(result)
 	return result, nil
+}
+
+func goSessionHandlerAudit(root string) (int, []string, error) {
+	trivial := make([]string, 0)
+	total := 0
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(data)
+		total += len(goSessionHandlerDefinitionPattern.FindAllStringSubmatch(text, -1))
+		for _, match := range goSessionHandlerPattern.FindAllStringSubmatchIndex(text, -1) {
+			if len(match) < 4 {
+				continue
+			}
+			name := text[match[2]:match[3]]
+			line := 1 + strings.Count(text[:match[0]], "\n")
+			trivial = append(trivial, fmt.Sprintf("%s (%s:%d)", name, filepath.Base(path), line))
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	sort.Strings(trivial)
+	return total, trivial, nil
 }
 
 func clientOpcodes(values []string) []string {
