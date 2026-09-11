@@ -696,11 +696,8 @@ func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spe
 		ctx = context.Background()
 	}
 	target, ok := s.getCombatTarget(ctx, targetGUID)
-	if !ok {
+	if !ok || target.Health == 0 {
 		return
-	}
-	if target.Health == 0 {
-		target.Health = 100
 	}
 
 	// Apply Spell Power bonus (TrinityCore Unit::SpellDamageBonusDone)

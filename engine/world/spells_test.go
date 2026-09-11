@@ -311,6 +311,16 @@ func TestSpellDamageUsesDBCBasePointsWithoutLevelFallback(t *testing.T) {
 	}
 }
 
+func TestSpellDamageDoesNotReviveDeadCreature(t *testing.T) {
+	const creatureGUID = uint64(100)
+	srv := &Server{creatureMotion: map[uint64]*creatureMotion{creatureGUID: {GUID: creatureGUID, Health: 0, MaxHealth: 100, Level: 1}}, sessions: make(map[*session]struct{})}
+	sess := &session{server: srv, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Level: 80}}
+	sess.executeSpellDamage(context.Background(), creatureGUID, 123, 20)
+	if got := srv.creatureMotion[creatureGUID].Health; got != 0 {
+		t.Fatalf("health=%d, want dead creature to remain at zero", got)
+	}
+}
+
 func TestIsSelfCastOnly(t *testing.T) {
 	// Demon Armor (all active effects target TARGET_UNIT_CASTER = 1)
 	selfSpell := wotlk.Spell{
