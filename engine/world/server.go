@@ -2680,6 +2680,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
 		return false
 	}
+	s.server.kickDuplicateAccountSessions(account.ID, s)
 	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", account.ID); err != nil {
 		return false
 	}
@@ -2732,6 +2733,26 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		}
 	}
 	return true
+}
+
+func (s *Server) kickDuplicateAccountSessions(accountID uint32, current *session) {
+	if s == nil || accountID == 0 {
+		return
+	}
+	s.sessionsMu.RLock()
+	duplicates := make([]*session, 0)
+	for sess := range s.sessions {
+		if sess != current && sess.authed && sess.accountID == accountID {
+			duplicates = append(duplicates, sess)
+		}
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range duplicates {
+		sess.debug("session replaced by new login", "account", sess.accountName)
+		if sess.conn != nil {
+			_ = sess.conn.Close()
+		}
+	}
 }
 
 func (s *session) loadTutorials(ctx context.Context) {
