@@ -507,6 +507,35 @@ func TestCastSpellRejectsReentryWhileCastIsActive(t *testing.T) {
 	}
 }
 
+func TestHarmfulSpellTriggersCreatureAggroWithoutDamageEffect(t *testing.T) {
+	creatureGUID := creatureWorldGUID(7, 123)
+	srv := &Server{
+		sessions: make(map[*session]struct{}),
+		creatureMotion: map[uint64]*creatureMotion{
+			creatureGUID: {GUID: creatureGUID, Entry: 123, Map: 0, Health: 1000, MaxHealth: 1000, Level: 80},
+		},
+	}
+	sess := &session{
+		server:       srv,
+		playerLoaded: true,
+		playerGUID:   1,
+		player:       &playerState{GUID: 1, Level: 80, Map: 0},
+	}
+	srv.sessions[sess] = struct{}{}
+	spell := wotlk.Spell{ID: 99999, Effects: [3]wotlk.SpellEffect{{Effect: 1, ImplicitTargetA: 6}}}
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: creatureGUID}
+	sess.finishSpellCast(context.Background(), 1, spell.ID, spell, target)
+	srv.motionMu.Lock()
+	motion := srv.creatureMotion[creatureGUID]
+	threat := motion.ThreatMgr.GetThreat(sess.playerGUID)
+	inCombat := motion.InCombat
+	targetGUID := motion.TargetGUID
+	srv.motionMu.Unlock()
+	if threat <= 0 || !inCombat || targetGUID != sess.playerGUID {
+		t.Fatalf("expected hostile spell aggro, threat=%f inCombat=%v target=%d", threat, inCombat, targetGUID)
+	}
+}
+
 func TestHandleTotemDestroyed(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -692,8 +721,8 @@ func TestSpellEquippedItemRequirements(t *testing.T) {
 
 	// 1. Shield requirement test
 	shieldSpell := wotlk.Spell{
-		ID:                   23922, // Shield Slam
-		EquippedItemClass:    4,     // Armor
+		ID:                   23922,  // Shield Slam
+		EquippedItemClass:    4,      // Armor
 		EquippedItemSubClass: 1 << 6, // Shield
 	}
 
@@ -749,10 +778,10 @@ func TestSpellEquippedItemRequirements(t *testing.T) {
 
 	// 2. Main hand Dagger requirement test (e.g. Ambush / Backstab)
 	daggerSpell := wotlk.Spell{
-		ID:                   8676,                // Ambush
-		AttributesEx3:        spellAttr3MainHand,  // Requires main hand weapon
-		EquippedItemClass:    2,                   // Weapon
-		EquippedItemSubClass: 1 << 15,             // Dagger
+		ID:                   8676,               // Ambush
+		AttributesEx3:        spellAttr3MainHand, // Requires main hand weapon
+		EquippedItemClass:    2,                  // Weapon
+		EquippedItemSubClass: 1 << 15,            // Dagger
 	}
 
 	// Equip Sword 2001 in mainhand slot 15 (index 15*2 = 30)

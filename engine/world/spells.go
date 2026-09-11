@@ -441,6 +441,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 
+	if targetGUID != 0 && targetGUID != s.playerGUID && isHarmfulSpell(spell) && s.server != nil {
+		// TrinityCore adds hostile spell threat even when the spell has no direct
+		// damage effect or the target resists/misses the spell.
+		s.server.triggerCreatureAggro(ctx, targetGUID, s.playerGUID)
+	}
 	if len(hitTargets) == 0 {
 		// Spell missed, do not trigger channel, cooldown, or effects
 		return
