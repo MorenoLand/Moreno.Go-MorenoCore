@@ -61,7 +61,7 @@ func (s *session) handleCreatureQuery(ctx context.Context, payload []byte) bool 
 	}
 	if err != nil {
 		s.debug("creature query failed", "account", s.accountName, "entry", entry, "error", err)
-		return false
+		return s.write(uint16(protocol.OpcodeSMSG_CREATURE_QUERY_RESPONSE), buildCreatureQueryResponse(creatureQueryData{Entry: entry}, false), true) == nil
 	}
 	s.debug("creature query response", "account", s.accountName, "entry", entry, "name", data.Name)
 	return s.write(uint16(protocol.OpcodeSMSG_CREATURE_QUERY_RESPONSE), buildCreatureQueryResponse(data, true), true) == nil
