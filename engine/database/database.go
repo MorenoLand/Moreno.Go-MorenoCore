@@ -3,10 +3,12 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
 )
 
 type Backend string
@@ -18,9 +20,10 @@ const (
 )
 
 type Store struct {
-	Name    string
-	Backend Backend
-	DB      *sql.DB
+	Name          string
+	Backend       Backend
+	DB            *sql.DB
+	TraceRecorder *protocoltrace.Recorder
 }
 
 type Set struct {
@@ -84,10 +87,14 @@ func (s *Set) Close() error {
 func (s *Store) Ping(ctx context.Context) error { return s.DB.PingContext(ctx) }
 func (s *Store) Close() error                   { return s.DB.Close() }
 func (s *Store) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
-	return s.DB.ExecContext(ctx, query, args...)
+	result, err := s.DB.ExecContext(ctx, query, args...)
+	s.recordDatabaseEvent("exec", query, len(args), err)
+	return result, err
 }
 func (s *Store) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return s.DB.QueryContext(ctx, query, args...)
+	rows, err := s.DB.QueryContext(ctx, query, args...)
+	s.recordDatabaseEvent("query", query, len(args), err)
+	return rows, err
 }
 func (s *Store) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	return s.DB.QueryRowContext(ctx, query, args...)
@@ -96,10 +103,28 @@ func (s *Store) QueryRowContext(ctx context.Context, query string, args ...any) 
 	return s.DB.QueryRowContext(ctx, query, args...)
 }
 func (s *Store) Prepare(ctx context.Context, query string) (*sql.Stmt, error) {
-	return s.DB.PrepareContext(ctx, query)
+	stmt, err := s.DB.PrepareContext(ctx, query)
+	s.recordDatabaseEvent("prepare", query, 0, err)
+	return stmt, err
 }
 func (s *Store) Begin(ctx context.Context, options *sql.TxOptions) (*sql.Tx, error) {
-	return s.DB.BeginTx(ctx, options)
+	tx, err := s.DB.BeginTx(ctx, options)
+	s.recordDatabaseEvent("begin", "", 0, err)
+	return tx, err
+}
+
+func (s *Store) recordDatabaseEvent(operation, statement string, argumentCount int, err error) {
+	if s == nil || s.TraceRecorder == nil {
+		return
+	}
+	event := map[string]any{"store": s.Name, "operation": operation, "statement": statement, "argument_count": argumentCount}
+	if err != nil {
+		event["error"] = err.Error()
+	}
+	payload, marshalErr := json.Marshal(event)
+	if marshalErr == nil {
+		s.TraceRecorder.Record(protocoltrace.ClientToServer, 0, payload, "database")
+	}
 }
 
 func open(ctx context.Context, name, backend, file, info string, c config.Config) (*Store, error) {

@@ -73,23 +73,31 @@ func StatementSQL(id StatementID, backend Backend) (string, error) {
 func (s *Store) QueryRowStatement(ctx context.Context, id StatementID, args ...any) (*sql.Row, error) {
 	query, err := StatementSQL(id, s.Backend)
 	if err != nil {
+		s.recordDatabaseEvent("query_row", string(id), len(args), err)
 		return nil, err
 	}
+	s.recordDatabaseEvent("query_row", string(id), len(args), nil)
 	return s.DB.QueryRowContext(ctx, query, args...), nil
 }
 
 func (s *Store) QueryStatement(ctx context.Context, id StatementID, args ...any) (*sql.Rows, error) {
 	query, err := StatementSQL(id, s.Backend)
 	if err != nil {
+		s.recordDatabaseEvent("query", string(id), len(args), err)
 		return nil, err
 	}
-	return s.DB.QueryContext(ctx, query, args...)
+	rows, queryErr := s.DB.QueryContext(ctx, query, args...)
+	s.recordDatabaseEvent("query", string(id), len(args), queryErr)
+	return rows, queryErr
 }
 
 func (s *Store) ExecStatement(ctx context.Context, id StatementID, args ...any) (sql.Result, error) {
 	query, err := StatementSQL(id, s.Backend)
 	if err != nil {
+		s.recordDatabaseEvent("exec", string(id), len(args), err)
 		return nil, err
 	}
-	return s.DB.ExecContext(ctx, query, args...)
+	result, execErr := s.DB.ExecContext(ctx, query, args...)
+	s.recordDatabaseEvent("exec", string(id), len(args), execErr)
+	return result, execErr
 }

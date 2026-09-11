@@ -47,6 +47,9 @@ func RunCombined(ctx context.Context, c config.Config, logger *slog.Logger) erro
 	}
 	worldServer.TraceRecorder = traceRecorder
 	authServer.TraceRecorder = traceRecorder
+	stores.Auth.TraceRecorder = traceRecorder
+	stores.Characters.TraceRecorder = traceRecorder
+	stores.World.TraceRecorder = traceRecorder
 	defer persistProtocolTrace(c.ProtocolTracePath, traceRecorder)
 	if err := worldServer.Initialize(ctx); err != nil {
 		return err
@@ -84,6 +87,9 @@ func RunSingle(ctx context.Context, c config.Config, kind Kind, logger *slog.Log
 			return err
 		}
 		server.TraceRecorder = traceRecorder
+		stores.Auth.TraceRecorder = traceRecorder
+		stores.Characters.TraceRecorder = traceRecorder
+		stores.World.TraceRecorder = traceRecorder
 		defer persistProtocolTrace(c.ProtocolTracePath, traceRecorder)
 		return (&Service{Kind: kind, Address: fmt.Sprintf(":%d", c.RealmServerPort), Store: stores.Auth, Handler: server.Handle}).Run(ctx, logger)
 	}

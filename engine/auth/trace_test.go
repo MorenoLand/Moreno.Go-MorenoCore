@@ -20,11 +20,16 @@ func TestTraceConnRecordsAuthMessagePair(t *testing.T) {
 	if _, err := io.ReadFull(conn, data); err != nil {
 		t.Fatal(err)
 	}
-	go func() { _, _ = conn.Write([]byte{logonChallenge, wowSuccess, 0}) }()
+	writerDone := make(chan struct{})
+	go func() {
+		_, _ = conn.Write([]byte{logonChallenge, wowSuccess, 0})
+		close(writerDone)
+	}()
 	response := make([]byte, 3)
 	if _, err := io.ReadFull(clientConn, response); err != nil {
 		t.Fatal(err)
 	}
+	<-writerDone
 	conn.end()
 	events := recorder.Snapshot().Events
 	if len(events) != 2 || events[0].Direction != protocoltrace.ClientToServer || events[1].Direction != protocoltrace.ServerToClient {
