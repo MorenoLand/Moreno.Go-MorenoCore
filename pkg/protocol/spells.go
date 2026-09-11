@@ -170,6 +170,7 @@ func writeSpellCastHeader(packet *Buffer, casterGUID, casterUnitGUID uint64, cas
 	packet.WriteU32(castFlags)
 	packet.WriteU32(castTime)
 }
+
 // WriteSpellTargetData writes serialized SpellTargetData into packet.
 func WriteSpellTargetData(packet *Buffer, target SpellTargetData) {
 	writeSpellTargetData(packet, target)
@@ -270,6 +271,10 @@ func BuildPeriodicAuraLogEnergize(targetGUID, casterGUID uint64, spellID, auraTy
 // BuildAuraUpdate builds SMSG_AURA_UPDATE (0x496) payload.
 // Reference: TrinityCore AuraApplication::BuildUpdatePacket (SpellAuras.cpp:230-252).
 func BuildAuraUpdate(targetGUID, casterGUID uint64, slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32, casterLevel uint8) []byte {
+	return BuildAuraUpdateWithStack(targetGUID, casterGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, casterLevel, 1)
+}
+
+func BuildAuraUpdateWithStack(targetGUID, casterGUID uint64, slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32, casterLevel, stackCount uint8) []byte {
 	buf := NewBuffer(36)
 	buf.WritePackedGUID(targetGUID)
 	buf.WriteU8(slot)
@@ -295,7 +300,10 @@ func BuildAuraUpdate(targetGUID, casterGUID uint64, slot uint8, spellID uint32, 
 		casterLevel = 1
 	}
 	buf.WriteU8(casterLevel)
-	buf.WriteU8(1) // stack count
+	if stackCount == 0 {
+		stackCount = 1
+	}
+	buf.WriteU8(stackCount)
 	if flags&AuraFlagCaster == 0 { // not self-cast
 		buf.WritePackedGUID(casterGUID)
 	}
@@ -305,4 +313,3 @@ func BuildAuraUpdate(targetGUID, casterGUID uint64, slot uint8, spellID uint32, 
 	}
 	return buf.Bytes()
 }
-

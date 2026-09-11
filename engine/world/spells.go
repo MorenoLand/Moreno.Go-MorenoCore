@@ -1272,6 +1272,8 @@ type activeAura struct {
 	Slot               uint8
 	Positive           bool
 	CasterLevel        uint8
+	StackCount         uint8
+	RemainingCharges   uint8
 	AuraInterruptFlags uint32
 	DRGroup            DiminishingGroup
 	DamageTaken        uint32

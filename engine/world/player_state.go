@@ -359,6 +359,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.loadOptionalPlayerState(ctx, &state)
 	_ = s.calculatePlayerStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
+	_ = s.loadPlayerAuras(ctx, &state)
 	s.player = &state
 	return state, nil
 }

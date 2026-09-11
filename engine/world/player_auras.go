@@ -1,0 +1,141 @@
+package world
+
+import (
+	"context"
+	"database/sql"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+)
+
+func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT casterGuid, itemGuid, spell, effectMask, stackCount,
+		amount0, maxDuration, remainTime, remainCharges FROM character_aura WHERE guid = ? ORDER BY spell`, state.GUID)
+	if err != nil {
+		if errorsMissingAuraTable(err) {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	s.castMu.Lock()
+	s.auras = make(map[uint32]struct{})
+	s.auraSlots = make(map[uint32]uint8)
+	s.activeAuras = make(map[uint32]*activeAura)
+	var periodic []*activeAura
+	for rows.Next() {
+		var casterGUID, itemGUID uint64
+		var spellID, effectMask, stackCount, amount, maxDuration, remainTime, remainCharges int64
+		if err := rows.Scan(&casterGUID, &itemGUID, &spellID, &effectMask, &stackCount, &amount, &maxDuration, &remainTime, &remainCharges); err != nil {
+			continue
+		}
+		if spellID <= 0 || (remainTime == 0 || remainTime < -1) || spellID > int64(^uint32(0)) || len(s.activeAuras) >= 64 {
+			continue
+		}
+		id := uint32(spellID)
+		if _, exists := s.activeAuras[id]; exists {
+			continue
+		}
+		aura := &activeAura{SpellID: id, CasterGUID: casterGUID, TargetGUID: state.GUID, Slot: uint8(len(s.activeAuras)), Positive: true, CasterLevel: state.Level}
+		if maxDuration > 0 {
+			aura.DurationMs = clampAuraDuration(maxDuration)
+		}
+		if remainTime > 0 {
+			aura.RemainingMs = clampAuraDuration(remainTime)
+		}
+		if amount > 0 {
+			aura.Amount = uint32(amount)
+		}
+		if stackCount > 0 {
+			aura.StackCount = uint8(stackCount)
+		}
+		if remainCharges > 0 {
+			aura.RemainingCharges = uint8(remainCharges)
+		}
+		if s.server.Data != nil {
+			if spell, found, _ := s.server.Data.Spell(id); found {
+				aura.DispelType = spell.DispelType
+				aura.Mechanic = spell.Mechanic
+				aura.SchoolMask = spell.SchoolMask
+				aura.AuraInterruptFlags = spell.AuraInterruptFlags
+				for index, effect := range spell.Effects {
+					if effect.Effect == 0 || effect.Aura == 0 || effectMask&(1<<uint(index)) == 0 {
+						continue
+					}
+					aura.AuraType = effect.Aura
+					if effect.AuraPeriod > 0 {
+						aura.PeriodMs = effect.AuraPeriod
+					}
+					if aura.Amount == 0 && effect.BasePoints >= 0 {
+						aura.Amount = uint32(effect.BasePoints + 1)
+					}
+					break
+				}
+				aura.Positive = !isHarmfulAura(aura.AuraType)
+			}
+		}
+		if aura.DurationMs > 0 && aura.RemainingMs > aura.DurationMs {
+			aura.RemainingMs = aura.DurationMs
+		}
+		s.auras[id] = struct{}{}
+		s.auraSlots[id] = aura.Slot
+		s.activeAuras[id] = aura
+		if aura.PeriodMs > 0 && (aura.RemainingMs > 0 || aura.DurationMs == 0) {
+			periodic = append(periodic, aura)
+		}
+	}
+	rowErr := rows.Err()
+	s.castMu.Unlock()
+	if rowErr != nil {
+		return rowErr
+	}
+	for _, aura := range periodic {
+		s.schedulePlayerPeriodicTick(aura, aura.PeriodMs)
+	}
+	for _, aura := range s.loadedAuras() {
+		if aura.DurationMs > 0 && aura.RemainingMs > 0 {
+			aura.Timer = time.AfterFunc(time.Duration(aura.RemainingMs)*time.Millisecond, func(spellID uint32) func() {
+				return func() { s.expirePlayerAura(spellID) }
+			}(aura.SpellID))
+		}
+	}
+	return nil
+}
+
+func errorsMissingAuraTable(err error) bool {
+	value := strings.ToLower(err.Error())
+	return sql.ErrNoRows == err || strings.Contains(value, "no such table") || strings.Contains(value, "no such column") || strings.Contains(value, "unknown column")
+}
+
+func clampAuraDuration(value int64) uint32 {
+	if value <= 0 {
+		return 0
+	}
+	if value > int64(^uint32(0)) {
+		return ^uint32(0)
+	}
+	return uint32(value)
+}
+
+func (s *session) loadedAuras() []*activeAura {
+	s.castMu.Lock()
+	result := make([]*activeAura, 0, len(s.activeAuras))
+	for _, aura := range s.activeAuras {
+		result = append(result, aura)
+	}
+	s.castMu.Unlock()
+	sort.Slice(result, func(i, j int) bool { return result[i].Slot < result[j].Slot })
+	return result
+}
+
+func (s *session) sendLoadedAuras() {
+	for _, aura := range s.loadedAuras() {
+		packet := protocol.BuildAuraUpdateWithStack(s.playerGUID, aura.CasterGUID, aura.Slot, aura.SpellID, false, aura.Positive, aura.DurationMs, aura.RemainingMs, aura.CasterLevel, aura.StackCount)
+		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
+	}
+}
