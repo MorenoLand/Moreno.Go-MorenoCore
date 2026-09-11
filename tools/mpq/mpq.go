@@ -2,6 +2,7 @@ package mpq
 
 import (
 	"bytes"
+	"compress/bzip2"
 	"compress/zlib"
 	"encoding/binary"
 	"errors"
@@ -271,10 +272,16 @@ func decompress(data []byte, expected, flags uint32) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty compressed MPQ sector")
 	}
-	if data[0]&0x02 == 0 {
+	var reader io.ReadCloser
+	var err error
+	switch {
+	case data[0]&0x02 != 0:
+		reader, err = zlib.NewReader(bytes.NewReader(data[1:]))
+	case data[0]&0x10 != 0:
+		reader = io.NopCloser(bzip2.NewReader(bytes.NewReader(data[1:])))
+	default:
 		return nil, errors.New("unsupported MPQ compression method")
 	}
-	reader, err := zlib.NewReader(bytes.NewReader(data[1:]))
 	if err != nil {
 		return nil, err
 	}

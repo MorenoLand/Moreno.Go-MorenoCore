@@ -1,10 +1,24 @@
 package mpq
 
 import (
+	"bytes"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestDecompressBzip2Sector(t *testing.T) {
+	compressed, err := base64.StdEncoding.DecodeString("QlpoOTFBWSZTWUT3E3gAAAGRgEAABkSQgCAAIgM0hDAhtoFUJ4u5IpwoSCJ7ibwA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	compressed = append([]byte{0x10}, compressed...)
+	decoded, err := decompress(compressed, uint32(len("hello world")), fileCompress)
+	if err != nil || !bytes.Equal(decoded, []byte("hello world")) {
+		t.Fatalf("decoded=%q err=%v", decoded, err)
+	}
+}
 
 func TestNormalize(t *testing.T) {
 	cases := []struct {
