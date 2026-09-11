@@ -20,6 +20,7 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
 )
 
 const (
@@ -44,10 +45,11 @@ const (
 var versionChallenge = [16]byte{0xBA, 0xA3, 0x1E, 0x99, 0xA0, 0x0B, 0x21, 0x57, 0xFC, 0x37, 0x3F, 0xB3, 0x69, 0xCD, 0xD2, 0xF1}
 
 type Server struct {
-	Store        *database.Store
-	Logger       *slog.Logger
-	RealmID      uint32
-	RealmAddress string
+	Store         *database.Store
+	Logger        *slog.Logger
+	RealmID       uint32
+	RealmAddress  string
+	TraceRecorder *protocoltrace.Recorder
 }
 
 type account struct {
@@ -133,11 +135,19 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 	defer close(closed)
 	remoteIP := remoteAddress(conn)
 	state := &session{server: s, conn: conn, status: statusChallenge, remoteIP: remoteIP}
+	var traced *traceConn
+	if s.TraceRecorder != nil {
+		traced = &traceConn{Conn: conn, recorder: s.TraceRecorder}
+		state.conn = traced
+	}
 	s.debug("authentication connection accepted", "remote", remoteIP)
 	for {
 		cmd := []byte{0}
 		if _, err := io.ReadFull(conn, cmd); err != nil {
 			return
+		}
+		if traced != nil {
+			traced.begin(cmd[0])
 		}
 		var err error
 		switch cmd[0] {
@@ -152,7 +162,13 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 		case reconnectProof:
 			err = state.handleReconnectProof(ctx)
 		default:
+			if traced != nil {
+				traced.end()
+			}
 			return
+		}
+		if traced != nil {
+			traced.end()
 		}
 		if err != nil {
 			if s.Logger != nil {
