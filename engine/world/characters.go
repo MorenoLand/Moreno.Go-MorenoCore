@@ -1604,7 +1604,7 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 	if !s.playerLoaded {
 		return true
 	}
-	s.activeLoot = nil
+	s.releaseActiveLoot()
 	inCombat := s.attackTarget != 0 && (s.player == nil || s.player.PlayerFlags&playerFlagResting == 0)
 	if inCombat && s.security == 0 {
 		response := protocol.NewBuffer(5)
@@ -1702,6 +1702,21 @@ func (s *session) completeLogout(ctx context.Context) error {
 	s.logoutAt = time.Time{}
 	s.debug("player logged out", "account", s.accountName, "guid", s.playerGUID)
 	return firstErr
+}
+
+func (s *session) releaseActiveLoot() {
+	loot := s.activeLoot
+	if loot == nil {
+		return
+	}
+	if loot.RoundRobinPlayer == s.playerGUID {
+		loot.RoundRobinPlayer = 0
+	}
+	loot.removeViewer(s.playerGUID)
+	s.activeLoot = nil
+	if loot.Money == 0 && len(loot.Items) == 0 {
+		s.clearCreatureLoot(loot)
+	}
 }
 
 func (s *session) triggerLogout(ctx context.Context) {

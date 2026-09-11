@@ -623,8 +623,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 					state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 				}
-				state.logoutAt = time.Time{}
-				continue
+				return
 			}
 			return
 		}
@@ -2952,6 +2951,7 @@ func (s *session) logout() {
 	if s.server != nil {
 		s.server.removeSessionChannels(s)
 	}
+	s.releaseActiveLoot()
 	if s.playerLoaded {
 		s.triggerLogout(ctx)
 		if err := s.savePlayerPosition(ctx); err != nil {

@@ -87,6 +87,25 @@ func TestLootingMoneyAndItems(t *testing.T) {
 	}
 }
 
+func TestLogoutReleasesActiveLootState(t *testing.T) {
+	server := &Server{creatureLoot: make(map[uint64]*activeLootState)}
+	targetGUID := creatureWorldGUID(4, 303)
+	loot := &activeLootState{TargetGUID: targetGUID, Items: make(map[uint8]lootItem), Viewers: make(map[uint64]*session)}
+	sess := &session{server: server, playerGUID: 7, playerLoaded: true, activeLoot: loot}
+	loot.Viewers[sess.playerGUID] = sess
+	server.creatureLoot[targetGUID] = loot
+	sess.releaseActiveLoot()
+	if sess.activeLoot != nil {
+		t.Fatal("expected active loot to be cleared")
+	}
+	if _, ok := loot.Viewers[sess.playerGUID]; ok {
+		t.Fatal("expected logout viewer to be removed")
+	}
+	if _, ok := server.creatureLoot[targetGUID]; ok {
+		t.Fatal("expected empty loot container to be removed")
+	}
+}
+
 func TestLootItemPushResultMatchesReferenceFlags(t *testing.T) {
 	reader := protocol.NewReader(buildLootItemPushResult(26, 0, 23, 7001, 2, 5))
 	if value, err := reader.ReadU64(); err != nil || value != 26 {
