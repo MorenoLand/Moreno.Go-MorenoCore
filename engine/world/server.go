@@ -1202,6 +1202,9 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleLogoutRequest(ctx) {
 				return
 			}
+			if !state.playerLoaded {
+				return
+			}
 		case uint32(protocol.OpcodeCMSG_PLAYER_LOGOUT):
 			if !state.authed || !state.handlePlayerLogout() {
 				return
