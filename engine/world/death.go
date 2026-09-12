@@ -41,6 +41,10 @@ const (
 	defaultGraveyardHorde    uint32 = 10 // Crossroads (ObjectMgr.cpp:6853)
 )
 
+func (s *session) isDeadOrGhost() bool {
+	return s == nil || s.player == nil || (s.player.Health == 0 && s.player.MaxHealth > 0) || s.player.PlayerFlags&playerFlagGhost != 0
+}
+
 // copseReclaimDelay mirrors the static table in Player.cpp:177.
 var copseReclaimDelay = [maxDeathCount]uint32{30, 60, 120}
 
@@ -736,7 +740,7 @@ func (s *session) handleSelfRes(ctx context.Context) bool {
 // for the self-cast case: a dead player gets a resurrect request from itself
 // carrying the effect damage as health and MiscValue as mana.
 func (s *session) applySelfResurrectEffect(spell wotlk.Spell) {
-	if s.player == nil || s.player.Health > 0 {
+	if s.player == nil || !s.isDeadOrGhost() {
 		return
 	}
 	if s.resurrection != nil {

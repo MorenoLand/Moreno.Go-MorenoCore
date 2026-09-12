@@ -27,6 +27,7 @@ const (
 	spellFailedBadTargets                uint8 = 12  // SPELL_FAILED_BAD_TARGETS (SharedDefines.h:992)
 	spellFailedNotReady                  uint8 = 67  // SPELL_FAILED_NOT_READY (SharedDefines.h:1049)
 	spellFailedSilenced                  uint8 = 104 // SPELL_FAILED_SILENCED (SharedDefines.h:1086)
+	spellFailedCasterDead                uint8 = 23  // SPELL_FAILED_CASTER_DEAD (SharedDefines.h:1003)
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
@@ -196,6 +197,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 	spellID, err := reader.ReadU32()
 	if err != nil {
 		return false
+	}
+	if s.isDeadOrGhost() {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedCasterDead), true)
+		return true
 	}
 	clientCastFlags, err := reader.ReadU8()
 	if err != nil {
@@ -437,6 +442,18 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			}
 			s.castMu.Unlock()
 		}()
+	}
+	if s.isDeadOrGhost() {
+		canResurrect := false
+		for _, effect := range spell.Effects {
+			if effect.Effect == spellEffectResurrectNew {
+				canResurrect = true
+				break
+			}
+		}
+		if !canResurrect {
+			return
+		}
 	}
 
 	hitTargets := make([]uint64, 0, 1)

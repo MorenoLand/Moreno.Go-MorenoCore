@@ -45,12 +45,14 @@ type creatureMotion struct {
 	MoveType    uint32  // 1 random, 2 waypoint
 	Wander      float64
 
-	Faction     uint32
-	Level       uint32
-	UnitFlags   uint32
-	FlagsExtra  uint32
-	AttackTime  uint32
-	CombatReach float32
+	Faction         uint32
+	Level           uint32
+	UnitFlags       uint32
+	FlagsExtra      uint32
+	ReactState      uint8
+	ReactStateKnown bool
+	AttackTime      uint32
+	CombatReach     float32
 
 	Armor       uint32
 	Resistances [7]uint32
@@ -106,6 +108,23 @@ const (
 	creatureBaseRunSpeed  = 7.0
 )
 
+const (
+	creatureReactPassive uint8 = iota
+	creatureReactDefensive
+	creatureReactAggressive
+)
+
+func creatureReactState(creatureType, npcFlags, flagsExtra uint32, aiName string) uint8 {
+	if creatureType == 8 || creatureType == 11 || flagsExtra&0x00000080 != 0 || npcFlags&0x0000C000 != 0 || aiName == "PassiveAI" || aiName == "NullCreatureAI" || aiName == "TriggerAI" {
+		return creatureReactPassive
+	}
+	return creatureReactAggressive
+}
+
+func isCreaturePassive(motion *creatureMotion) bool {
+	return motion != nil && motion.ReactStateKnown && motion.ReactState == creatureReactPassive
+}
+
 func creatureWalkVelocity(multiplier float64) float32 {
 	if multiplier <= 0 {
 		return creatureBaseWalkSpeed
@@ -131,29 +150,31 @@ func (s *Server) motionFor(ctx context.Context, guid, entry, mapID uint32, x, y,
 	if motion == nil || motion.Entry != entry {
 		st := s.loadCreatureStats(ctx, entry)
 		motion = &creatureMotion{
-			GUID:        key,
-			Entry:       entry,
-			Map:         mapID,
-			HomeX:       x,
-			HomeY:       y,
-			HomeZ:       z,
-			X:           x,
-			Y:           y,
-			Z:           z,
-			Speed:       walkSpeed,
-			RunSpeed:    creatureBaseRunSpeed,
-			MoveType:    moveType,
-			Wander:      wander,
-			Health:      st.Health,
-			MaxHealth:   st.MaxHealth,
-			Armor:       st.Armor,
-			Resistances: st.Resistances,
-			MinDamage:   st.MinDamage,
-			MaxDamage:   st.MaxDamage,
-			Level:       st.Level,
-			AttackTime:  st.AttackTime,
-			UnitFlags:   st.UnitFlags,
-			FlagsExtra:  st.FlagsExtra,
+			GUID:            key,
+			Entry:           entry,
+			Map:             mapID,
+			HomeX:           x,
+			HomeY:           y,
+			HomeZ:           z,
+			X:               x,
+			Y:               y,
+			Z:               z,
+			Speed:           walkSpeed,
+			RunSpeed:        creatureBaseRunSpeed,
+			MoveType:        moveType,
+			Wander:          wander,
+			Health:          st.Health,
+			MaxHealth:       st.MaxHealth,
+			Armor:           st.Armor,
+			Resistances:     st.Resistances,
+			MinDamage:       st.MinDamage,
+			MaxDamage:       st.MaxDamage,
+			Level:           st.Level,
+			AttackTime:      st.AttackTime,
+			UnitFlags:       st.UnitFlags,
+			FlagsExtra:      st.FlagsExtra,
+			ReactState:      st.ReactState,
+			ReactStateKnown: st.ReactStateKnown,
 		}
 		if walkSpeed <= 0 {
 			motion.Speed = creatureBaseWalkSpeed
@@ -198,35 +219,40 @@ func (s *Server) triggerCreatureAggro(ctx context.Context, creatureGUID, playerG
 			WHERE c.guid = ?`, guid).Scan(&mapID, &x, &y, &z, &faction, &name, &scriptName); err == nil {
 			st := s.loadCreatureStats(ctx, entry)
 			motion = &creatureMotion{
-				GUID:       creatureGUID,
-				Entry:      entry,
-				Map:        uint32(mapID),
-				HomeX:      float32(x),
-				HomeY:      float32(y),
-				HomeZ:      float32(z),
-				X:          float32(x),
-				Y:          float32(y),
-				Z:          float32(z),
-				Speed:      creatureBaseWalkSpeed,
-				RunSpeed:   creatureBaseRunSpeed,
-				Faction:    uint32(faction),
-				Level:      st.Level,
-				Health:     st.Health,
-				MaxHealth:  st.MaxHealth,
-				Armor:      st.Armor,
-				MinDamage:  st.MinDamage,
-				MaxDamage:  st.MaxDamage,
-				AttackTime: st.AttackTime,
-				UnitFlags:  st.UnitFlags,
-				FlagsExtra: st.FlagsExtra,
-				Name:       name,
-				ScriptName: scriptName,
+				GUID:            creatureGUID,
+				Entry:           entry,
+				Map:             uint32(mapID),
+				HomeX:           float32(x),
+				HomeY:           float32(y),
+				HomeZ:           float32(z),
+				X:               float32(x),
+				Y:               float32(y),
+				Z:               float32(z),
+				Speed:           creatureBaseWalkSpeed,
+				RunSpeed:        creatureBaseRunSpeed,
+				Faction:         uint32(faction),
+				Level:           st.Level,
+				Health:          st.Health,
+				MaxHealth:       st.MaxHealth,
+				Armor:           st.Armor,
+				MinDamage:       st.MinDamage,
+				MaxDamage:       st.MaxDamage,
+				AttackTime:      st.AttackTime,
+				UnitFlags:       st.UnitFlags,
+				FlagsExtra:      st.FlagsExtra,
+				ReactState:      st.ReactState,
+				ReactStateKnown: st.ReactStateKnown,
+				Name:            name,
+				ScriptName:      scriptName,
 			}
 			s.creatureMotion[creatureGUID] = motion
 			s.creatureMotion[stdKey] = motion
 		}
 	}
 	if motion != nil && motion.Health > 0 {
+		if isCreaturePassive(motion) {
+			return
+		}
 		if motion.Evading {
 			return
 		}
@@ -371,7 +397,7 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 	for sess := range s.sessions {
 		if sess.playerLoaded && sess.player != nil {
 			isGM := (sess.player.ExtraFlags&playerExtraGMOn != 0) || (sess.player.PlayerFlags&playerFlagGM != 0)
-			isDead := sess.player.Health == 0
+			isDead := (sess.player.Health == 0 && sess.player.MaxHealth > 0) || sess.player.PlayerFlags&playerFlagGhost != 0
 			players = append(players, playerPos{
 				Map:             sess.player.Map,
 				X:               sess.player.X,
@@ -431,6 +457,12 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 			motion.Level = uint32(level)
 			motion.UnitFlags = uint32(unitFlags)
 			motion.FlagsExtra = uint32(flagsExtra)
+			if !motion.ReactStateKnown {
+				if reactState, known := s.loadCreatureReaction(ctx, uint32(entry)); known {
+					motion.ReactState = reactState
+					motion.ReactStateKnown = true
+				}
+			}
 			motion.AttackTime = uint32(attackTime)
 			motion.RunSpeed = creatureRunVelocity(runSpeed)
 			if motion.MaxHealth == 0 {
@@ -464,6 +496,14 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		motion.TargetGUID = 0
 		motion.Moving = false
 		return
+	}
+	if isCreaturePassive(motion) && motion.InCombat {
+		if motion.ThreatMgr != nil {
+			motion.ThreatMgr.ClearThreat()
+		}
+		motion.InCombat = false
+		motion.TargetGUID = 0
+		motion.Moving = false
 	}
 
 	// Pet AI handling if this creature is a player pet
@@ -786,7 +826,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 
 	// 3. Check for nearby hostile aggro
 	for _, p := range players {
-		if p.Map != motion.Map || p.IsGM || p.IsDead || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
+		if p.Map != motion.Map || p.IsGM || p.IsDead || isCreaturePassive(motion) || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
 			continue
 		}
 		dist := float32(math.Hypot(float64(p.X-motion.X), float64(p.Y-motion.Y)))

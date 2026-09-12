@@ -57,6 +57,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		return nil, 0, nil
 	}
 	isGM := state.ExtraFlags&playerExtraGMOn != 0 || state.PlayerFlags&playerFlagGM != 0
+	isGhost := state.Health == 0 || state.PlayerFlags&playerFlagGhost != 0
 	// Event creatures spawn only while their event runs; game_event_npcflag
 	// flags OR into the template npcflag during events (guards gaining
 	// seasonal gossip/questgiver flags).
@@ -91,7 +92,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 		ORDER BY c.guid`
 	queryArgs := make([]any, 0, len(selectArgs)+8+len(eventArgs))
 	queryArgs = append(queryArgs, selectArgs...)
-	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM, state.Health == 0)
+	queryArgs = append(queryArgs, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM, isGhost)
 	queryArgs = append(queryArgs, eventArgs...)
 	rows, err := s.WorldStore.DB.QueryContext(ctx, fullQuery, queryArgs...)
 	if err != nil {
@@ -105,7 +106,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
 			AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))
 			ORDER BY c.guid`
-		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM, state.Health == 0)
+		rows, err = s.WorldStore.DB.QueryContext(ctx, fallbackQuery, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance, isGM, isGM, isGhost)
 		if err != nil {
 			if missingTable(err) {
 				return nil, 0, nil

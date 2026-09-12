@@ -119,6 +119,39 @@ func TestCreatureCombatFlags(t *testing.T) {
 	}
 }
 
+func TestCreatureReactStateMatchesReferenceDefaults(t *testing.T) {
+	if got := creatureReactState(8, 0, 0, ""); got != creatureReactPassive {
+		t.Fatalf("critter react state=%d", got)
+	}
+	if got := creatureReactState(7, 16384, 0, ""); got != creatureReactPassive {
+		t.Fatalf("spirit healer react state=%d", got)
+	}
+	if got := creatureReactState(7, 0, 0x80, ""); got != creatureReactPassive {
+		t.Fatalf("trigger react state=%d", got)
+	}
+	if got := creatureReactState(7, 0, 0, "PassiveAI"); got != creatureReactPassive {
+		t.Fatalf("PassiveAI react state=%d", got)
+	}
+	if got := creatureReactState(7, 0, 0, ""); got != creatureReactAggressive {
+		t.Fatalf("ordinary react state=%d", got)
+	}
+}
+
+func TestDeadGhostIsNotTargetedAndPassiveCreaturesDoNotAggro(t *testing.T) {
+	server := &Server{creatureMotion: make(map[uint64]*creatureMotion), sessions: make(map[*session]struct{})}
+	motion := &creatureMotion{GUID: creatureWorldGUID(100, 68), Map: 0, Health: 100, MaxHealth: 100, InCombat: true, TargetGUID: 1, ReactState: creatureReactAggressive, ReactStateKnown: true}
+	server.stepCreatureMotion(context.Background(), motion, []playerPos{{GUID: 1, Map: 0, IsDead: true}}, time.Now())
+	if motion.InCombat || motion.TargetGUID != 0 {
+		t.Fatalf("dead target remained in combat: inCombat=%v target=%d", motion.InCombat, motion.TargetGUID)
+	}
+
+	passive := &creatureMotion{GUID: creatureWorldGUID(101, 68), Map: 0, Health: 100, MaxHealth: 100, Faction: 14, ReactState: creatureReactPassive, ReactStateKnown: true}
+	server.triggerCreatureAggro(context.Background(), passive.GUID, 1)
+	if passive.InCombat || passive.TargetGUID != 0 {
+		t.Fatalf("passive creature entered combat: inCombat=%v target=%d", passive.InCombat, passive.TargetGUID)
+	}
+}
+
 func sqrt64(v float64) float64 {
 	if v <= 0 {
 		return 0

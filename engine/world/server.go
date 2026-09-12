@@ -354,7 +354,7 @@ func (s *Server) updatePlayerCombat(ctx context.Context) {
 	s.sessionsMu.RLock()
 	var combatSessions []*session
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && (sess.attackTarget != 0 || sess.autoRepeatSpell != 0) && sess.player.Health > 0 {
+		if sess.playerLoaded && sess.player != nil && (sess.attackTarget != 0 || sess.autoRepeatSpell != 0) && !sess.isDeadOrGhost() {
 			combatSessions = append(combatSessions, sess)
 		}
 	}
@@ -463,7 +463,7 @@ func (s *Server) updatePlayerRegeneration(ctx context.Context, now time.Time) {
 	s.sessionsMu.RLock()
 	var activeSessions []*session
 	for sess := range s.sessions {
-		if sess.playerLoaded && sess.player != nil && sess.player.Health > 0 {
+		if sess.playerLoaded && sess.player != nil && !sess.isDeadOrGhost() {
 			activeSessions = append(activeSessions, sess)
 		}
 	}

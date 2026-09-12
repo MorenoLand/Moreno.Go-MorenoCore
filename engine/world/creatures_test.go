@@ -21,14 +21,16 @@ func TestBuildNearbyCreatureUpdates(t *testing.T) {
 		"CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL, map INTEGER NOT NULL, phaseMask INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, orientation REAL NOT NULL, modelid INTEGER NOT NULL, npcflag INTEGER NOT NULL, unit_flags INTEGER NOT NULL, dynamicflags INTEGER NOT NULL, curhealth INTEGER NOT NULL, curmana INTEGER NOT NULL)",
 		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, modelid1 INTEGER NOT NULL, faction INTEGER NOT NULL, npcflag INTEGER NOT NULL, unit_flags INTEGER NOT NULL, dynamicflags INTEGER NOT NULL, maxlevel INTEGER NOT NULL, scale REAL NOT NULL, speed_walk REAL NOT NULL, speed_run REAL NOT NULL, BaseAttackTime INTEGER NOT NULL, RangeAttackTime INTEGER NOT NULL, flags_extra INTEGER NOT NULL DEFAULT 0)",
 		"INSERT INTO creature_template VALUES (68, 3167, 11, 1, 32768, 0, 80, 1, 1, 1.14286, 2000, 2000, 0)",
+		"INSERT INTO creature_template VALUES (69, 3168, 11, 16384, 32768, 0, 80, 1, 1, 1.14286, 2000, 2000, 0)",
 		"INSERT INTO creature VALUES (79859, 68, 0, 1, -8958.4, 509.049, 96.5968, 0.70014, 0, 0, 0, 0, 100, 0)",
+		"INSERT INTO creature VALUES (79860, 69, 0, 1, -8958.0, 509.0, 96.5968, 0.70014, 0, 0, 0, 0, 100, 0)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
 		}
 	}
 	server := &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}, Config: config.Default()}
-	packet, count, err := server.buildNearbyCreatureUpdates(context.Background(), playerState{Map: 0, X: -8977.78, Y: 519.564, Z: 68})
+	packet, count, err := server.buildNearbyCreatureUpdates(context.Background(), playerState{Map: 0, X: -8977.78, Y: 519.564, Z: 68, Health: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,5 +105,12 @@ func TestBuildNearbyCreatureUpdates(t *testing.T) {
 	}
 	if values[objectFieldEntry] != 68 {
 		t.Fatalf("creature entry=%d", values[objectFieldEntry])
+	}
+	_, ghostCount, err := server.buildNearbyCreatureUpdates(context.Background(), playerState{Map: 0, X: -8977.78, Y: 519.564, Z: 68, Health: 1, PlayerFlags: playerFlagGhost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ghostCount != 2 {
+		t.Fatalf("ghost creature count=%d", ghostCount)
 	}
 }

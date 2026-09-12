@@ -165,6 +165,10 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		return true
 	}
+	if s.isDeadOrGhost() {
+		s.attackTarget = 0
+		return true
+	}
 	reader := protocol.NewReader(payload)
 	victim, err := reader.ReadU64()
 	if err != nil {
@@ -229,7 +233,7 @@ func (s *session) handleAttackSwing(ctx context.Context, payload []byte) bool {
 }
 
 func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, attType protocol.WeaponAttackType) {
-	if s.player == nil || target.Health == 0 {
+	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
 	}
 	now := time.Now()
@@ -544,7 +548,7 @@ func (s *session) executeMeleeSwing(ctx context.Context, target combatTarget, at
 }
 
 func (s *session) executeRangedAttack(ctx context.Context, target combatTarget, spellID uint32) {
-	if s.player == nil || target.Health == 0 {
+	if s.player == nil || s.isDeadOrGhost() || target.Health == 0 {
 		return
 	}
 	now := time.Now()
@@ -910,17 +914,19 @@ func calcArmorReducedDamage(armor float64, attackerLevel uint8, damage uint32, a
 }
 
 type creatureStats struct {
-	Level       uint32
-	Health      uint32
-	MaxHealth   uint32
-	Armor       uint32
-	Resistances [7]uint32
-	MinDamage   float32
-	MaxDamage   float32
-	AttackTime  uint32
-	CombatReach float32
-	UnitFlags   uint32
-	FlagsExtra  uint32
+	Level           uint32
+	Health          uint32
+	MaxHealth       uint32
+	Armor           uint32
+	Resistances     [7]uint32
+	MinDamage       float32
+	MaxDamage       float32
+	AttackTime      uint32
+	CombatReach     float32
+	UnitFlags       uint32
+	FlagsExtra      uint32
+	ReactState      uint8
+	ReactStateKnown bool
 }
 
 func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureStats {
@@ -934,6 +940,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 			MaxDamage:   2.0,
 			AttackTime:  2000,
 			CombatReach: 1.5,
+			ReactState:  creatureReactAggressive,
 		}
 	}
 	s.statsMu.RLock()
@@ -954,6 +961,7 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		MaxDamage:   2.0,
 		AttackTime:  2000,
 		CombatReach: 1.5,
+		ReactState:  creatureReactAggressive,
 	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return stats
@@ -975,6 +983,10 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		FROM creature_template WHERE entry = ?`, entry)
 	if err := row.Scan(&maxlevel, &unitClass, &exp, &baseAttackTime, &healthMod, &armorMod, &damageMod, &unitFlags, &flagsExtra); err != nil {
 		return stats
+	}
+	if reactState, known := s.loadCreatureReaction(ctx, entry); known {
+		stats.ReactState = reactState
+		stats.ReactStateKnown = true
 	}
 
 	if maxlevel < 1 {
@@ -1075,6 +1087,18 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	s.statsMu.Unlock()
 
 	return stats
+}
+
+func (s *Server) loadCreatureReaction(ctx context.Context, entry uint32) (uint8, bool) {
+	if s == nil || s.WorldStore == nil || s.WorldStore.DB == nil {
+		return creatureReactAggressive, false
+	}
+	var creatureType, npcFlags, flagsExtra int64
+	var aiName string
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(type, 0), COALESCE(npcflag, 0), COALESCE(flags_extra, 0), COALESCE(AIName, '') FROM creature_template WHERE entry = ?", entry).Scan(&creatureType, &npcFlags, &flagsExtra, &aiName); err != nil {
+		return creatureReactAggressive, false
+	}
+	return creatureReactState(uint32(creatureType), uint32(npcFlags), uint32(flagsExtra), aiName), true
 }
 
 func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarget, error) {
