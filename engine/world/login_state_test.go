@@ -113,3 +113,29 @@ func TestLoadAndSendPersistentAura(t *testing.T) {
 	}
 	sess.clearActiveAuras()
 }
+
+func TestLoadGhostAuraRestoresGhostFlag(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE character_aura (
+		guid INTEGER, casterGuid INTEGER, itemGuid INTEGER, spell INTEGER, effectMask INTEGER,
+		stackCount INTEGER, amount0 INTEGER, maxDuration INTEGER, remainTime INTEGER, remainCharges INTEGER
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO character_aura VALUES (9, 9, 0, 8326, 1, 1, 0, -1, -1, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	sess := &session{server: &Server{CharactersStore: store}, playerGUID: 9}
+	state := &playerState{GUID: 9, Level: 20}
+	if err := sess.loadPlayerAuras(context.Background(), state); err != nil {
+		t.Fatal(err)
+	}
+	if state.PlayerFlags&playerFlagGhost == 0 {
+		t.Fatal("ghost aura did not restore player ghost flag")
+	}
+}

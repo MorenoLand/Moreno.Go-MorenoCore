@@ -168,6 +168,7 @@ type playerState struct {
 	Zone                 uint32
 	Health               uint32
 	MaxHealth            uint32
+	HealthLoaded         bool
 	BaseMana             uint32
 	Powers               [7]uint32
 	MaxPowers            [7]uint32
@@ -590,9 +591,7 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 			state.Powers[0] = totalMana
 		}
 	}
-	if state.Health > state.MaxHealth || state.Health <= 1 || (state.XP == 0 && state.Level == 1) {
-		state.Health = state.MaxHealth
-	}
+	state.Health = restorePlayerHealth(state.Health, state.MaxHealth, state.HealthLoaded, state.XP, state.Level)
 
 	// Armor: item armor + Agility * 2
 	state.Armor += totalAgi * 2
@@ -660,6 +659,19 @@ func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) 
 	}
 
 	return nil
+}
+
+func restorePlayerHealth(savedHealth, maxHealth uint32, loaded bool, xp uint32, level uint8) uint32 {
+	if loaded {
+		if savedHealth > maxHealth {
+			return maxHealth
+		}
+		return savedHealth
+	}
+	if savedHealth > maxHealth || savedHealth <= 1 || (xp == 0 && level == 1) {
+		return maxHealth
+	}
+	return savedHealth
 }
 
 func (s *session) loadPlayerReputations(ctx context.Context, state *playerState) error {
@@ -746,6 +758,7 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 	state.XP, state.Money = uint32(xp), uint32(money)
 	if health >= 0 {
 		state.Health, state.MaxHealth = uint32(health), uint32(health)
+		state.HealthLoaded = true
 	}
 	for i, power := range powers {
 		state.Powers[i] = uint32(power)

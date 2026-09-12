@@ -38,6 +38,9 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 			continue
 		}
 		id := uint32(spellID)
+		if id == 8326 || id == 20584 {
+			state.PlayerFlags |= playerFlagGhost
+		}
 		if _, exists := s.activeAuras[id]; exists {
 			continue
 		}

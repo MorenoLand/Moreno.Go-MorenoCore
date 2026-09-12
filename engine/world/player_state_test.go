@@ -13,6 +13,21 @@ func TestPlayerCreateMask(t *testing.T) {
 	}
 }
 
+func TestRestorePlayerHealthPreservesPersistedLowHealth(t *testing.T) {
+	if got := restorePlayerHealth(1, 500, true, 100, 20); got != 1 {
+		t.Fatalf("persisted low health=%d", got)
+	}
+	if got := restorePlayerHealth(0, 500, true, 100, 20); got != 0 {
+		t.Fatalf("persisted dead health=%d", got)
+	}
+	if got := restorePlayerHealth(1, 500, false, 100, 20); got != 500 {
+		t.Fatalf("unloaded low health=%d", got)
+	}
+	if got := restorePlayerHealth(700, 500, true, 100, 20); got != 500 {
+		t.Fatalf("clamped health=%d", got)
+	}
+}
+
 func TestBuildInitialReputations(t *testing.T) {
 	payload := buildInitialReputations(playerState{Reputations: []playerReputation{{ListID: 72, Standing: 42999, Flags: 1}}})
 	reader := protocol.NewReader(payload)
