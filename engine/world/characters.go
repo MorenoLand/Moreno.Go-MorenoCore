@@ -35,6 +35,7 @@ const (
 	atLoginFirst                 uint64 = 0x020
 	atLoginChangeFaction         uint64 = 0x040
 	atLoginChangeRace            uint64 = 0x080
+	atLoginResurrect             uint64 = 0x100
 	inventorySlotBagEnd                 = 23
 	charCreateSuccess                   = 47
 	charCreateError                     = 48

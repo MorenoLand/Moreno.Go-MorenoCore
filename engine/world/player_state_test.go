@@ -28,6 +28,19 @@ func TestRestorePlayerHealthPreservesPersistedLowHealth(t *testing.T) {
 	}
 }
 
+func TestRestoreLoadedDeathStateReconstructsGhost(t *testing.T) {
+	state := &playerState{Health: 0, HealthLoaded: true}
+	restoreLoadedDeathState(state)
+	if state.Health != 1 || state.PlayerFlags&playerFlagGhost == 0 || state.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
+		t.Fatalf("death state=%+v", state)
+	}
+	resurrected := &playerState{Health: 0, HealthLoaded: true, AtLogin: uint32(atLoginResurrect)}
+	restoreLoadedDeathState(resurrected)
+	if resurrected.Health != 0 || resurrected.PlayerFlags&playerFlagGhost != 0 {
+		t.Fatalf("at-login resurrect state=%+v", resurrected)
+	}
+}
+
 func TestBuildInitialReputations(t *testing.T) {
 	payload := buildInitialReputations(playerState{Reputations: []playerReputation{{ListID: 72, Standing: 42999, Flags: 1}}})
 	reader := protocol.NewReader(payload)

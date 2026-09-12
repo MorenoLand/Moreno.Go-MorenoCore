@@ -361,6 +361,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.calculatePlayerStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
 	_ = s.loadPlayerAuras(ctx, &state)
+	restoreLoadedDeathState(&state)
 	s.player = &state
 	return state, nil
 }
@@ -672,6 +673,15 @@ func restorePlayerHealth(savedHealth, maxHealth uint32, loaded bool, xp uint32, 
 		return maxHealth
 	}
 	return savedHealth
+}
+
+func restoreLoadedDeathState(state *playerState) {
+	if state == nil || !state.HealthLoaded || state.Health != 0 || state.AtLogin&uint32(atLoginResurrect) != 0 {
+		return
+	}
+	state.PlayerFlags |= playerFlagGhost
+	state.PlayerFieldBytes |= playerFieldByteReleaseTimer
+	state.Health = 1
 }
 
 func (s *session) loadPlayerReputations(ctx context.Context, state *playerState) error {
