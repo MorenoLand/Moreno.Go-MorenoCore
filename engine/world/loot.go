@@ -53,6 +53,27 @@ func (l *activeLootState) broadcastRemoved(slot uint8) {
 	}
 }
 
+func (l *activeLootState) hasOverThresholdItem(threshold uint8) bool {
+	for _, item := range l.Items {
+		if item.Quality >= uint32(threshold) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildLootLooterPacket(loot *activeLootState, grp *groupState) []byte {
+	packet := protocol.NewBuffer(24)
+	packet.WriteU64(loot.TargetGUID)
+	if grp != nil && grp.LootMethod == 2 && grp.MasterLooter != 0 && loot.hasOverThresholdItem(grp.LootThreshold) {
+		packet.WritePackedGUID(grp.MasterLooter)
+	} else {
+		packet.WriteU8(0)
+	}
+	packet.WriteU8(0)
+	return packet.Bytes()
+}
+
 const (
 	rollPass       uint8 = 0
 	rollNeed       uint8 = 1
@@ -614,11 +635,20 @@ func (s *session) handleLootRelease(payload []byte) bool {
 		return true
 	}
 	loot := s.activeLoot
-	if loot.RoundRobinPlayer == s.playerGUID {
+	releasedRoundRobin := loot.RoundRobinPlayer == s.playerGUID
+	if releasedRoundRobin {
 		loot.RoundRobinPlayer = 0
 	}
 	loot.removeViewer(s.playerGUID)
 	s.activeLoot = nil
+	if releasedRoundRobin && s.server != nil && s.groupID != 0 && uint16(loot.TargetGUID>>48) != 0xF110 {
+		s.server.groupsMu.Lock()
+		grp := s.server.groups[s.groupID]
+		s.server.groupsMu.Unlock()
+		if grp != nil {
+			s.server.broadcastToGroup(s.groupID, uint16(protocol.OpcodeSMSG_LOOT_LIST), buildLootLooterPacket(loot, grp))
+		}
+	}
 	if loot.Money == 0 && len(loot.Items) == 0 {
 		s.clearCreatureLoot(loot)
 	}

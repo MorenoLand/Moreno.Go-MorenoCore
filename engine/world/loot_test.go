@@ -128,6 +128,28 @@ func TestLootItemPushResultMatchesReferenceFlags(t *testing.T) {
 	}
 }
 
+func TestLootLooterPacketMatchesReferenceFields(t *testing.T) {
+	loot := &activeLootState{TargetGUID: 77, Items: map[uint8]lootItem{0: {Slot: 0, ItemEntry: 7001, Quality: 3}}}
+	grp := &groupState{LootMethod: 2, LootThreshold: 2, MasterLooter: 42}
+	reader := protocol.NewReader(buildLootLooterPacket(loot, grp))
+	if value, err := reader.ReadU64(); err != nil || value != 77 {
+		t.Fatalf("source=%d err=%v", value, err)
+	}
+	if value, err := reader.ReadPackedGUID(); err != nil || value != 42 {
+		t.Fatalf("master looter=%d err=%v", value, err)
+	}
+	if value, err := reader.ReadPackedGUID(); err != nil || value != 0 {
+		t.Fatalf("group looter=%d err=%v", value, err)
+	}
+
+	grp.MasterLooter = 0
+	reader = protocol.NewReader(buildLootLooterPacket(loot, grp))
+	_, _ = reader.ReadU64()
+	if value, err := reader.ReadPackedGUID(); err != nil || value != 0 {
+		t.Fatalf("non-master looter=%d err=%v", value, err)
+	}
+}
+
 func TestHandleLootRoll(t *testing.T) {
 	srv := &Server{
 		groups:       make(map[uint64]*groupState),
