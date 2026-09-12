@@ -188,6 +188,15 @@ func (s *session) onCreatureKilled(ctx context.Context, target combatTarget) {
 		}
 	}
 	if s.server != nil {
+		standardGUID := creatureWorldGUID(guid, creatureEntry)
+		s.server.lootMu.Lock()
+		if s.server.creatureLootOwners == nil {
+			s.server.creatureLootOwners = make(map[uint64]lootOwnerState)
+		}
+		owner := lootOwnerState{PlayerGUID: s.playerGUID, GroupID: s.groupID}
+		s.server.creatureLootOwners[target.GUID] = owner
+		s.server.creatureLootOwners[standardGUID] = owner
+		s.server.lootMu.Unlock()
 		xp := s.server.killXPGain(ctx, uint32(s.player.Level), uint32(mobLevel))
 		if xp > 0 {
 			s.grantXPWithVictim(ctx, xp, target.GUID)
@@ -392,6 +401,7 @@ func (s *Server) processCreatureRespawns(ctx context.Context, now time.Time) {
 			s.motionMu.Unlock()
 			s.lootMu.Lock()
 			delete(s.creatureLoot, rawGUID)
+			delete(s.creatureLootOwners, rawGUID)
 			s.lootMu.Unlock()
 			s.broadcastCreatureValuesUpdate(respawn.Map, rawGUID, map[int]uint32{unitFieldHealth: respawn.Health, unitFieldDynamicFlags: 0})
 		}

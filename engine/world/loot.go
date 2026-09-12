@@ -30,6 +30,30 @@ type activeLootState struct {
 	Viewers          map[uint64]*session
 }
 
+type lootOwnerState struct {
+	PlayerGUID uint64
+	GroupID    uint64
+}
+
+func (s *Server) creatureLootAllowed(targetGUID, standardGUID, playerGUID, groupID uint64) bool {
+	if s == nil {
+		return false
+	}
+	s.lootMu.Lock()
+	owner, found := s.creatureLootOwners[targetGUID]
+	if !found {
+		owner, found = s.creatureLootOwners[standardGUID]
+	}
+	s.lootMu.Unlock()
+	if !found {
+		return true
+	}
+	if owner.GroupID != 0 {
+		return groupID == owner.GroupID
+	}
+	return playerGUID == owner.PlayerGUID
+}
+
 func (l *activeLootState) addViewer(s *session) {
 	if l.Viewers == nil {
 		l.Viewers = make(map[uint64]*session)
@@ -234,6 +258,9 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	guid := uint32(targetGUID & 0x00FFFFFF)
 	creatureEntry := uint32((targetGUID >> 24) & 0x00FFFFFF)
 	stdKey := creatureWorldGUID(guid, creatureEntry)
+	if !s.server.creatureLootAllowed(targetGUID, stdKey, s.playerGUID, s.groupID) {
+		return s.sendLootError(targetGUID, 0) == nil
+	}
 
 	s.server.lootMu.Lock()
 	if s.server.creatureLoot == nil {
@@ -465,6 +492,8 @@ func (s *session) clearCreatureLoot(loot *activeLootState) {
 	s.server.lootMu.Lock()
 	delete(s.server.creatureLoot, loot.TargetGUID)
 	delete(s.server.creatureLoot, stdKey)
+	delete(s.server.creatureLootOwners, loot.TargetGUID)
+	delete(s.server.creatureLootOwners, stdKey)
 	s.server.lootMu.Unlock()
 	s.server.broadcastCreatureValuesUpdate(loot.MapID, loot.TargetGUID, map[int]uint32{unitFieldDynamicFlags: 0})
 	s.server.broadcastCreatureValuesUpdate(loot.MapID, stdKey, map[int]uint32{unitFieldDynamicFlags: 0})

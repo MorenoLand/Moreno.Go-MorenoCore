@@ -150,6 +150,23 @@ func TestLootLooterPacketMatchesReferenceFields(t *testing.T) {
 	}
 }
 
+func TestCreatureLootRecipientAuthorization(t *testing.T) {
+	server := &Server{creatureLootOwners: map[uint64]lootOwnerState{77: {PlayerGUID: 10}}}
+	if !server.creatureLootAllowed(77, 77, 10, 0) {
+		t.Fatal("killer should loot their creature")
+	}
+	if server.creatureLootAllowed(77, 77, 11, 0) {
+		t.Fatal("unrelated player should not loot the creature")
+	}
+	server.creatureLootOwners[77] = lootOwnerState{PlayerGUID: 10, GroupID: 4}
+	if !server.creatureLootAllowed(77, 77, 11, 4) {
+		t.Fatal("group member should loot the creature")
+	}
+	if server.creatureLootAllowed(77, 77, 10, 5) {
+		t.Fatal("different group should not loot the creature")
+	}
+}
+
 func TestHandleLootRoll(t *testing.T) {
 	srv := &Server{
 		groups:       make(map[uint64]*groupState),
