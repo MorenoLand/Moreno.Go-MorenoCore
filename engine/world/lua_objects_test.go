@@ -41,6 +41,9 @@ func TestLuaWorldObjectBindings(t *testing.T) {
 	if values, err := creature.Methods["GetName"](context.Background(), nil); err != nil || values[0] != "Stormwind Guard" {
 		t.Fatalf("name=%v err=%v", values, err)
 	}
+	if values, err := creature.Methods["IsGossip"](context.Background(), nil); err != nil || values[0] != true {
+		t.Fatalf("gossip=%v err=%v", values, err)
+	}
 	if _, err := creature.Methods["SetHealth"](context.Background(), []any{float64(50)}); err != nil {
 		t.Fatal(err)
 	}

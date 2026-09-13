@@ -74,7 +74,31 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
 	methods["GetGUIDLow"] = luaNoArgs(func() any { return uint32(state.GUID & 0x00FFFFFF) })
 	methods["GetObjectType"] = luaNoArgs(func() any { return "Creature" })
+	methods["GetHealth"] = luaNoArgs(func() any { return state.Health })
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
+	methods["GetHealthPct"] = luaNoArgs(func() any {
+		if state.MaxHealth == 0 {
+			return float32(0)
+		}
+		return float32(state.Health) * 100 / float32(state.MaxHealth)
+	})
+	methods["GetLevel"] = luaNoArgs(func() any { return state.Level })
+	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
+	methods["IsFullHealth"] = luaNoArgs(func() any { return state.MaxHealth > 0 && state.Health >= state.MaxHealth })
+	hasNPCFlag := func(flag uint32) scripting.ObjectMethod {
+		return luaNoArgs(func() any { return state.NPCFlags&flag != 0 })
+	}
+	methods["IsGossip"] = hasNPCFlag(0x00000001)
+	methods["IsQuestGiver"] = hasNPCFlag(0x00000002)
+	methods["IsVendor"] = hasNPCFlag(0x00000080)
+	methods["IsTrainer"] = hasNPCFlag(0x00000070)
+	methods["IsTaxi"] = hasNPCFlag(0x00002000)
+	methods["IsSpiritHealer"] = hasNPCFlag(0x00004000)
+	methods["IsSpiritGuide"] = hasNPCFlag(0x00008000)
+	methods["IsSpiritService"] = hasNPCFlag(0x0000C000)
+	methods["IsInnkeeper"] = hasNPCFlag(0x00001000)
+	methods["IsAuctioneer"] = hasNPCFlag(0x00200000)
+	methods["IsServiceProvider"] = luaNoArgs(func() any { return state.NPCFlags&0x007FC0F2 != 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any {
 		motion := s.server.creatureMotion[state.GUID]
 		if motion == nil {
