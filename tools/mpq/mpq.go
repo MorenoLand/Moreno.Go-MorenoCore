@@ -13,12 +13,15 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/JoshVarga/blast"
 )
 
 const (
 	archiveMagic uint32 = 0x1A51504D
 	fileImplode  uint32 = 0x00000100
 	fileCompress uint32 = 0x00000200
+	filePKWare   uint32 = 0x00000008
 	fileEncrypt  uint32 = 0x00010000
 	fileFixKey   uint32 = 0x00020000
 	fileSingle   uint32 = 0x01000000
@@ -175,7 +178,21 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 	}
 	block := a.blocks[index]
 	if block.Flags&fileImplode != 0 {
-		return nil, errors.New("MPQ implode compression is not supported")
+		data, err := a.readAt(block.FilePos, block.CompressedSize)
+		if err != nil {
+			return nil, err
+		}
+		key := uint32(0)
+		if block.Flags&fileEncrypt != 0 {
+			key = hashString(name, 3)
+			if block.Flags&fileFixKey != 0 {
+				key = (key + block.FilePos) ^ block.FileSize
+			}
+		}
+		if key != 0 {
+			decrypt(data, key)
+		}
+		return decompressImplode(data, block.FileSize)
 	}
 	key := uint32(0)
 	if block.Flags&fileEncrypt != 0 {
@@ -263,6 +280,9 @@ func (a *Archive) readAt(offset, size uint32) ([]byte, error) {
 }
 
 func decompress(data []byte, expected, flags uint32) ([]byte, error) {
+	if flags&fileImplode != 0 {
+		return decompressImplode(data, expected)
+	}
 	if flags&fileCompress == 0 || uint32(len(data)) == expected {
 		if uint32(len(data)) != expected {
 			return nil, fmt.Errorf("MPQ file size mismatch: got %d, want %d", len(data), expected)
@@ -275,6 +295,8 @@ func decompress(data []byte, expected, flags uint32) ([]byte, error) {
 	var reader io.ReadCloser
 	var err error
 	switch {
+	case uint32(data[0])&filePKWare != 0:
+		reader, err = blast.NewReader(bytes.NewReader(data[1:]))
 	case data[0]&0x02 != 0:
 		reader, err = zlib.NewReader(bytes.NewReader(data[1:]))
 	case data[0]&0x10 != 0:
@@ -297,6 +319,22 @@ func decompress(data []byte, expected, flags uint32) ([]byte, error) {
 		return nil, fmt.Errorf("MPQ decompressed size mismatch: got %d, want %d", output.Len(), expected)
 	}
 	return output.Bytes(), nil
+}
+
+func decompressImplode(data []byte, expected uint32) ([]byte, error) {
+	reader, err := blast.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+	if uint32(len(output)) != expected {
+		return nil, fmt.Errorf("MPQ imploded size mismatch: got %d, want %d", len(output), expected)
+	}
+	return output, nil
 }
 
 func normalize(name string) string {

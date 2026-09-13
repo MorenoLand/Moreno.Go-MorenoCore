@@ -6,7 +6,30 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/JoshVarga/blast"
 )
+
+func TestDecompressImplode(t *testing.T) {
+	var compressed bytes.Buffer
+	writer := blast.NewWriter(&compressed, blast.Binary, blast.DictionarySize1024)
+	if _, err := writer.Write([]byte("legacy MPQ implode data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("legacy MPQ implode data")
+	decoded, err := decompress(compressed.Bytes(), uint32(len(want)), fileImplode)
+	if err != nil || !bytes.Equal(decoded, want) {
+		t.Fatalf("decoded=%q err=%v", decoded, err)
+	}
+	multi := append([]byte{0x08}, compressed.Bytes()...)
+	decoded, err = decompress(multi, uint32(len(want)), fileCompress)
+	if err != nil || !bytes.Equal(decoded, want) {
+		t.Fatalf("multi decoded=%q err=%v", decoded, err)
+	}
+}
 
 func TestDecompressBzip2Sector(t *testing.T) {
 	compressed, err := base64.StdEncoding.DecodeString("QlpoOTFBWSZTWUT3E3gAAAGRgEAABkSQgCAAIgM0hDAhtoFUJ4u5IpwoSCJ7ibwA")
