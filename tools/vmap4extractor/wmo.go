@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/tools/mpq"
@@ -35,13 +36,14 @@ type wmoDoodad struct {
 }
 
 type wmoGroupInfo struct {
-	Flags    uint32
-	ID       uint32
-	Low      [3]float32
-	High     [3]float32
-	Branches []uint32
-	Indices  []uint16
-	Vertices [][3]float32
+	Flags      uint32
+	ID         uint32
+	Low        [3]float32
+	High       [3]float32
+	Branches   []uint32
+	DoodadRefs []uint16
+	Indices    []uint16
+	Vertices   [][3]float32
 }
 
 type wmoChunk struct {
@@ -223,6 +225,14 @@ func parseWMOGroup(data []byte) (wmoGroupInfo, error) {
 			movt = chunk.Data
 		case "MOBA":
 			moba = chunk.Data
+		case "MODR":
+			if len(chunk.Data)%2 != 0 {
+				return group, errors.New("invalid MODR chunk size")
+			}
+			group.DoodadRefs = make([]uint16, len(chunk.Data)/2)
+			for index := range group.DoodadRefs {
+				group.DoodadRefs[index] = binary.LittleEndian.Uint16(chunk.Data[index*2:])
+			}
 		}
 	}
 	if len(mopy) < 2 || len(movi) == 0 || len(movi)%2 != 0 || len(movt) == 0 || len(movt)%12 != 0 {
@@ -301,7 +311,7 @@ func canonicalWMOChunk(raw []byte) string {
 	reversed := string([]byte{raw[3], raw[2], raw[1], raw[0]})
 	known := func(value string) bool {
 		switch value {
-		case "MOHD", "MOGP", "MOPY", "MOVI", "MOVT", "MOBA", "MLIQ", "MODN", "MODS", "MODD":
+		case "MOHD", "MOGP", "MOPY", "MOVI", "MOVT", "MOBA", "MLIQ", "MODN", "MODS", "MODD", "MODR":
 			return true
 		default:
 			return false
@@ -340,6 +350,49 @@ func writeRawWMO(root wmoRootInfo, groups []wmoGroupInfo) ([]byte, error) {
 		_ = binary.Write(&output, binary.LittleEndian, uint32(len(group.Vertices)))
 		_ = binary.Write(&output, binary.LittleEndian, group.Vertices)
 	}
+	var metadata bytes.Buffer
+	metadata.WriteString("MCWM")
+	_ = binary.Write(&metadata, binary.LittleEndian, uint32(1))
+	offsets := make([]uint32, 0, len(root.DoodadNames))
+	for offset := range root.DoodadNames {
+		offsets = append(offsets, offset)
+	}
+	sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
+	_ = binary.Write(&metadata, binary.LittleEndian, uint32(len(offsets)))
+	for _, offset := range offsets {
+		name := root.DoodadNames[offset]
+		_ = binary.Write(&metadata, binary.LittleEndian, offset)
+		_ = binary.Write(&metadata, binary.LittleEndian, uint32(len(name)))
+		_, _ = metadata.WriteString(name)
+	}
+	_ = binary.Write(&metadata, binary.LittleEndian, uint32(len(root.DoodadSets)))
+	for _, set := range root.DoodadSets {
+		_ = binary.Write(&metadata, binary.LittleEndian, set.StartIndex)
+		_ = binary.Write(&metadata, binary.LittleEndian, set.Count)
+	}
+	_ = binary.Write(&metadata, binary.LittleEndian, uint32(len(root.Doodads)))
+	for _, doodad := range root.Doodads {
+		_ = binary.Write(&metadata, binary.LittleEndian, doodad.NameIndex)
+		_ = binary.Write(&metadata, binary.LittleEndian, doodad.Position)
+		_ = binary.Write(&metadata, binary.LittleEndian, doodad.Rotation)
+		_ = binary.Write(&metadata, binary.LittleEndian, doodad.Scale)
+		_ = binary.Write(&metadata, binary.LittleEndian, doodad.Color)
+	}
+	refs := make(map[uint16]struct{})
+	for _, group := range groups {
+		for _, ref := range group.DoodadRefs {
+			refs[ref] = struct{}{}
+		}
+	}
+	orderedRefs := make([]uint16, 0, len(refs))
+	for ref := range refs {
+		orderedRefs = append(orderedRefs, ref)
+	}
+	sort.Slice(orderedRefs, func(i, j int) bool { return orderedRefs[i] < orderedRefs[j] })
+	_ = binary.Write(&metadata, binary.LittleEndian, uint32(len(orderedRefs)))
+	_ = binary.Write(&metadata, binary.LittleEndian, orderedRefs)
+	writeRawChunk(&output, "DODM", uint32(metadata.Len()))
+	_, _ = output.Write(metadata.Bytes())
 	return output.Bytes(), nil
 }
 

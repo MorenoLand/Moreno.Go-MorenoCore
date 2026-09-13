@@ -209,6 +209,48 @@ func TestBuildADTDirBinMatchesModelSpawnLayout(t *testing.T) {
 	}
 }
 
+func TestBuildADTDirBinExpandsWMODoodadSet(t *testing.T) {
+	modelDir := t.TempDir()
+	metadata := bytes.NewBuffer(nil)
+	metadata.WriteString("MCWM")
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(1))
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(1))
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(0))
+	name := "World\\Models\\Tree.m2"
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(len(name)))
+	metadata.WriteString(name)
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(1))
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(0))
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(1))
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(1))
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(0))
+	_ = binary.Write(metadata, binary.LittleEndian, [3]float32{1, 2, 3})
+	_ = binary.Write(metadata, binary.LittleEndian, [4]float32{0, 0, 0, 1})
+	_ = binary.Write(metadata, binary.LittleEndian, float32(1.5))
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(0))
+	_ = binary.Write(metadata, binary.LittleEndian, uint32(1))
+	_ = binary.Write(metadata, binary.LittleEndian, uint16(0))
+	rawWMO := append([]byte("VMAP047\x00"), make([]byte, 12)...)
+	doodadChunk := append([]byte("DODM"), make([]byte, 4)...)
+	binary.LittleEndian.PutUint32(doodadChunk[4:], uint32(metadata.Len()))
+	rawWMO = append(rawWMO, doodadChunk...)
+	rawWMO = append(rawWMO, metadata.Bytes()...)
+	if err := os.WriteFile(filepath.Join(modelDir, "Building.wmo"), rawWMO, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modelDir, "Tree.m2"), append([]byte("VMAP047\x00"), []byte{3, 0, 0, 0}...), 0644); err != nil {
+		t.Fatal(err)
+	}
+	info := adtInfo{WorldModelNames: []string{"Building.wmo"}, WorldModels: []adtWorldModelInstance{{NameID: 0, UniqueID: 44, Position: [3]float32{10, 20, 30}, BoundsMin: [3]float32{-1, -1, -1}, BoundsMax: [3]float32{1, 1, 1}, DoodadSet: 0}}, InstanceOrder: []adtModelInstanceRef{{Index: 0}}}
+	payload, err := buildADTDirBinWithModelDir(info, 571, 1, 2, modelDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Count(payload, []byte("Building.wmo")) != 1 || bytes.Count(payload, []byte("Tree.m2")) != 1 {
+		t.Fatalf("expanded dir_bin missing WMO/doodad names: %q", payload)
+	}
+}
+
 func TestExtractDBCMissingDirectory(t *testing.T) {
 	tempDir := t.TempDir()
 	nonExistent := filepath.Join(tempDir, "does_not_exist")

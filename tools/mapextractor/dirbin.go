@@ -14,6 +14,10 @@ const (
 )
 
 func buildADTDirBin(info adtInfo, mapID, tileX, tileY uint32) ([]byte, error) {
+	return buildADTDirBinWithModelDir(info, mapID, tileX, tileY, "")
+}
+
+func buildADTDirBinWithModelDir(info adtInfo, mapID, tileX, tileY uint32, modelDir string) ([]byte, error) {
 	ids := make(map[[2]uint32]uint32)
 	nextID := uint32(1)
 	uniqueID := func(clientID uint32, doodadID uint16) uint32 {
@@ -71,16 +75,55 @@ func buildADTDirBin(info adtInfo, mapID, tileX, tileY uint32) ([]byte, error) {
 			position[0], position[2] = 533.33333*32, 533.33333*32
 		}
 		writeDirRecord(&output, mapID, tileX, tileY, modelSpawn{Flags: modelFlagHasBound | worldSpawnFlag(tileX, tileY), ADTID: instance.NameSet, ID: uniqueID(instance.UniqueID, 0), Position: fixModelVector(position), Rotation: instance.Rotation, Scale: 1, HasBounds: true, BoundsMin: fixModelVector(instance.BoundsMin), BoundsMax: fixModelVector(instance.BoundsMax), Name: name})
+		if err := appendWMODoodads(&output, modelDir, info.WorldModelNames[instance.NameID], instance, mapID, tileX, tileY, uniqueID); err != nil {
+			return nil, err
+		}
 	}
 	return output.Bytes(), nil
 }
 
 func buildWDTDirBin(info wdtInfo, mapID uint32) ([]byte, error) {
+	return buildWDTDirBinWithModelDir(info, mapID, "")
+}
+
+func buildWDTDirBinWithModelDir(info wdtInfo, mapID uint32, modelDir string) ([]byte, error) {
 	order := make([]adtModelInstanceRef, len(info.GlobalWMOModels))
 	for index := range order {
 		order[index] = adtModelInstanceRef{Index: index}
 	}
-	return buildADTDirBin(adtInfo{WorldModels: info.GlobalWMOModels, WorldModelNames: info.GlobalWMOModelNames, InstanceOrder: order}, mapID, 65, 65)
+	return buildADTDirBinWithModelDir(adtInfo{WorldModels: info.GlobalWMOModels, WorldModelNames: info.GlobalWMOModelNames, InstanceOrder: order}, mapID, 65, 65, modelDir)
+}
+
+func appendWMODoodads(output *bytes.Buffer, modelDir, modelName string, instance adtWorldModelInstance, mapID, tileX, tileY uint32, uniqueID func(uint32, uint16) uint32) error {
+	if modelDir == "" {
+		return nil
+	}
+	metadata, found, err := loadWMODoodadMetadata(modelDir, modelName)
+	if err != nil {
+		return fmt.Errorf("read WMO doodad metadata for %q: %w", modelName, err)
+	}
+	if !found || int(instance.DoodadSet) >= len(metadata.Sets) {
+		return nil
+	}
+	set := metadata.Sets[instance.DoodadSet]
+	ordinal := uint16(0)
+	for _, reference := range metadata.Refs {
+		if uint32(reference) < set.StartIndex || uint32(reference) >= set.StartIndex+set.Count {
+			continue
+		}
+		if int(reference) >= len(metadata.Doodads) {
+			return fmt.Errorf("WMO doodad reference %d is out of range", reference)
+		}
+		doodad := metadata.Doodads[reference]
+		name, ok := metadata.Names[doodad.NameIndex]
+		if !ok || !modelHasGeometry(modelDir, name) {
+			continue
+		}
+		ordinal++
+		position, rotation := transformWMODoodad(instance, doodad)
+		writeDirRecord(output, mapID, tileX, tileY, modelSpawn{Flags: modelFlagM2 | worldSpawnFlag(tileX, tileY), ID: uniqueID(instance.UniqueID, ordinal), Position: position, Rotation: rotation, Scale: doodad.Scale, Name: plainDoodadName(name)})
+	}
+	return nil
 }
 
 type modelSpawn struct {

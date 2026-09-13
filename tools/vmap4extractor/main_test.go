@@ -51,13 +51,14 @@ func TestWMOConversionWritesVMAPRawGeometry(t *testing.T) {
 			return b
 		}()),
 		wmoTestChunk("MOBA", func() []byte { b := make([]byte, 24); binary.LittleEndian.PutUint16(b[16:], 7); return b }()),
+		wmoTestChunk("MODR", []byte{0, 0}),
 	}, nil)
 	group, err := parseWMOGroup(groupData)
-	if err != nil || len(group.Indices) != 3 || len(group.Vertices) != 3 || len(group.Branches) != 1 || group.Branches[0] != 7 {
+	if err != nil || len(group.Indices) != 3 || len(group.Vertices) != 3 || len(group.Branches) != 1 || group.Branches[0] != 7 || len(group.DoodadRefs) != 1 || group.DoodadRefs[0] != 0 {
 		t.Fatalf("group=%+v err=%v", group, err)
 	}
 	raw, err := writeRawWMO(root, []wmoGroupInfo{group})
-	if err != nil || len(raw) < 24 || string(raw[:8]) != "VMAP047\x00" || binary.LittleEndian.Uint32(raw[12:16]) != 1 || binary.LittleEndian.Uint32(raw[16:20]) != 123 {
+	if err != nil || len(raw) < 24 || string(raw[:8]) != "VMAP047\x00" || binary.LittleEndian.Uint32(raw[12:16]) != 1 || binary.LittleEndian.Uint32(raw[16:20]) != 123 || !bytes.Contains(raw, []byte("DODM")) {
 		t.Fatalf("raw len=%d err=%v header=%x", len(raw), err, raw[:20])
 	}
 }

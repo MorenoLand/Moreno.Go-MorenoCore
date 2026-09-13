@@ -16,6 +16,7 @@ func main() {
 	wdtFile := flag.String("wdt-file", "", "parse one local WDT file and print its active tile count")
 	adtFile := flag.String("adt-file", "", "parse one local ADT file and print its chunk inventory")
 	dirBin := flag.String("dir-bin", "", "write VMAP dir_bin records from the local ADT file")
+	modelDir := flag.String("model-dir", "", "directory containing VMAP raw WMO/M2 models for WMO doodad expansion")
 	mapID := flag.Uint("map-id", 0, "map ID written to dir_bin records")
 	tileX := flag.Uint("tile-x", 0, "ADT tile X coordinate written to dir_bin records")
 	tileY := flag.Uint("tile-y", 0, "ADT tile Y coordinate written to dir_bin records")
@@ -47,7 +48,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, "dir_bin map/tile coordinates are invalid")
 				os.Exit(2)
 			}
-			payload, err := buildADTDirBin(info, uint32(*mapID), uint32(*tileX), uint32(*tileY))
+			payload, err := buildADTDirBinWithModelDir(info, uint32(*mapID), uint32(*tileX), uint32(*tileY), *modelDir)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "dir_bin conversion failed: %v\n", err)
 				os.Exit(1)
@@ -79,7 +80,7 @@ func main() {
 				fmt.Fprintln(os.Stderr, "dir_bin map ID is invalid")
 				os.Exit(2)
 			}
-			payload, err := buildWDTDirBin(info, uint32(*mapID))
+			payload, err := buildWDTDirBinWithModelDir(info, uint32(*mapID), *modelDir)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "dir_bin conversion failed: %v\n", err)
 				os.Exit(1)
