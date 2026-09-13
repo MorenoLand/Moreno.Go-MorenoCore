@@ -137,10 +137,19 @@ func (s *session) spellAvailableAtLevel(spellID uint32, level uint8) bool {
 		return true
 	}
 	spell, found, err := s.server.Data.Spell(spellID)
-	if err != nil || !found || spell.SpellLevel == 0 || spell.SpellLevel <= uint32(level) {
+	if err != nil || !found {
 		return true
 	}
-	return false
+	if spell.SpellLevel > 0 {
+		return spell.SpellLevel <= uint32(level)
+	}
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var requiredLevel sql.NullInt64
+		if err := s.server.WorldStore.DB.QueryRowContext(context.Background(), "SELECT MIN(ReqLevel) FROM trainer_spell WHERE SpellId = ? AND ReqLevel > 0", spellID).Scan(&requiredLevel); err == nil && requiredLevel.Valid && requiredLevel.Int64 > 0 {
+			return requiredLevel.Int64 <= int64(level)
+		}
+	}
+	return true
 }
 
 func (s *session) loadStarterSpellIDs(ctx context.Context, race, class uint8) []uint32 {

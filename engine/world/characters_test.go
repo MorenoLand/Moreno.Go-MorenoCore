@@ -452,6 +452,55 @@ func TestStarterSpellsHideFutureSpellLevels(t *testing.T) {
 	}
 }
 
+func TestLearnedSpellsFallbackToTrainerRequiredLevel(t *testing.T) {
+	cdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cdb.Close()
+	if _, err := cdb.Exec("CREATE TABLE character_spell (guid INTEGER, spell INTEGER, active INTEGER, disabled INTEGER, PRIMARY KEY (guid, spell))"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cdb.Exec("INSERT INTO character_spell VALUES (1, 5004, 1, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	wdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wdb.Close()
+	if _, err := wdb.Exec("CREATE TABLE trainer_spell (TrainerId INTEGER, SpellId INTEGER, MoneyCost INTEGER, ReqSkillLine INTEGER, ReqSkillRank INTEGER, ReqLevel INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wdb.Exec("INSERT INTO trainer_spell VALUES (1, 5004, 0, 0, 0, 70)"); err != nil {
+		t.Fatal(err)
+	}
+	dbcDir := t.TempDir()
+	const fieldCount = 234
+	record := make([]byte, fieldCount*4)
+	binary.LittleEndian.PutUint32(record, 5004)
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "Spell.dbc"), append(header, append(record, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: cdb}, WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: wdb}, Config: config.Config{}, Data: wotlk.NewStore(dbcDir)}
+	sess := &session{server: server}
+	spells, err := sess.loadLearnedSpells(context.Background(), 1, 1, 1, 21)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spell := range spells {
+		if spell.ID == 5004 && spell.Active {
+			t.Fatal("trainer-required spell remained active below its required level")
+		}
+	}
+}
+
 func TestCompleteLogoutCleansStateBeforeCompletionPacket(t *testing.T) {
 	root, err := packageRoot()
 	if err != nil {

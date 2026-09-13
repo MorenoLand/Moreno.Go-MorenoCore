@@ -79,7 +79,7 @@ func isAreaEnemySpell(spell wotlk.Spell) bool {
 
 func isAreaEnemyTargetType(target uint32) bool {
 	switch target {
-	case 2, 15, 16, 24, 28, 54, 104:
+	case 2, 15, 16, 22, 24, 28, 54, 104:
 		return true
 	default:
 		return false
@@ -932,7 +932,13 @@ func (s *session) executeDirectSpellDamage(ctx context.Context, targetGUID uint6
 	} else {
 		// Spell crit roll (fixed damage backlash spells do not crit, per TrinityCore SPELL_ATTR4_FIXED_DAMAGE)
 		crit := false
-		if spellID != 31117 && spellID != 64085 {
+		spellKnown := false
+		if s.server != nil && s.server.Data != nil {
+			if _, found, err := s.server.Data.Spell(spellID); err == nil && found {
+				spellKnown = true
+			}
+		}
+		if spellKnown && spellID != 31117 && spellID != 64085 {
 			crit = s.rollSpellCrit(target.GUID, schoolMask)
 		}
 		if crit {
