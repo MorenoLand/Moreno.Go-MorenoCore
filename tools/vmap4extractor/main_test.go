@@ -13,8 +13,21 @@ func TestWMOConversionWritesVMAPRawGeometry(t *testing.T) {
 	rootPayload := make([]byte, 64)
 	binary.LittleEndian.PutUint32(rootPayload[4:], 1)
 	binary.LittleEndian.PutUint32(rootPayload[32:], 123)
-	root, err := parseWMORoot(wmoTestChunk("MOHD", rootPayload))
-	if err != nil || root.Groups != 1 || root.ID != 123 {
+	mods := make([]byte, 32)
+	copy(mods, []byte("MainSet"))
+	binary.LittleEndian.PutUint32(mods[20:], 0)
+	binary.LittleEndian.PutUint32(mods[24:], 1)
+
+	modd := make([]byte, 40)
+	binary.LittleEndian.PutUint32(modd, 0)
+	for index, value := range []float32{1, 2, 3} {
+		binary.LittleEndian.PutUint32(modd[4+index*4:], mathFloat32Bits(value))
+	}
+	binary.LittleEndian.PutUint32(modd[28:], mathFloat32Bits(1))
+	binary.LittleEndian.PutUint32(modd[32:], mathFloat32Bits(1.5))
+	rootData := bytes.Join([][]byte{wmoTestChunk("MOHD", rootPayload), wmoTestChunk("MODN", []byte("World\\Models\\Tree.m2\x00")), wmoTestChunk("MODS", mods), wmoTestChunk("MODD", modd)}, nil)
+	root, err := parseWMORoot(rootData)
+	if err != nil || root.Groups != 1 || root.ID != 123 || root.DoodadNames[0] != "World\\Models\\Tree.m2" || len(root.DoodadSets) != 1 || root.DoodadSets[0].StartIndex != 0 || root.DoodadSets[0].Count != 1 || len(root.Doodads) != 1 || root.Doodads[0].Scale != 1.5 {
 		t.Fatalf("root=%+v err=%v", root, err)
 	}
 	groupPayload := make([]byte, 68)

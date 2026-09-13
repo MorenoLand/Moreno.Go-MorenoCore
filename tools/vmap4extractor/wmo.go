@@ -13,8 +13,25 @@ import (
 )
 
 type wmoRootInfo struct {
-	Groups uint32
-	ID     uint32
+	Groups      uint32
+	ID          uint32
+	DoodadNames map[uint32]string
+	DoodadSets  []wmoDoodadSet
+	Doodads     []wmoDoodad
+}
+
+type wmoDoodadSet struct {
+	Name       string
+	StartIndex uint32
+	Count      uint32
+}
+
+type wmoDoodad struct {
+	NameIndex uint32
+	Position  [3]float32
+	Rotation  [4]float32
+	Scale     float32
+	Color     uint32
 }
 
 type wmoGroupInfo struct {
@@ -90,20 +107,90 @@ func parseWMORoot(data []byte) (wmoRootInfo, error) {
 		return root, err
 	}
 	for _, chunk := range chunks {
-		if chunk.Name != "MOHD" {
-			continue
+		switch chunk.Name {
+		case "MOHD":
+			if len(chunk.Data) < 36 {
+				return root, errors.New("truncated MOHD chunk")
+			}
+			root.Groups = binary.LittleEndian.Uint32(chunk.Data[4:8])
+			root.ID = binary.LittleEndian.Uint32(chunk.Data[32:36])
+			if root.Groups > 65535 {
+				return root, errors.New("WMO group count is unreasonable")
+			}
+		case "MODN":
+			root.DoodadNames = parseWMONameOffsets(chunk.Data)
+		case "MODS":
+			sets, err := parseWMODoodadSets(chunk.Data)
+			if err != nil {
+				return root, err
+			}
+			root.DoodadSets = sets
+		case "MODD":
+			doodads, err := parseWMODoodads(chunk.Data)
+			if err != nil {
+				return root, err
+			}
+			root.Doodads = doodads
 		}
-		if len(chunk.Data) < 36 {
-			return root, errors.New("truncated MOHD chunk")
-		}
-		root.Groups = binary.LittleEndian.Uint32(chunk.Data[4:8])
-		root.ID = binary.LittleEndian.Uint32(chunk.Data[32:36])
-		if root.Groups > 65535 {
-			return root, errors.New("WMO group count is unreasonable")
-		}
-		return root, nil
 	}
-	return root, errors.New("MOHD chunk not found")
+	if root.Groups == 0 && root.ID == 0 {
+		return root, errors.New("MOHD chunk not found")
+	}
+	return root, nil
+}
+
+func parseWMONameOffsets(data []byte) map[uint32]string {
+	names := make(map[uint32]string)
+	for offset := 0; offset < len(data); {
+		end := offset
+		for end < len(data) && data[end] != 0 {
+			end++
+		}
+		if end > offset {
+			names[uint32(offset)] = string(data[offset:end])
+		}
+		offset = end + 1
+	}
+	return names
+}
+
+func parseWMODoodadSets(data []byte) ([]wmoDoodadSet, error) {
+	const recordSize = 32
+	if len(data)%recordSize != 0 {
+		return nil, fmt.Errorf("invalid MODS size %d", len(data))
+	}
+	sets := make([]wmoDoodadSet, len(data)/recordSize)
+	for index := range sets {
+		base := index * recordSize
+		name := data[base : base+20]
+		if nul := bytes.IndexByte(name, 0); nul >= 0 {
+			name = name[:nul]
+		}
+		sets[index] = wmoDoodadSet{Name: string(name), StartIndex: binary.LittleEndian.Uint32(data[base+20:]), Count: binary.LittleEndian.Uint32(data[base+24:])}
+	}
+	return sets, nil
+}
+
+func parseWMODoodads(data []byte) ([]wmoDoodad, error) {
+	const recordSize = 40
+	if len(data)%recordSize != 0 {
+		return nil, fmt.Errorf("invalid MODD size %d", len(data))
+	}
+	doodads := make([]wmoDoodad, len(data)/recordSize)
+	for index := range doodads {
+		base := index * recordSize
+		doodad := &doodads[index]
+		doodad.NameIndex = binary.LittleEndian.Uint32(data[base:]) & 0x00FFFFFF
+		for axis := 0; axis < 3; axis++ {
+			doodad.Position[axis] = mathFloat32(data[base+4+axis*4:])
+		}
+		for axis := 0; axis < 4; axis++ {
+			doodad.Rotation[axis] = mathFloat32(data[base+16+axis*4:])
+		}
+		doodad.Scale = mathFloat32(data[base+32:])
+		doodad.Color = binary.LittleEndian.Uint32(data[base+36:])
+	}
+	return doodads, nil
 }
 
 func parseWMOGroup(data []byte) (wmoGroupInfo, error) {
@@ -214,7 +301,7 @@ func canonicalWMOChunk(raw []byte) string {
 	reversed := string([]byte{raw[3], raw[2], raw[1], raw[0]})
 	known := func(value string) bool {
 		switch value {
-		case "MOHD", "MOGP", "MOPY", "MOVI", "MOVT", "MOBA", "MLIQ":
+		case "MOHD", "MOGP", "MOPY", "MOVI", "MOVT", "MOBA", "MLIQ", "MODN", "MODS", "MODD":
 			return true
 		default:
 			return false
