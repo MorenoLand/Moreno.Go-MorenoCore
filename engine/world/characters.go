@@ -1799,6 +1799,9 @@ func (s *session) completeLogout(ctx context.Context) error {
 		firstErr = err
 		_ = s.savePlayerPosition(ctx)
 	}
+	if err := s.clearBuybackState(ctx); err != nil && firstErr == nil {
+		firstErr = err
+	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID); err != nil && firstErr == nil {
 		firstErr = err
 	}
@@ -1813,6 +1816,56 @@ func (s *session) completeLogout(ctx context.Context) error {
 	s.logoutAt = time.Time{}
 	s.debug("player logged out", "account", s.accountName, "guid", s.playerGUID)
 	return firstErr
+}
+
+func (s *session) clearBuybackState(ctx context.Context) error {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.playerGUID == 0 {
+		return nil
+	}
+	db := s.server.CharactersStore.DB
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot BETWEEN 74 AND 85", s.playerGUID)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	items := make([]int64, 0, 12)
+	for rows.Next() {
+		var item int64
+		if err := rows.Scan(&item); err != nil {
+			_ = rows.Close()
+			_ = tx.Rollback()
+			return err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		_ = tx.Rollback()
+		return err
+	}
+	_ = rows.Close()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = 0 AND slot BETWEEN 74 AND 85", s.playerGUID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	for _, item := range items {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", item); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	for index := range s.buyback {
+		s.buyback[index] = nil
+	}
+	s.currentBuybackSlot = 0
+	return nil
 }
 
 func (s *session) releaseActiveLoot() {

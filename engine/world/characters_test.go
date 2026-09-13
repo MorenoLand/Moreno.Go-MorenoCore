@@ -508,6 +508,12 @@ func TestCompleteLogoutCleansStateBeforeCompletionPacket(t *testing.T) {
 	}
 	stores := makeMemoryStores(t, root)
 	server := NewServer(stores, slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
+	if _, err := stores.Characters.DB.Exec("INSERT INTO item_instance (guid, itemEntry, owner_guid, count, enchantments) VALUES (700, 5001, 9, 1, '')"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stores.Characters.DB.Exec("INSERT INTO character_inventory (guid, bag, slot, item) VALUES (9, 0, 74, 700)"); err != nil {
+		t.Fatal(err)
+	}
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
@@ -533,6 +539,16 @@ func TestCompleteLogoutCleansStateBeforeCompletionPacket(t *testing.T) {
 	}
 	if !seenCompletion || sess.playerLoaded || sess.player != nil {
 		t.Fatalf("logout state loaded=%v player=%v", sess.playerLoaded, sess.player)
+	}
+	var buybackRows, itemRows int
+	if err := stores.Characters.DB.QueryRow("SELECT COUNT(*) FROM character_inventory WHERE guid = 9 AND bag = 0 AND slot BETWEEN 74 AND 85").Scan(&buybackRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := stores.Characters.DB.QueryRow("SELECT COUNT(*) FROM item_instance WHERE guid = 700").Scan(&itemRows); err != nil {
+		t.Fatal(err)
+	}
+	if buybackRows != 0 || itemRows != 0 {
+		t.Fatalf("buyback persisted after saved logout: inventory=%d items=%d", buybackRows, itemRows)
 	}
 }
 
