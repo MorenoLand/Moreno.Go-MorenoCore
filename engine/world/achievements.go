@@ -1012,6 +1012,18 @@ func (s *session) expireTimedAchievement(criteriaID uint32) {
 	s.debug("timed achievement expired", "account", s.accountName, "criteria", criteriaID)
 }
 
+func (s *session) stopTimedAchievements() {
+	if s == nil {
+		return
+	}
+	for criteriaID, timer := range s.timedCriteria {
+		if timer != nil {
+			timer.Stop()
+		}
+		delete(s.timedCriteria, criteriaID)
+	}
+}
+
 // resetAchievementCriteriaByCondition resets progress for unearned achievements
 // whose criteria match the condition (e.g. no-death on death, no-lose on arena loss),
 // mirroring AchievementMgr::ResetAchievementCriteria.

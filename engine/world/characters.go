@@ -1758,6 +1758,8 @@ func (s *session) completeLogout(ctx context.Context) error {
 		return nil
 	}
 	s.stopSpellLifecycle()
+	s.clearActiveAuras()
+	s.stopTimedAchievements()
 	s.triggerLogout(ctx)
 	s.releaseActiveLoot()
 	if s.trade != nil {
@@ -1770,7 +1772,6 @@ func (s *session) completeLogout(ctx context.Context) error {
 	if s.player != nil && s.player.PetGUID != 0 {
 		s.unsummonPet(ctx, petSaveAsCurrent)
 	}
-	s.clearActiveAuras()
 	var firstErr error
 	if err := s.savePlayerState(ctx, 0); err != nil {
 		firstErr = err

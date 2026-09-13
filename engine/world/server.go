@@ -2981,6 +2981,8 @@ func (s *session) debug(message string, args ...any) {
 func (s *session) logout() {
 	ctx := context.Background()
 	s.stopSpellLifecycle()
+	s.clearActiveAuras()
+	s.stopTimedAchievements()
 	if s.trade != nil {
 		s.handleCancelTrade(ctx)
 	}
