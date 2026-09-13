@@ -54,6 +54,8 @@ type Config struct {
 	MinPetitionSigns                        uint32
 	DeathCorpseReclaimDelayPvE              bool
 	DeathCorpseReclaimDelayPvP              bool
+	DeathBonesWorld                         bool
+	DeathBonesBattleground                  bool
 	PlayerStartAllSpells                    bool
 	WardenEnabled                           bool
 	WardenNumInjectionChecks                uint32
@@ -107,8 +109,14 @@ type NPCBotConfig struct {
 	StatLimitCrit            float64
 }
 
-func Default() Config {
-	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", AuthDatabaseFile: "auth.db", CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, RealmID: 1, LogsDir: "logs", Motd: "Welcome to a Trinity Core server.", LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, Expansion: 2, StartPlayerLevel: 1, StartPlayerMoney: 10000, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, VisibilityDistanceContinents: 100, SoloLFGEnable: true, SoloLFGAnnounce: true, GMLoginState: 2, GMVisibleState: 2, MaxOverSpeedPings: 2, MinPetitionSigns: 9, DeathCorpseReclaimDelayPvE: true, DeathCorpseReclaimDelayPvP: true, PlayerStartAllSpells: false, WardenEnabled: false, WardenNumInjectionChecks: 9, WardenNumLuaSandboxChecks: 1, WardenNumClientModChecks: 1, WardenClientResponseDelay: 600, WardenClientCheckHoldOff: 30, WardenClientCheckFailAction: 0, WardenBanDuration: 86400, NPCBots: NPCBotConfig{Enable: true, MaxBots: 9, MaxBotsPerClass: 0, BaseFollowDistance: 25, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, DamagePhysicalMultiplier: 1, DamageSpellMultiplier: 1, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: true, EnableBG: true, EnableArena: true, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, MovementInterruptFood: false, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: true, BlademasterEnable: false, ObsidianDestroyerEnable: false, ArchmageEnable: false, DreadlordEnable: false, SpellBreakerEnable: false, DarkRangerEnable: false, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
+func Default() (c Config) {
+	defer func() {
+		c.DeathBonesWorld = true
+		c.DeathBonesBattleground = true
+		c.NPCBots.DamagePhysicalMultiplier = 1
+		c.NPCBots.DamageSpellMultiplier = 1
+	}()
+	return Config{Backend: "sqlite", DataDir: ".", GameDataDir: "data", SchemaDir: "sql", AuthDatabaseFile: "auth.db", CharactersDatabaseFile: "characters.db", WorldDatabaseFile: "world.db", RealmServerPort: 3724, WorldServerPort: 8085, RealmID: 1, LogsDir: "logs", Motd: "Welcome to a Trinity Core server.", LuaEnabled: true, LuaScriptPath: "lua_scripts", CharacterCreatingDisabled: 0, CharacterCreatingDisabledRaceMask: 0, CharacterCreatingDisabledClassMask: 0, CharactersPerAccount: 50, CharactersPerRealm: 10, DeathKnightsPerRealm: 1, CharacterCreatingMinLevelForDeathKnight: 55, Expansion: 2, StartPlayerLevel: 1, StartPlayerMoney: 10000, AlwaysMaxSkillForLevel: true, DisableFatigue: 4, VisibilityDistanceContinents: 100, SoloLFGEnable: true, SoloLFGAnnounce: true, GMLoginState: 2, GMVisibleState: 2, MaxOverSpeedPings: 2, MinPetitionSigns: 9, DeathCorpseReclaimDelayPvE: true, DeathCorpseReclaimDelayPvP: true, DeathBonesWorld: true, DeathBonesBattleground: true, PlayerStartAllSpells: false, WardenEnabled: false, WardenNumInjectionChecks: 9, WardenNumLuaSandboxChecks: 1, WardenNumClientModChecks: 1, WardenClientResponseDelay: 600, WardenClientCheckHoldOff: 30, WardenClientCheckFailAction: 0, WardenBanDuration: 86400, NPCBots: NPCBotConfig{Enable: true, MaxBots: 9, MaxBotsPerClass: 0, BaseFollowDistance: 25, XPReduction: 0, HealTargetIconsMask: 0, TankTargetIconMask: 0, DPSTargetIconMask: 0, HealingMultiplier: 1, EnableDungeon: true, EnableRaid: true, EnableBG: true, EnableArena: true, EnableDungeonFinder: true, LimitDungeon: true, LimitRaid: true, Cost: 1000000, UpdateDelayBase: 0, OwnershipExpireTime: 0, PvP: true, MovementInterruptFood: false, EquipmentDisplayEnable: true, ShowCloak: true, ShowHelm: true, BlademasterEnable: false, ObsidianDestroyerEnable: false, ArchmageEnable: false, DreadlordEnable: false, SpellBreakerEnable: false, DarkRangerEnable: false, StatsLimitsEnable: false, StatLimitDodge: 95, StatLimitParry: 95, StatLimitBlock: 95, StatLimitCrit: 95}}
 }
 
 func Load(path string) (Config, error) {
@@ -145,6 +153,12 @@ func (c *Config) ApplyEnv() {
 		if value, ok := os.LookupEnv(env); ok {
 			_ = c.set(key, value)
 		}
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_DEATH_BONES_WORLD"); ok {
+		_ = c.set("Death.Bones.World", value)
+	}
+	if value, ok := os.LookupEnv("MORENOCORE_DEATH_BONES_BATTLEGROUND"); ok {
+		_ = c.set("Death.Bones.BattlegroundOrArena", value)
 	}
 	if value, ok := os.LookupEnv("MORENOCORE_REALM_ADDRESS"); ok {
 		_ = c.set("RealmAddress", value)
@@ -366,6 +380,10 @@ func (c *Config) set(key, value string) error {
 		return setBool(&c.DeathCorpseReclaimDelayPvE, key, value)
 	case "Death.CorpseReclaimDelay.PvP":
 		return setBool(&c.DeathCorpseReclaimDelayPvP, key, value)
+	case "Death.Bones.World":
+		return setBool(&c.DeathBonesWorld, key, value)
+	case "Death.Bones.BattlegroundOrArena":
+		return setBool(&c.DeathBonesBattleground, key, value)
 	case "PlayerStart.AllSpells":
 		return setBool(&c.PlayerStartAllSpells, key, value)
 	case "Warden.Enabled":

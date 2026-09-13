@@ -31,8 +31,12 @@ const (
 
 	corpseReclaimRadius = 39.0 // CORPSE_RECLAIM_RADIUS (Corpse.h:35)
 
-	corpseTypeBones uint32 = 0
-	corpseTypePvE   uint32 = 1 // CORPSE_RESURRECTABLE_PVE
+	corpseTypeBones     uint32 = 0
+	corpseTypePvE       uint32 = 1 // CORPSE_RESURRECTABLE_PVE
+	corpseFlagBones     uint32 = 0x01
+	corpseFlagUnk2      uint32 = 0x04
+	playerFlagHideHelm  uint32 = 0x00000400
+	playerFlagHideCloak uint32 = 0x00000800
 
 	teamAlliance uint32 = 469
 	teamHorde    uint32 = 67
@@ -164,19 +168,40 @@ func (s *session) sendForcedMovement(opcode uint16) {
 // send the corpse reclaim delay. The reference ghost auras 8326 (Ghost) and
 // buildCorpseCreateBlock constructs an SMSG_UPDATE_OBJECT block creating a visible
 // Corpse object in the world, matching TrinityCore Corpse::Create and Corpse::BuildValuesUpdate.
+type corpseObjectFields struct {
+	OwnerGUID    uint64
+	DisplayID    uint32
+	Bytes1       uint32
+	Bytes2       uint32
+	GuildID      uint32
+	Flags        uint32
+	DynamicFlags uint32
+}
+
 func buildCorpseCreateBlock(corpseGUID, ownerGUID uint64, displayID uint32, posX, posY, posZ, orientation float32, isBones bool) []byte {
+	fields := corpseObjectFields{OwnerGUID: ownerGUID, DisplayID: displayID, Flags: corpseFlagUnk2}
+	if isBones {
+		fields.OwnerGUID = 0
+		fields.Flags |= corpseFlagBones
+	}
+	return buildCorpseCreateBlockWithFields(corpseGUID, fields, posX, posY, posZ, orientation)
+}
+
+func buildCorpseCreateBlockWithFields(corpseGUID uint64, fields corpseObjectFields, posX, posY, posZ, orientation float32) []byte {
 	values := make([]uint32, 36)
 	values[0] = uint32(corpseGUID)
 	values[1] = uint32(corpseGUID >> 32)
 	values[2] = 0x81 // TYPEMASK_OBJECT (0x01) | TYPEMASK_CORPSE (0x80)
 	values[3] = 0
 	values[4] = math.Float32bits(1.0)
-	values[6] = uint32(ownerGUID)
-	values[7] = uint32(ownerGUID >> 32)
-	values[10] = displayID
-	if isBones {
-		values[33] = 0x01 // CORPSE_FLAG_BONES
-	}
+	values[6] = uint32(fields.OwnerGUID)
+	values[7] = uint32(fields.OwnerGUID >> 32)
+	values[10] = fields.DisplayID
+	values[30] = fields.Bytes1
+	values[31] = fields.Bytes2
+	values[32] = fields.GuildID
+	values[33] = fields.Flags
+	values[34] = fields.DynamicFlags
 
 	mask := protocol.NewUpdateMask(len(values))
 	for idx, val := range values {
@@ -212,12 +237,34 @@ func buildCorpseCreateBlock(corpseGUID, ownerGUID uint64, displayID uint32, posX
 	return block.Bytes()
 }
 
+func corpseAppearance(player *playerState) (uint32, uint32) {
+	if player == nil {
+		return 0, 0
+	}
+	return uint32(player.Race)<<8 | uint32(player.Gender)<<16 | uint32(player.Skin)<<24, uint32(player.Face) | uint32(player.HairStyle)<<8 | uint32(player.HairColor)<<16 | uint32(player.FacialStyle)<<24
+}
+
+func corpseFlags(player *playerState) uint32 {
+	flags := corpseFlagUnk2
+	if player != nil {
+		if player.PlayerFlags&playerFlagHideHelm != 0 {
+			flags |= 0x08
+		}
+		if player.PlayerFlags&playerFlagHideCloak != 0 {
+			flags |= 0x10
+		}
+	}
+	return flags
+}
+
 func (s *session) spawnCorpseObject(displayID uint32) {
 	if s.player == nil {
 		return
 	}
 	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
-	block := buildCorpseCreateBlock(corpseGUID, s.playerGUID, displayID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, false)
+	bytes1, bytes2 := corpseAppearance(s.player)
+	fields := corpseObjectFields{OwnerGUID: s.playerGUID, DisplayID: displayID, Bytes1: bytes1, Bytes2: bytes2, GuildID: s.player.GuildID, Flags: corpseFlags(s.player)}
+	block := buildCorpseCreateBlockWithFields(corpseGUID, fields, s.player.X, s.player.Y, s.player.Z, s.player.Orientation)
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(block)
 	packet, err := updates.BuildPacket(0)
@@ -264,11 +311,11 @@ func (s *session) buildPlayerRepop(ctx context.Context) {
 
 	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
 		// Reference Corpse::SaveToDB deletes any previous record first.
+		bytes1, bytes2 := corpseAppearance(s.player)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_DEL_CORPSE", s.playerGUID)
 		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_INS_CORPSE",
 			s.playerGUID, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, s.player.Map,
-			displayID, s.player.Equipment, uint32(s.player.StandState), uint32(s.player.SheathState)<<8,
-			s.player.GuildID, 0, 0, time.Now().Unix(), corpseTypePvE, 0, 1)
+			displayID, s.player.Equipment, bytes1, bytes2, s.player.GuildID, corpseFlags(s.player), 0, time.Now().Unix(), corpseTypePvE, 0, 1)
 	}
 
 	s.player.PlayerFlags |= playerFlagGhost
@@ -498,26 +545,75 @@ func (s *Server) updateSpiritHealerResurrectWaves(ctx context.Context, now time.
 	}
 }
 
-// spawnCorpseBones converts an existing corpse record into bones, mirroring
-// Player::SpawnCorpseBones for the resurrect-at-graveyard path.
+type corpseObjectState struct {
+	MapID, DisplayID, Bytes1, Bytes2, Flags, DynamicFlags uint32
+	GuildID                                               uint32
+	X, Y, Z, Orientation                                  float32
+}
+
+func (s *session) loadCorpseObject(ctx context.Context) (corpseObjectState, bool) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return corpseObjectState{}, false
+	}
+	var mapID, displayID, bytes1, bytes2, flags, dynamicFlags, corpseType, ghostTime int64
+	var corpse corpseObjectState
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT mapId, posX, posY, posZ, orientation, displayId, bytes1, bytes2, flags, dynFlags, corpseType, time FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones).Scan(&mapID, &corpse.X, &corpse.Y, &corpse.Z, &corpse.Orientation, &displayID, &bytes1, &bytes2, &flags, &dynamicFlags, &corpseType, &ghostTime); err != nil {
+		return corpseObjectState{}, false
+	}
+	corpse.MapID = uint32(mapID)
+	corpse.DisplayID = uint32(displayID)
+	corpse.Bytes1 = uint32(bytes1)
+	corpse.Bytes2 = uint32(bytes2)
+	corpse.Flags = uint32(flags)
+	corpse.DynamicFlags = uint32(dynamicFlags)
+	var guildID int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guildId FROM corpse WHERE guid = ?", s.playerGUID).Scan(&guildID); err == nil {
+		corpse.GuildID = uint32(guildID)
+	}
+	return corpse, true
+}
+
+func battlegroundMap(mapID uint32) bool {
+	switch mapID {
+	case 30, 489, 529, 566, 559, 562, 572, 607, 617, 618, 628:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) shouldCreateCorpseBones(mapID uint32) bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	if battlegroundMap(mapID) {
+		return s.server.Config.DeathBonesBattleground
+	}
+	return s.server.Config.DeathBonesWorld
+}
+
+// spawnCorpseBones mirrors Player::SpawnCorpseBones and Map::ConvertCorpseToBones:
+// remove the resurrectable corpse from persistence, then optionally create ownerless bones at its stored location.
 func (s *session) spawnCorpseBones(ctx context.Context) {
-	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+	corpse, ok := s.loadCorpseObject(ctx)
+	if !ok {
 		return
 	}
-	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE corpse SET corpseType = ?, time = ? WHERE guid = ?", corpseTypeBones, time.Now().Unix(), s.playerGUID)
-	s.despawnCorpseObject()
-	if s.player != nil {
-		corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
-		block := buildCorpseCreateBlock(corpseGUID, s.playerGUID, 0, s.player.X, s.player.Y, s.player.Z, s.player.Orientation, true)
-		updates := protocol.NewUpdateData()
-		updates.AddUpdateBlock(block)
-		packet, err := updates.BuildPacket(0)
-		if err == nil && packet != nil {
-			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
-			if s.server != nil {
-				s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
-			}
-		}
+	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ? AND corpseType <> ?", s.playerGUID, corpseTypeBones); err != nil {
+		return
+	}
+	if !s.shouldCreateCorpseBones(corpse.MapID) {
+		return
+	}
+	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
+	fields := corpseObjectFields{DisplayID: corpse.DisplayID, Bytes1: corpse.Bytes1, Bytes2: corpse.Bytes2, GuildID: corpse.GuildID, Flags: corpseFlagUnk2 | corpseFlagBones, DynamicFlags: corpse.DynamicFlags}
+	block := buildCorpseCreateBlockWithFields(corpseGUID, fields, corpse.X, corpse.Y, corpse.Z, corpse.Orientation)
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(block)
+	packet, err := updates.BuildPacket(0)
+	if err == nil && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
 	}
 }
 

@@ -165,6 +165,109 @@ func TestBuildCorpseCreateBlockMatchesReferencePositionLayout(t *testing.T) {
 	}
 }
 
+func TestSpawnCorpseBonesUsesStoredPositionAndOwnerlessFields(t *testing.T) {
+	player := &playerState{GUID: 9, Health: 50, MaxHealth: 100, Map: 0, X: 5, Y: 6, Z: 7, Orientation: 0.25}
+	state, clientConn, server := newDeathTestSession(t, player)
+	_, err := server.CharactersStore.DB.Exec("INSERT INTO corpse (guid, posX, posY, posZ, orientation, mapId, displayId, itemCache, bytes1, bytes2, guildId, flags, dynFlags, time, corpseType) VALUES (9, 100, 200, 30, 0.75, 0, 42, '', 16909060, 84281096, 5, 4, 8, ?, 1)", time.Now().Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := make(chan struct {
+		op      uint16
+		payload []byte
+		err     error
+	}, 1)
+	go func() {
+		op, payload, readErr := readServerFrame(clientConn, nil)
+		frames <- struct {
+			op      uint16
+			payload []byte
+			err     error
+		}{op, payload, readErr}
+	}()
+	state.spawnCorpseBones(context.Background())
+	var frame struct {
+		op      uint16
+		payload []byte
+		err     error
+	}
+	select {
+	case frame = <-frames:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for corpse bones update")
+	}
+	if frame.err != nil {
+		t.Fatal(frame.err)
+	}
+	payload := frame.payload
+	if frame.op == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		payload, err = protocol.DecompressUpdatePayload(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := protocol.NewReader(payload)
+	if blocks, err := r.ReadU32(); err != nil || blocks != 1 {
+		t.Fatalf("blocks=%d err=%v", blocks, err)
+	}
+	if updateType, err := r.ReadU8(); err != nil || updateType != protocol.UpdateCreateObject2 {
+		t.Fatalf("update type=%d err=%v", updateType, err)
+	}
+	corpseGUID := uint64(9) | uint64(0xF101)<<48
+	if guid, err := r.ReadPackedGUID(); err != nil || guid != corpseGUID {
+		t.Fatalf("guid=%x err=%v", guid, err)
+	}
+	if objectType, err := r.ReadU8(); err != nil || objectType != 7 {
+		t.Fatalf("object type=%d err=%v", objectType, err)
+	}
+	if flags, err := r.ReadU16(); err != nil || flags != 0x0150 {
+		t.Fatalf("update flags=%x err=%v", flags, err)
+	}
+	if marker, err := r.ReadU8(); err != nil || marker != 0 {
+		t.Fatalf("transport marker=%d err=%v", marker, err)
+	}
+	for _, want := range []float32{100, 200, 30, 100, 200, 30, 0.75, 0.75} {
+		value, err := r.ReadF32()
+		if err != nil || value != want {
+			t.Fatalf("position value=%v want=%v err=%v", value, want, err)
+		}
+	}
+	if low, err := r.ReadU32(); err != nil || low != 9 {
+		t.Fatalf("low guid=%d err=%v", low, err)
+	}
+	maskBlocks, err := r.ReadU8()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mask := make([]uint32, maskBlocks)
+	for i := range mask {
+		mask[i], err = r.ReadU32()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	values := make(map[int]uint32)
+	for i := 0; i < 36; i++ {
+		if mask[i/32]&(1<<uint(i%32)) == 0 {
+			continue
+		}
+		values[i], err = r.ReadU32()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if values[6] != 0 || values[7] != 0 || values[10] != 42 || values[30] != 16909060 || values[31] != 84281096 || values[32] != 5 || values[33] != 5 || values[34] != 8 {
+		t.Fatalf("bones fields=%x", values)
+	}
+	var remaining int
+	if err := server.CharactersStore.DB.QueryRow("SELECT COUNT(*) FROM corpse WHERE guid = 9").Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 0 {
+		t.Fatalf("corpse rows=%d", remaining)
+	}
+}
+
 // drainServerFrames consumes everything the session writes so synchronous
 // net.Pipe writes cannot deadlock tests that do not assert packet order.
 func drainServerFrames(t *testing.T, conn net.Conn) {
@@ -260,7 +363,7 @@ func TestCorpseReclaimDelayProgression(t *testing.T) {
 }
 
 func TestBuildPlayerRepopCreatesCorpseAndGhost(t *testing.T) {
-	player := &playerState{GUID: 9, Health: 0, MaxHealth: 100, Map: 0, X: 1.5, Y: 2.5, Z: 3.5, Orientation: 0.5, Equipment: "1 2 3", GuildID: 5, StandState: 1, SheathState: 1}
+	player := &playerState{GUID: 9, Health: 0, MaxHealth: 100, Map: 0, X: 1.5, Y: 2.5, Z: 3.5, Orientation: 0.5, Equipment: "1 2 3", GuildID: 5, Race: 1, Gender: 1, Skin: 2, Face: 3, HairStyle: 4, HairColor: 5, FacialStyle: 6, StandState: 1, SheathState: 1}
 	state, clientConn, server := newDeathTestSession(t, player)
 	drainServerFrames(t, clientConn)
 	state.buildPlayerRepop(context.Background())
@@ -288,7 +391,7 @@ func TestBuildPlayerRepopCreatesCorpseAndGhost(t *testing.T) {
 	if err := server.CharactersStore.DB.QueryRow("SELECT bytes1, bytes2 FROM corpse WHERE guid = 9").Scan(&bytes1, &bytes2); err != nil {
 		t.Fatal(err)
 	}
-	if bytes1 != 1 || bytes2 != 256 {
+	if bytes1 != 0x02010100 || bytes2 != 0x06050403 {
 		t.Fatalf("corpse bytes1=%d bytes2=%d", bytes1, bytes2)
 	}
 }
@@ -388,11 +491,10 @@ func TestHandleReclaimCorpseFlow(t *testing.T) {
 		t.Fatal("ghost flag not cleared")
 	}
 	var corpseType int64
-	if err := server.CharactersStore.DB.QueryRow("SELECT corpseType FROM corpse WHERE guid = 9").Scan(&corpseType); err != nil {
+	if err := server.CharactersStore.DB.QueryRow("SELECT corpseType FROM corpse WHERE guid = 9").Scan(&corpseType); err == nil {
+		t.Fatalf("resurrected corpse remained in database as type %d", corpseType)
+	} else if err != sql.ErrNoRows {
 		t.Fatal(err)
-	}
-	if corpseType != int64(corpseTypeBones) {
-		t.Fatalf("corpse type=%d", corpseType)
 	}
 }
 
@@ -475,11 +577,10 @@ func TestResurrectResponseAcceptFlow(t *testing.T) {
 		t.Fatalf("player not teleported to caster location: %+v", player)
 	}
 	var corpseType int64
-	if err := server.CharactersStore.DB.QueryRow("SELECT corpseType FROM corpse WHERE guid = 9").Scan(&corpseType); err != nil {
+	if err := server.CharactersStore.DB.QueryRow("SELECT corpseType FROM corpse WHERE guid = 9").Scan(&corpseType); err == nil {
+		t.Fatalf("resurrected corpse remained in database as type %d", corpseType)
+	} else if err != sql.ErrNoRows {
 		t.Fatal(err)
-	}
-	if corpseType != int64(corpseTypeBones) {
-		t.Fatalf("corpse type=%d", corpseType)
 	}
 }
 
@@ -894,11 +995,12 @@ func TestSpiritHealerActivateDurabilityAndResSickness(t *testing.T) {
 		t.Fatal("expected Resurrection Sickness aura 15007 applied to level 15 player")
 	}
 
-	// 4. Corpse should now be bones (corpseTypeBones = 0)
+	// 4. The resurrectable corpse is deleted; optional bones are world objects, not DB rows.
 	var cType int
-	_ = cdb.QueryRow("SELECT corpseType FROM corpse WHERE guid = 9").Scan(&cType)
-	if cType != int(corpseTypeBones) {
-		t.Fatalf("expected corpseType %d (bones), got %d", corpseTypeBones, cType)
+	if err := cdb.QueryRow("SELECT corpseType FROM corpse WHERE guid = 9").Scan(&cType); err == nil {
+		t.Fatalf("resurrected corpse remained in database as type %d", cType)
+	} else if err != sql.ErrNoRows {
+		t.Fatal(err)
 	}
 }
 
