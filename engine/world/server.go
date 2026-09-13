@@ -177,6 +177,8 @@ type session struct {
 	channels              map[string]struct{}
 	tutorials             [8]uint32
 	tutorialsInDB         bool
+	unreadMails           uint32
+	nextMailDelivery      int64
 	activeLoot            *activeLootState
 	trade                 *playerTradeState
 	diminishing           [DiminishingMax]diminishingReturn
@@ -339,6 +341,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 		case <-ticker.C:
 			now := time.Now()
 			s.updateContinentTransports(now)
+			s.updateMailDeliveries(ctx, now.Unix())
 			s.updateActiveCreatures(ctx)
 			s.updatePlayerCombat(ctx)
 			s.updatePlayerRegeneration(ctx, now)

@@ -797,9 +797,10 @@ func (s *session) sendMailNotify(receiverGUID uint64) {
 	}
 	targetSess := s.server.findSessionByGUID(receiverGUID)
 	if targetSess != nil {
-		recvPacket := protocol.NewBuffer(4)
-		recvPacket.WriteF32(0) // time remaining
-		_ = targetSess.write(uint16(protocol.OpcodeSMSG_RECEIVED_MAIL), recvPacket.Bytes(), true)
+		targetSess.loadMailState(context.Background())
+		if targetSess.unreadMails > 0 {
+			targetSess.sendNewMailNotification(context.Background())
+		}
 	}
 }
 

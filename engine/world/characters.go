@@ -592,6 +592,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 			_ = s.sendTalentsInfo(true)
 		}
 	}
+	s.loadMailState(ctx)
 	s.sendNewMailNotification(ctx)
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true

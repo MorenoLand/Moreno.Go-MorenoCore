@@ -70,11 +70,65 @@ func (s *session) sendNewMailNotification(ctx context.Context) {
 	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM mail
 		WHERE receiver = ? AND deliver_time <= ? AND expire_time > ? AND (COALESCE(checked, 0) & 1) = 0`, s.playerGUID, time.Now().Unix(), time.Now().Unix()).Scan(&unread)
 	if err != nil || unread == 0 {
+		if err == nil {
+			s.unreadMails = 0
+		}
 		return
 	}
+	s.unreadMails = uint32(unread)
 	packet := protocol.NewBuffer(4)
 	packet.WriteF32(0)
 	_ = s.write(uint16(protocol.OpcodeSMSG_RECEIVED_MAIL), packet.Bytes(), true)
+}
+
+func (s *session) loadMailState(ctx context.Context) {
+	if s == nil || s.playerGUID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	now := time.Now().Unix()
+	var unread, next int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT
+		COALESCE(SUM(CASE WHEN deliver_time <= ? AND expire_time > ? AND (COALESCE(checked, 0) & 1) = 0 THEN 1 ELSE 0 END), 0),
+		COALESCE(MIN(CASE WHEN deliver_time > ? AND expire_time > ? THEN deliver_time END), 0)
+		FROM mail WHERE receiver = ?`, now, now, now, now, s.playerGUID).Scan(&unread, &next)
+	if err != nil {
+		return
+	}
+	if unread > 0 {
+		s.unreadMails = uint32(unread)
+	} else {
+		s.unreadMails = 0
+	}
+	if next > 0 {
+		s.nextMailDelivery = next
+	} else {
+		s.nextMailDelivery = 0
+	}
+}
+
+func (s *session) updateMailDeliveries(ctx context.Context, now int64) {
+	if s == nil || !s.playerLoaded || s.nextMailDelivery == 0 || now < s.nextMailDelivery {
+		return
+	}
+	s.loadMailState(ctx)
+	if s.unreadMails > 0 {
+		s.sendNewMailNotification(ctx)
+	}
+}
+
+func (s *Server) updateMailDeliveries(ctx context.Context, now int64) {
+	if s == nil {
+		return
+	}
+	s.sessionsMu.RLock()
+	sessions := make([]*session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
+	s.sessionsMu.RUnlock()
+	for _, sess := range sessions {
+		sess.updateMailDeliveries(ctx, now)
+	}
 }
 
 func (s *session) handleGetMailList(ctx context.Context, payload []byte) bool {
