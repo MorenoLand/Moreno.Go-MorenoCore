@@ -135,6 +135,10 @@ func main() {
 			modelsProcessed++
 		}
 	}
+	if err := assembleMapTrees(src, dest); err != nil {
+		failed = true
+		fmt.Fprintf(os.Stderr, "Failed to assemble map trees: %v\n", err)
+	}
 
 	elapsed := time.Since(start)
 	fmt.Printf("Assembled %d building model trees into '%s' in %v\n", modelsProcessed, dest, elapsed.Round(time.Millisecond))

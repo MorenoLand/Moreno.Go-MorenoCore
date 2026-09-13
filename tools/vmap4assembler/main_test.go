@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -34,6 +36,29 @@ func TestBIHBuildsSerializedInteriorNodes(t *testing.T) {
 			t.Fatalf("invalid BIH object permutation: %v", objects)
 		}
 		seen[index] = true
+	}
+}
+
+func TestMapTreeAndTileAssemblyWritesReferenceFiles(t *testing.T) {
+	dest := t.TempDir()
+	spawn := &mapSpawnRecord{Flags: modelFlagHasBound, ID: 7, BoundsLow: vector3{0, 0, 0}, BoundsHigh: vector3{10, 10, 10}, Name: "Building.wmo"}
+	assembly := &mapAssembly{Unique: map[uint32]*mapSpawnRecord{7: spawn}, Tiles: map[uint32][]uint32{packTileID(1, 2): {7}}}
+	if err := writeMapFiles(dest, 571, assembly); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := os.ReadFile(filepath.Join(dest, "571.vmtree"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree) < 13 || string(tree[:8]) != vMapMagic || tree[8] != 1 || string(tree[9:13]) != "NODE" || !bytes.Contains(tree, []byte("GOBJ")) {
+		t.Fatalf("unexpected vmtree header: %x", tree[:min(len(tree), 32)])
+	}
+	tile, err := os.ReadFile(filepath.Join(dest, "571_01_02.vmtile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tile) < 12 || string(tile[:8]) != vMapMagic || binary.LittleEndian.Uint32(tile[8:12]) != 1 {
+		t.Fatalf("unexpected vmtile header: %x", tile[:min(len(tile), 20)])
 	}
 }
 
