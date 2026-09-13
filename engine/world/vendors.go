@@ -132,6 +132,9 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return true
 	}
+	if !s.canInteractWithNPC(ctx, vendorGUID, uint64(unitNPCFlagVendor)) {
+		return true
+	}
 	creatureEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT v.slot, v.item, v.maxcount, v.incrtime, v.ExtendedCost,
 		COALESCE(t.displayid, 0), COALESCE(t.BuyPrice, 0), COALESCE(t.MaxDurability, 0), COALESCE(t.BuyCount, 1), COALESCE(t.FlagsExtra, 0)
@@ -245,6 +248,10 @@ func (s *session) handleBuyItemInSlot(ctx context.Context, payload []byte) bool 
 
 func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEntry, slot, count uint32) bool {
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return true
+	}
+	if !s.canInteractWithNPC(ctx, uint64(vendorGUID), uint64(unitNPCFlagVendor)) {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(uint64(vendorGUID), itemEntry, 5), true)
 		return true
 	}
 	vendorEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
@@ -624,6 +631,9 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	if cdb == nil || wdb == nil {
 		return true
 	}
+	if !s.canInteractWithNPC(ctx, vendorGUID, uint64(unitNPCFlagVendor)) {
+		return true
+	}
 	var itemEntry, currentCount int64
 	err = cdb.QueryRowContext(ctx, `SELECT ii.itemEntry, ii.count FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
@@ -711,6 +721,9 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 	vendorGUID, err := r.ReadU64()
 	if err != nil {
 		return false
+	}
+	if !s.canInteractWithNPC(ctx, vendorGUID, uint64(unitNPCFlagVendor)) {
+		return true
 	}
 	slot, err := r.ReadU32()
 	if err != nil {

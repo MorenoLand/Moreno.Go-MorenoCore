@@ -1693,7 +1693,7 @@ func TestHandleSellItemMasksHighGuid(t *testing.T) {
 
 	// Client sends itemGUID with high GUID (0x4000000000000010)
 	sellBuf := protocol.NewBuffer(17)
-	sellBuf.WriteU64(100)                                 // vendorGUID
+	sellBuf.WriteU64(creatureWorldGUID(1, 101))           // vendorGUID
 	sellBuf.WriteU64(uint64(16) | (uint64(0x4000) << 48)) // itemGUID with high GUID
 	sellBuf.WriteU8(1)                                    // count
 

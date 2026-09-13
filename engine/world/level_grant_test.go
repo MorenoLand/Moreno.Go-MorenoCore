@@ -79,7 +79,7 @@ func TestSlice13Handlers(t *testing.T) {
 		Timestamp: 1000,
 	}
 	buybackBuf := protocol.NewBuffer(12)
-	buybackBuf.WriteU64(777)
+	buybackBuf.WriteU64(creatureWorldGUID(1, 101))
 	buybackBuf.WriteU32(0) // slot 0
 	if !sess.handleBuybackItem(ctx, buybackBuf.Bytes()) {
 		t.Fatal("handleBuybackItem failed")
