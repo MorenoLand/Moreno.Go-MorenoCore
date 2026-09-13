@@ -277,3 +277,29 @@ func TestElunaInt64Constructors(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestElunaQueryMethods(t *testing.T) {
+	var logs bytes.Buffer
+	runtime := NewRuntime(Config{Enabled: true, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	query := &Query{columns: []string{"signed", "unsigned", "nullable", "text", "decimal", "flag"}, rows: [][]any{{int64(-8), uint64(18446744073709551615), nil, []byte("hello"), float64(1.5), int64(1)}, {int64(4), uint64(9), "not-null", "next", float64(2.5), int64(0)}}}
+	if err := runtime.LoadString(`RegisterPlayerEvent(89, function(event, query)
+		assert(query:GetColumnCount() == 6 and query:GetRowCount() == 2)
+		assert(query:GetInt8(0) == -8 and query:GetInt16(0) == -8 and query:GetInt32(0) == -8)
+		assert(tostring(query:GetInt64(0)) == "-8")
+		assert(tostring(query:GetUInt64(1)) == "18446744073709551615")
+		assert(query:IsNull(2) and query:GetString(3) == "hello")
+		assert(query:GetFloat(4) == 1.5 and query:GetDouble(4) == 1.5 and query:GetBool(5))
+		local row = query:GetRow()
+		assert(row.signed == -8 and row.text == "hello")
+		assert(query:NextRow())
+		assert(not query:IsNull(2) and tostring(query:GetInt64(0)) == "4" and query:GetUInt32(1) == 9 and not query:GetBool(5))
+		assert(not query:NextRow())
+		return true
+	end)`); err != nil {
+		t.Fatal(err)
+	}
+	values, err := runtime.TriggerPlayerEvent(context.Background(), 89, 89, query)
+	if err != nil || len(values) != 1 || values[0] != true {
+		t.Fatalf("values=%v err=%v logs=%s", values, err, logs.String())
+	}
+}

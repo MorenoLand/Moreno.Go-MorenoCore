@@ -115,21 +115,58 @@ func queryIndex(state *lua.State) int {
 			query.current++
 			call.PushBoolean(true)
 			return 1
+		case "GetColumnCount":
+			call.PushUnsigned(uint(len(query.columns)))
+			return 1
+		case "GetRowCount":
+			call.PushUnsigned(uint(len(query.rows)))
+			return 1
+		case "IsNull":
+			value, ok := queryValue(query, call, 2)
+			call.PushBoolean(!ok || value == nil)
+			return 1
+		case "GetBool":
+			return queryGetBool(call, query, 2)
+		case "GetUInt8":
+			return queryGetNumber(call, query, 2, func(value uint64) { call.PushUnsigned(uint(value & 0xFF)) })
+		case "GetUInt16":
+			return queryGetNumber(call, query, 2, func(value uint64) { call.PushUnsigned(uint(value & 0xFFFF)) })
 		case "GetUInt32":
 			return queryGetNumber(call, query, 2, func(value uint64) { call.PushUnsigned(uint(value)) })
 		case "GetUInt64":
-			return queryGetNumber(call, query, 2, func(value uint64) { call.PushUnsigned(uint(value)) })
+			return queryGetNumber(call, query, 2, func(value uint64) { pushUInt64(call, value) })
+		case "GetInt8":
+			return queryGetSigned(call, query, 2, func(value int64) { call.PushInteger(int(value)) })
+		case "GetInt16":
+			return queryGetSigned(call, query, 2, func(value int64) { call.PushInteger(int(value)) })
 		case "GetInt32":
 			return queryGetSigned(call, query, 2, func(value int64) { call.PushInteger(int(value)) })
+		case "GetInt64":
+			return queryGetSigned(call, query, 2, func(value int64) { pushInt64(call, value) })
 		case "GetString":
 			return queryGetString(call, query, 2)
-		case "GetFloat":
+		case "GetFloat", "GetDouble":
 			return queryGetFloat(call, query, 2)
 		default:
 			call.PushNil()
 			return 1
 		}
 	})
+	return 1
+}
+
+func queryGetBool(state *lua.State, query *Query, index int) int {
+	value, ok := queryValue(query, state, index)
+	if !ok || value == nil {
+		state.PushBoolean(false)
+		return 1
+	}
+	if number, err := asInt64(value); err == nil {
+		state.PushBoolean(number != 0)
+		return 1
+	}
+	text := strings.ToLower(fmt.Sprint(value))
+	state.PushBoolean(text == "1" || text == "true" || text == "yes")
 	return 1
 }
 
@@ -182,6 +219,10 @@ func queryGetString(state *lua.State, query *Query, index int) int {
 		state.PushString("")
 		return 1
 	}
+	if bytes, ok := value.([]byte); ok {
+		state.PushString(string(bytes))
+		return 1
+	}
 	state.PushString(fmt.Sprint(value))
 	return 1
 }
@@ -211,6 +252,12 @@ func queryValue(query *Query, state *lua.State, index int) (any, bool) {
 
 func asUint64(value any) (uint64, error) {
 	switch value := value.(type) {
+	case UInt64:
+		return uint64(value), nil
+	case Int64:
+		if value >= 0 {
+			return uint64(value), nil
+		}
 	case uint64:
 		return value, nil
 	case uint32:
@@ -245,6 +292,12 @@ func asUint64(value any) (uint64, error) {
 
 func asInt64(value any) (int64, error) {
 	switch value := value.(type) {
+	case Int64:
+		return int64(value), nil
+	case UInt64:
+		if value <= math.MaxInt64 {
+			return int64(value), nil
+		}
 	case int64:
 		return value, nil
 	case int32:
@@ -275,6 +328,10 @@ func asInt64(value any) (int64, error) {
 
 func asFloat64(value any) (float64, error) {
 	switch value := value.(type) {
+	case UInt64:
+		return float64(uint64(value)), nil
+	case Int64:
+		return float64(int64(value)), nil
 	case float64:
 		return value, nil
 	case float32:
@@ -286,6 +343,16 @@ func asFloat64(value any) (float64, error) {
 	case uint64:
 		return float64(value), nil
 	case uint32:
+		return float64(value), nil
+	case uint16:
+		return float64(value), nil
+	case uint8:
+		return float64(value), nil
+	case int:
+		return float64(value), nil
+	case int16:
+		return float64(value), nil
+	case int8:
 		return float64(value), nil
 	case []byte:
 		return strconv.ParseFloat(string(value), 64)
