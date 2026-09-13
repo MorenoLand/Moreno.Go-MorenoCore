@@ -22,6 +22,7 @@ const (
 	fileImplode  uint32 = 0x00000100
 	fileCompress uint32 = 0x00000200
 	filePKWare   uint32 = 0x00000008
+	fileSparse   uint32 = 0x00000020
 	fileEncrypt  uint32 = 0x00010000
 	fileFixKey   uint32 = 0x00020000
 	fileSingle   uint32 = 0x01000000
@@ -296,11 +297,11 @@ func decompress(data []byte, expected, flags uint32) ([]byte, error) {
 }
 
 func decompressCompressed(data []byte, mask byte, expected uint32) ([]byte, error) {
-	const supported = byte(0x01 | 0x02 | 0x08 | 0x10 | 0x40 | 0x80)
+	const supported = byte(0x01 | 0x02 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80)
 	if mask&^supported != 0 {
 		return nil, errors.New("unsupported MPQ compression method")
 	}
-	methods := []byte{0x01, 0x02, 0x08, 0x10, 0x40, 0x80}
+	methods := []byte{0x01, 0x02, 0x08, 0x10, 0x20, 0x40, 0x80}
 	decoded := data
 	used := false
 	for _, method := range methods {
@@ -338,6 +339,8 @@ func decompressMethod(data []byte, method byte, expected uint32) ([]byte, error)
 		reader, err = blast.NewReader(bytes.NewReader(data))
 	case 0x10:
 		reader = io.NopCloser(bzip2.NewReader(bytes.NewReader(data)))
+	case 0x20:
+		return decompressSparse(data, expected)
 	default:
 		return nil, errors.New("unsupported MPQ compression method")
 	}

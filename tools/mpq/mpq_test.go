@@ -97,6 +97,18 @@ func TestDecompressHuffman(t *testing.T) {
 	}
 }
 
+func TestDecompressSparse(t *testing.T) {
+	compressed := []byte{0, 0, 0, 7, 0x82, 'a', 'b', 'c', 0x00, 0x80, 'z'}
+	want := []byte{'a', 'b', 'c', 0, 0, 0, 'z'}
+	decoded, err := decompress(append([]byte{0x20}, compressed...), uint32(len(want)), fileCompress)
+	if err != nil || !bytes.Equal(decoded, want) {
+		t.Fatalf("decoded=%x err=%v", decoded, err)
+	}
+	if _, err := decompress([]byte{0x20, 0, 0, 0, 8, 0x82, 'a'}, 8, fileCompress); err == nil {
+		t.Fatal("expected truncated sparse stream error")
+	}
+}
+
 func TestNormalize(t *testing.T) {
 	cases := []struct {
 		input    string
