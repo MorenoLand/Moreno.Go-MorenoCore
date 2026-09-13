@@ -60,6 +60,9 @@ func isAreaEnemySpell(spell wotlk.Spell) bool {
 		if eff.Effect == 0 {
 			continue
 		}
+		if eff.Effect == 129 {
+			return true
+		}
 		if eff.Effect == 27 && eff.ImplicitTargetA == 18 {
 			return true
 		}
@@ -72,7 +75,7 @@ func isAreaEnemySpell(spell wotlk.Spell) bool {
 
 func isAreaEnemyTargetType(target uint32) bool {
 	switch target {
-	case 15, 16, 22, 24, 28, 54:
+	case 2, 15, 16, 22, 24, 28, 54, 104:
 		return true
 	default:
 		return false
@@ -93,7 +96,7 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			continue
 		}
 		for _, targetType := range []uint32{eff.ImplicitTargetA, eff.ImplicitTargetB} {
-			if targetType == 24 || targetType == 54 {
+			if targetType == 24 || targetType == 54 || targetType == 104 {
 				cone = true
 			}
 			if targetType == 16 || targetType == 18 || targetType == 28 {
@@ -1489,10 +1492,13 @@ func isHarmfulSpell(spell wotlk.Spell) bool {
 		if eff.Effect == 6 && isHarmfulAura(eff.Aura) {
 			return true
 		}
+		if eff.Effect == 129 {
+			return true
+		}
 		if eff.Effect == 27 && (eff.TriggerSpell != 0 || eff.Aura == 3 || eff.Aura == 89 || isAreaEnemyTargetType(eff.ImplicitTargetA) || isAreaEnemyTargetType(eff.ImplicitTargetB) || eff.ImplicitTargetA == 18 || eff.ImplicitTargetB == 18) {
 			return true
 		}
-		if eff.ImplicitTargetA == 6 || eff.ImplicitTargetA == 15 || eff.ImplicitTargetA == 16 {
+		if eff.ImplicitTargetA == 2 || eff.ImplicitTargetA == 6 || eff.ImplicitTargetA == 15 || eff.ImplicitTargetA == 16 || eff.ImplicitTargetA == 24 || eff.ImplicitTargetA == 54 || eff.ImplicitTargetA == 104 {
 			return true
 		}
 	}
