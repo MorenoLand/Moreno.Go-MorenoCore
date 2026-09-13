@@ -164,6 +164,8 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 	isGM := s.player != nil && (s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0)
 	for _, row := range rowsData {
 		item, maxCount, incrTime, extCost, display, buyPrice, maxDur, buyCount, flagsExtra := row.item, row.maxCount, row.incrTime, row.extCost, row.display, row.buyPrice, row.maxDur, row.buyCount, row.flagsExtra
+		itemSlot := fallbackSlot
+		fallbackSlot++
 		if extCost != 0 {
 			if s.server.Data == nil {
 				continue
@@ -181,8 +183,6 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		if buyPrice > 0 {
 			buyPrice = int64(math.Floor(float64(buyPrice) * s.vendorReputationPriceDiscount(ctx, creatureEntry)))
 		}
-		itemSlot := fallbackSlot
-		fallbackSlot++
 		if buyCount <= 0 {
 			buyCount = 1
 		}

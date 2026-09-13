@@ -293,6 +293,53 @@ func TestVendorListEncodesUnlimitedStockAsZero(t *testing.T) {
 	}
 }
 
+func TestVendorListPreservesUnderlyingSlotWhenEarlierItemIsFiltered(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER, AllowableClass INTEGER, Bonding INTEGER, RequiredReputationFaction INTEGER, RequiredReputationRank INTEGER)",
+		"CREATE TABLE conditions (SourceTypeOrReferenceId INTEGER, SourceGroup INTEGER, SourceEntry INTEGER, ElseGroup INTEGER, ConditionTypeOrReference INTEGER, ConditionTarget INTEGER, ConditionValue1 INTEGER, ConditionValue2 INTEGER, ConditionValue3 INTEGER, NegativeCondition INTEGER)",
+		"INSERT INTO npc_vendor VALUES (101, 0, 5001, 0, 0, 0), (101, 1, 5002, 0, 0, 0)",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 100, 1, 0, -1, 0, 0, 0), (5002, 101, 75, 100, 1, 0, -1, 0, 0, 0)",
+		"INSERT INTO conditions VALUES (23, 101, 5001, 0, 15, 0, 1, 0, 0, 0)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	sess := &session{conn: serverConn, server: &Server{WorldStore: store}, playerLoaded: true, player: &playerState{GUID: 1, Class: 8}}
+	done := make(chan bool, 1)
+	go func() { done <- sess.sendVendorList(context.Background(), creatureWorldGUID(1, 101)) }()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !<-done || opcode != uint16(protocol.OpcodeSMSG_LIST_INVENTORY) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	if _, err := reader.ReadU64(); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := reader.ReadU8(); err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	if slot, err := reader.ReadU32(); err != nil || slot != 2 {
+		t.Fatalf("filtered vendor slot=%d err=%v", slot, err)
+	}
+	if item, err := reader.ReadU32(); err != nil || item != 5002 {
+		t.Fatalf("item=%d err=%v", item, err)
+	}
+}
+
 func TestVendorPacketStockUsesZeroForUnlimitedAndEmpty(t *testing.T) {
 	if vendorPacketStock(-1) != 0 || vendorPacketStock(0) != 0 || vendorPacketStock(7) != 7 {
 		t.Fatalf("unexpected packet stock values: %d %d %d", vendorPacketStock(-1), vendorPacketStock(0), vendorPacketStock(7))
