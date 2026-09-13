@@ -394,6 +394,14 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		return false
 	}
 	s.mounts = mounts
+	s.logoutHook = false
+	s.logoutAt = time.Time{}
+	s.attackTarget = 0
+	s.autoRepeatSpell = 0
+	s.autoRepeatTarget = 0
+	s.inFlight = false
+	s.gossip = nil
+	s.gossipClosed = false
 	s.breathTimer = -1
 	s.fatigueTimer = -1
 	s.playerGUID = guid
