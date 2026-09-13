@@ -723,8 +723,8 @@ This generated inventory compares the pinned reference script tree with the curr
 
 | Path | Lines | Hook registrations |
 | --- | ---: | --- |
-| `globals.go` | 530 | — |
+| `globals.go` | 561 | — |
 | `object.go` | 388 | — |
 | `packet.go` | 186 | — |
 | `query.go` | 364 | — |
-| `runtime.go` | 774 | CreateLuaEvent, RegisterBGEvent, RegisterCreatureEvent, RegisterGameObjectEvent, RegisterGlobalEvent, RegisterGroupEvent, RegisterGuildEvent, RegisterItemEvent, RegisterMapEvent, RegisterPlayerEvent, RegisterServerEvent |
+| `runtime.go` | 776 | CreateLuaEvent, RegisterBGEvent, RegisterCreatureEvent, RegisterGameObjectEvent, RegisterGlobalEvent, RegisterGroupEvent, RegisterGuildEvent, RegisterItemEvent, RegisterMapEvent, RegisterPlayerEvent, RegisterServerEvent |
