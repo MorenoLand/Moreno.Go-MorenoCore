@@ -26,6 +26,10 @@ func TestAuthSessionAndPing(t *testing.T) {
 	for _, statement := range []string{
 		"CREATE TABLE account (id INTEGER PRIMARY KEY, username TEXT NOT NULL, session_key_auth BLOB, last_ip TEXT, locked INTEGER, lock_country TEXT, os TEXT, online INTEGER NOT NULL DEFAULT 0)",
 		"CREATE TABLE account_banned (id INTEGER NOT NULL, bandate INTEGER NOT NULL, unbandate INTEGER NOT NULL, active INTEGER NOT NULL)",
+		"CREATE TABLE account_access (AccountID INTEGER NOT NULL, SecurityLevel INTEGER NOT NULL, RealmID INTEGER NOT NULL)",
+		"CREATE TABLE rbac_account_permissions (accountId INTEGER, permissionId INTEGER, granted INTEGER, realmId INTEGER)",
+		"CREATE TABLE rbac_default_permissions (secId INTEGER, permissionId INTEGER, realmId INTEGER)",
+		"CREATE TABLE rbac_linked_permissions (id INTEGER, linkedId INTEGER)",
 		"CREATE TABLE character_banned (guid INTEGER NOT NULL, active INTEGER NOT NULL)",
 		"CREATE TABLE character_pet (owner INTEGER NOT NULL, slot INTEGER NOT NULL, entry INTEGER, modelid INTEGER, level INTEGER)",
 		"CREATE TABLE character_spell (guid INTEGER NOT NULL, spell INTEGER NOT NULL, active INTEGER NOT NULL, disabled INTEGER NOT NULL)",
@@ -408,6 +412,45 @@ func TestAuthSessionAndPing(t *testing.T) {
 	}
 	if cancelOpcode != uint16(protocol.OpcodeSMSG_LOGOUT_CANCEL_ACK) || len(cancelPayload) != 0 {
 		t.Fatalf("logout cancel opcode=%x payload=%x", cancelOpcode, cancelPayload)
+	}
+	if _, err := db.Exec("INSERT INTO account_access (AccountID, SecurityLevel, RealmID) VALUES (7, 0, -1)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO rbac_account_permissions (accountId, permissionId, granted, realmId) VALUES (7, 1, 1, -1)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST), nil, clientCrypt); err != nil {
+		t.Fatal(err)
+	}
+	instantLogoutOpcode, instantLogoutPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instantLogoutOpcode != uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE) || len(instantLogoutPayload) != 5 || binary.LittleEndian.Uint32(instantLogoutPayload[:4]) != 0 || instantLogoutPayload[4] != 1 {
+		t.Fatalf("instant logout response opcode=%x payload=%x", instantLogoutOpcode, instantLogoutPayload)
+	}
+	for {
+		completeOpcode, completePayload, readErr := readServerFrame(clientConn, clientCrypt)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if completeOpcode != uint16(protocol.OpcodeSMSG_LOGOUT_COMPLETE) {
+			continue
+		}
+		if len(completePayload) != 0 {
+			t.Fatalf("logout complete payload=%x", completePayload)
+		}
+		break
+	}
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_CHAR_ENUM), nil, clientCrypt); err != nil {
+		t.Fatal(err)
+	}
+	reloginEnumOpcode, reloginEnumPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloginEnumOpcode != uint16(protocol.OpcodeSMSG_CHAR_ENUM) || len(reloginEnumPayload) < 1 {
+		t.Fatalf("same-session char enum opcode=%x payload=%d", reloginEnumOpcode, len(reloginEnumPayload))
 	}
 	deletePayload := protocol.NewBuffer(8)
 	deletePayload.WriteU64(99)
