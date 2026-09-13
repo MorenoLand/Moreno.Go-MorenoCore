@@ -145,6 +145,30 @@ func TestFailedLoginProtectionCountsAndBansAccount(t *testing.T) {
 	}
 }
 
+func TestBannedIPIsRejectedBeforeAuthenticationChallenge(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE ip_banned (ip TEXT, bandate INTEGER, unbandate INTEGER, bannedby TEXT, banreason TEXT); INSERT INTO ip_banned VALUES ('pipe', 100, 100, 'test', 'test')"); err != nil {
+		t.Fatal(err)
+	}
+	store := &database.Store{Name: "auth", Backend: database.BackendSQLite, DB: db}
+	server := NewServer(store, slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	go server.Handle(context.Background(), serverConn)
+	packet := make([]byte, 3)
+	if _, err := io.ReadFull(clientConn, packet); err != nil {
+		t.Fatal(err)
+	}
+	if packet[0] != logonChallenge || packet[2] != wowBanned {
+		t.Fatalf("banned IP response=%x", packet)
+	}
+}
+
 func buildChallenge(login string) []byte {
 	var b bytes.Buffer
 	b.WriteByte(logonChallenge)

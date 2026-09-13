@@ -144,6 +144,13 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 	}()
 	defer close(closed)
 	remoteIP := remoteAddress(conn)
+	if banned, err := s.ipBanned(ctx, remoteIP); err != nil {
+		s.debug("ip ban lookup failed", "remote", remoteIP, "error", err)
+	} else if banned {
+		s.debug("authentication connection rejected", "remote", remoteIP, "reason", "ip ban")
+		_ = writePacket(conn, []byte{logonChallenge, 0, wowBanned})
+		return
+	}
 	state := &session{server: s, conn: conn, status: statusChallenge, remoteIP: remoteIP}
 	var traced *traceConn
 	if s.TraceRecorder != nil {
@@ -187,6 +194,25 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			return
 		}
 	}
+}
+
+func (s *Server) ipBanned(ctx context.Context, ip string) (bool, error) {
+	if s == nil || s.Store == nil {
+		return false, nil
+	}
+	row, err := s.Store.QueryRowStatement(ctx, "LOGIN_SEL_IP_INFO", ip)
+	if err != nil {
+		return false, err
+	}
+	var banned bool
+	var country sql.NullString
+	if err := row.Scan(&banned, &country); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return banned, nil
 }
 
 func (s *session) handleLogonChallenge(ctx context.Context) error {
