@@ -67,3 +67,47 @@ func TestLuaWorldObjectBindings(t *testing.T) {
 		t.Fatalf("object was not hidden")
 	}
 }
+
+func TestLuaPlayerGameplayBindings(t *testing.T) {
+	characters, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer characters.Close()
+	characters.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"CREATE TABLE character_inventory (guid INTEGER NOT NULL, item INTEGER NOT NULL)",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER NOT NULL, count INTEGER NOT NULL)",
+		"INSERT INTO character_inventory VALUES (99, 5001)",
+		"INSERT INTO item_instance VALUES (5001, 1001, 3)",
+	} {
+		if _, err := characters.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: characters}, Config: config.Default()}
+	var rawCount int
+	if err := characters.QueryRow("SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?", 99, 1001).Scan(&rawCount); err != nil || rawCount != 3 {
+		t.Fatalf("raw item count=%d err=%v", rawCount, err)
+	}
+	sess := &session{server: server, playerLoaded: true, player: &playerState{GUID: 99, Race: 1, Class: 8, Gender: 0, Level: 20, GuildID: 7, Health: 80, MaxHealth: 100, Powers: [7]uint32{40}, MaxPowers: [7]uint32{100}, MountDisplayID: 123, Spells: []learnedSpell{{ID: 133, Active: true}}, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}, isMoving: true, isSwimming: true}
+	player := sess.luaPlayer()
+	if values, err := player.Methods["HasSpell"](context.Background(), []any{float64(133)}); err != nil || values[0] != true {
+		t.Fatalf("spell values=%v err=%v", values, err)
+	}
+	if values, err := player.Methods["HasSkill"](context.Background(), []any{float64(98)}); err != nil || values[0] != true {
+		t.Fatalf("skill values=%v err=%v", values, err)
+	}
+	if values, err := player.Methods["GetItemCount"](context.Background(), []any{float64(1001)}); err != nil || values[0] != uint32(3) {
+		t.Fatalf("item values=%v err=%v", values, err)
+	}
+	if values, err := player.Methods["HasItem"](context.Background(), []any{float64(1001), float64(3)}); err != nil || values[0] != true {
+		t.Fatalf("has item values=%v err=%v", values, err)
+	}
+	for name, want := range map[string]any{"GetGuildId": uint32(7), "GetTeam": uint32(0), "GetPower": uint32(40), "GetMaxPower": uint32(100), "GetPowerType": uint8(0), "IsInWater": true, "IsMoving": true, "CanFly": true} {
+		values, err := player.Methods[name](context.Background(), nil)
+		if err != nil || len(values) != 1 || values[0] != want {
+			t.Fatalf("%s values=%v err=%v", name, values, err)
+		}
+	}
+}

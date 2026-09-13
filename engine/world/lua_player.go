@@ -64,13 +64,107 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetClass"] = luaNoArgs(func() any { return state.Class })
 	methods["GetGender"] = luaNoArgs(func() any { return state.Gender })
 	methods["GetDbcLocale"] = luaNoArgs(func() any { return uint32(0) })
-	methods["GetPowerType"] = luaNoArgs(func() any { return uint32(0) })
+	methods["GetPowerType"] = luaNoArgs(func() any { return classPowerType(state.Class) })
 	methods["GetCoinage"] = luaNoArgs(func() any { return state.Money })
+	methods["GetGuildId"] = luaNoArgs(func() any { return state.GuildID })
+	methods["GetTeam"] = luaNoArgs(func() any { return teamForRace(state.Race) })
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
+	methods["GetHealth"] = luaNoArgs(func() any { return state.Health })
+	methods["GetHealthPct"] = luaNoArgs(func() any {
+		if state.MaxHealth == 0 {
+			return float32(0)
+		}
+		return float32(state.Health) * 100 / float32(state.MaxHealth)
+	})
+	methods["GetPower"] = func(_ context.Context, args []any) ([]any, error) {
+		power, err := playerPowerIndex(args, state.Class)
+		if err != nil {
+			return nil, err
+		}
+		return []any{state.Powers[power]}, nil
+	}
+	methods["GetMaxPower"] = func(_ context.Context, args []any) ([]any, error) {
+		power, err := playerPowerIndex(args, state.Class)
+		if err != nil {
+			return nil, err
+		}
+		return []any{state.MaxPowers[power]}, nil
+	}
+	methods["GetPowerPct"] = func(_ context.Context, args []any) ([]any, error) {
+		power, err := playerPowerIndex(args, state.Class)
+		if err != nil {
+			return nil, err
+		}
+		if state.MaxPowers[power] == 0 {
+			return []any{float32(0)}, nil
+		}
+		return []any{float32(state.Powers[power]) * 100 / float32(state.MaxPowers[power])}, nil
+	}
 	methods["GetGMRank"] = luaNoArgs(func() any { return s.security })
 	methods["IsGM"] = luaNoArgs(func() any { return s.security > 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
+	methods["IsInWater"] = luaNoArgs(func() any { return s.isSwimming })
+	methods["IsMoving"] = luaNoArgs(func() any { return s.isMoving })
+	methods["CanFly"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
+	methods["HasSpell"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, known := range state.Spells {
+			if known.ID == spell && known.Active && !known.Disabled {
+				return []any{true}, nil
+			}
+		}
+		return []any{false}, nil
+	}
+	methods["HasSkill"] = func(_ context.Context, args []any) ([]any, error) {
+		skill, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, known := range state.Skills {
+			if uint32(known.Skill) == skill && known.Max > 0 {
+				return []any{true}, nil
+			}
+		}
+		return []any{false}, nil
+	}
+	itemCount := func(args []any) ([]any, error) {
+		item, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		count := int64(0)
+		if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+			return []any{uint32(0)}, nil
+		}
+		err = s.server.CharactersStore.DB.QueryRow("SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = ? AND ii.itemEntry = ?", state.GUID, item).Scan(&count)
+		if isMissingTableError(err) {
+			return []any{uint32(0)}, nil
+		}
+		if count < 0 {
+			count = 0
+		}
+		return []any{uint32(count)}, err
+	}
+	methods["GetItemCount"] = func(_ context.Context, args []any) ([]any, error) { return itemCount(args) }
+	methods["HasItem"] = func(_ context.Context, args []any) ([]any, error) {
+		values, err := itemCount(args)
+		if err != nil {
+			return nil, err
+		}
+		required := uint32(1)
+		if len(args) > 1 {
+			required, err = luaUint32Arg(args, 1)
+			if err != nil {
+				return nil, err
+			}
+		}
+		count := values[0].(uint32)
+		return []any{count >= required}, nil
+	}
 	methods["HasAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
 		if err != nil {
@@ -302,6 +396,21 @@ func (s *session) luaMessageMethod() scripting.ObjectMethod {
 
 func luaNoArgs(value func() any) scripting.ObjectMethod {
 	return func(_ context.Context, _ []any) ([]any, error) { return []any{value()}, nil }
+}
+
+func playerPowerIndex(args []any, class uint8) (int, error) {
+	power := uint32(classPowerType(class))
+	if len(args) > 0 {
+		value, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return 0, err
+		}
+		power = value
+	}
+	if power >= 7 {
+		return 0, fmt.Errorf("power type %d is invalid", power)
+	}
+	return int(power), nil
 }
 
 func luaUint32Arg(args []any, index int) (uint32, error) {
