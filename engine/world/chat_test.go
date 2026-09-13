@@ -93,6 +93,25 @@ func TestMalformedChatDoesNotCloseSession(t *testing.T) {
 	}
 }
 
+func TestAddonLanguageRequiresReferenceMessageType(t *testing.T) {
+	server := &Server{sessions: make(map[*session]struct{})}
+	state := &session{server: server, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Name: "Tester"}}
+	invalid := protocol.NewBuffer(16)
+	invalid.WriteU32(chatSay)
+	invalid.WriteU32(languageAddon)
+	invalid.WriteCString("blocked")
+	if !state.handleMessageChat(context.Background(), invalid.Bytes()) {
+		t.Fatal("invalid addon chat closed the session")
+	}
+	valid := protocol.NewBuffer(16)
+	valid.WriteU32(chatParty)
+	valid.WriteU32(languageAddon)
+	valid.WriteCString("allowed")
+	if !state.handleMessageChat(context.Background(), valid.Bytes()) {
+		t.Fatal("valid addon chat closed the session")
+	}
+}
+
 func TestBroadcastSayUsesSenderReceiverGUID(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()

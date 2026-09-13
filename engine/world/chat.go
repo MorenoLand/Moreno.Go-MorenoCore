@@ -64,6 +64,10 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid message type", "type", typeID)
 		return true
 	}
+	if language == languageAddon && !addonChatType(typeID) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "invalid addon language type", "type", typeID)
+		return true
+	}
 	var targetName, channel, message string
 	switch uint8(typeID) {
 	case chatWhisper:
@@ -156,6 +160,15 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channel)
 	s.debug("chat accepted", "account", s.accountName, "type", typeID, "gm_chat", s.gmChat)
 	return true
+}
+
+func addonChatType(typeID uint32) bool {
+	switch uint8(typeID) {
+	case chatParty, chatRaid, chatGuild, chatWhisper, chatBattleground:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *session) guildChatSpeakAllowed(officer bool) bool {
