@@ -83,6 +83,56 @@ func TestChatWithoutScriptingRuntimeDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestHandleMessageChatBroadcastsSayToSender(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Map: 0}}
+	server.sessions[state] = struct{}{}
+	payload := protocol.NewBuffer(16)
+	payload.WriteU32(chatSay)
+	payload.WriteU32(1)
+	payload.WriteCString("hello")
+	done := make(chan bool, 1)
+	go func() { done <- state.handleMessageChat(context.Background(), payload.Bytes()) }()
+	opcode, response, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(response)
+	if value, err := reader.ReadU8(); err != nil || value != chatSay {
+		t.Fatalf("type=%d err=%v", value, err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := reader.ReadU64(); err != nil || value != state.playerGUID {
+		t.Fatalf("sender=%d err=%v", value, err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := reader.ReadU64(); err != nil || value != state.playerGUID {
+		t.Fatalf("receiver=%d err=%v", value, err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := reader.ReadCString(); err != nil || value != "hello" {
+		t.Fatalf("message=%q err=%v", value, err)
+	}
+	if value, err := reader.ReadU8(); err != nil || value != 0 {
+		t.Fatalf("chat tag=%d err=%v", value, err)
+	}
+	if !<-done {
+		t.Fatal("chat handler rejected a valid say packet")
+	}
+}
+
 func TestMalformedChatDoesNotCloseSession(t *testing.T) {
 	server := &Server{sessions: make(map[*session]struct{})}
 	state := &session{server: server, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Name: "Tester"}}
