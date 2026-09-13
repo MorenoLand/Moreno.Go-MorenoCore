@@ -1785,6 +1785,9 @@ func (s *session) completeLogout(ctx context.Context) error {
 		s.buildPlayerRepop(ctx)
 		s.repopAtGraveyard(ctx)
 	}
+	if s.playerLoaded && s.player != nil {
+		s.handleLeaveBattlefield(ctx, nil)
+	}
 	if s.trade != nil {
 		_ = s.handleCancelTrade(ctx)
 	}

@@ -517,7 +517,7 @@ func TestCompleteLogoutCleansStateBeforeCompletionPacket(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
-	sess := &session{server: server, conn: serverConn, accountID: 7, playerGUID: 9, playerLoaded: true, player: &playerState{GUID: 9, Name: "Logout", Level: 20, Health: 100, MaxHealth: 100}, activeAuras: map[uint32]*activeAura{123: {SpellID: 123, Slot: 0, CasterGUID: 9}}, auras: map[uint32]struct{}{123: {}}, auraSlots: map[uint32]uint8{123: 0}}
+	sess := &session{server: server, conn: serverConn, accountID: 7, playerGUID: 9, playerLoaded: true, bgQueues: [2]bgQueueEntry{{Active: true, BgTypeID: 1}}, player: &playerState{GUID: 9, Name: "Logout", Level: 20, Health: 100, MaxHealth: 100}, activeAuras: map[uint32]*activeAura{123: {SpellID: 123, Slot: 0, CasterGUID: 9}}, auras: map[uint32]struct{}{123: {}}, auraSlots: map[uint32]uint8{123: 0}}
 	done := make(chan error, 1)
 	go func() { done <- sess.completeLogout(context.Background()) }()
 	seenCompletion := false
@@ -539,6 +539,9 @@ func TestCompleteLogoutCleansStateBeforeCompletionPacket(t *testing.T) {
 	}
 	if !seenCompletion || sess.playerLoaded || sess.player != nil {
 		t.Fatalf("logout state loaded=%v player=%v", sess.playerLoaded, sess.player)
+	}
+	if sess.bgQueues[0].Active {
+		t.Fatal("battleground queue remained active after logout")
 	}
 	var buybackRows, itemRows int
 	if err := stores.Characters.DB.QueryRow("SELECT COUNT(*) FROM character_inventory WHERE guid = 9 AND bag = 0 AND slot BETWEEN 74 AND 85").Scan(&buybackRows); err != nil {
