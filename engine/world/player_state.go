@@ -243,6 +243,12 @@ type playerState struct {
 	RaidDifficulty       uint8
 	VehicleGUID          uint64
 	VehicleSeat          int8
+	TransportGUID        uint64
+	TransportX           float32
+	TransportY           float32
+	TransportZ           float32
+	TransportO           float32
+	TransportSeat        int8
 	ArenaPoints          uint32
 	TotalHonorPoints     uint32
 	TodayHonorPoints     uint32
@@ -814,6 +820,15 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		}
 		if taxiPath.Valid {
 			state.TaxiPath = taxiPath.String
+		}
+	}
+	var transportGUID int64
+	var transportX, transportY, transportZ, transportO float32
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(trans_x, 0), COALESCE(trans_y, 0), COALESCE(trans_z, 0),
+		COALESCE(trans_o, 0), COALESCE(transguid, 0) FROM characters WHERE guid = ?`, state.GUID).Scan(&transportX, &transportY, &transportZ, &transportO, &transportGUID); err == nil {
+		state.TransportX, state.TransportY, state.TransportZ, state.TransportO = transportX, transportY, transportZ, transportO
+		if transportGUID > 0 {
+			state.TransportGUID = uint64(transportGUID)
 		}
 	}
 	var bankSlots int64

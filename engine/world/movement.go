@@ -111,6 +111,15 @@ func (s *session) handleMovement(ctx context.Context, opcode uint32, payload []b
 		}
 	}
 	s.player.X, s.player.Y, s.player.Z, s.player.Orientation = info.X, info.Y, info.Z, info.Orientation
+	if info.Flags&movementOnTransport != 0 && info.Transport != nil {
+		s.player.TransportGUID = info.Transport.GUID
+		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = info.Transport.X, info.Transport.Y, info.Transport.Z, info.Transport.Orientation
+		s.player.TransportSeat = info.Transport.Seat
+	} else {
+		s.player.TransportGUID = 0
+		s.player.TransportX, s.player.TransportY, s.player.TransportZ, s.player.TransportO = 0, 0, 0, 0
+		s.player.TransportSeat = 0
+	}
 	if s.server != nil {
 		if s.player.VehicleGUID != 0 {
 			s.server.relocatePassengers(s.player.VehicleGUID, info.X, info.Y, info.Z, info.Orientation)
