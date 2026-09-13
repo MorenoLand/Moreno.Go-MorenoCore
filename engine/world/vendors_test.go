@@ -213,7 +213,7 @@ func TestVendorItemAccessRequirements(t *testing.T) {
 	}
 }
 
-func TestVendorListEncodesUnlimitedStockAsFFFFFFFF(t *testing.T) {
+func TestVendorListEncodesUnlimitedStockAsZero(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -254,8 +254,14 @@ func TestVendorListEncodesUnlimitedStockAsFFFFFFFF(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if stock, err := reader.ReadU32(); err != nil || stock != ^uint32(0) {
+	if stock, err := reader.ReadU32(); err != nil || stock != 0 {
 		t.Fatalf("unlimited stock=%d err=%v", stock, err)
+	}
+}
+
+func TestVendorPacketStockUsesZeroForUnlimitedAndEmpty(t *testing.T) {
+	if vendorPacketStock(-1) != 0 || vendorPacketStock(0) != 0 || vendorPacketStock(7) != 7 {
+		t.Fatalf("unexpected packet stock values: %d %d %d", vendorPacketStock(-1), vendorPacketStock(0), vendorPacketStock(7))
 	}
 }
 

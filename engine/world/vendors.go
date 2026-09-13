@@ -197,7 +197,7 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		packet.WriteU32(it.Slot)
 		packet.WriteU32(it.ItemEntry)
 		packet.WriteU32(it.DisplayInfoID)
-		packet.WriteU32(uint32(it.MaxCount))
+		packet.WriteU32(vendorPacketStock(it.MaxCount))
 		packet.WriteU32(it.BuyPrice)
 		packet.WriteU32(it.MaxDurability)
 		packet.WriteU32(it.BuyCount)
@@ -216,6 +216,13 @@ func vendorStockValue(maxCount int64) int32 {
 		return int32(^uint32(0) >> 1)
 	}
 	return int32(maxCount)
+}
+
+func vendorPacketStock(current int32) uint32 {
+	if current <= 0 {
+		return 0
+	}
+	return uint32(current)
 }
 
 func (s *session) handleBuyItem(ctx context.Context, payload []byte) bool {
@@ -343,10 +350,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 			s.recordVendorRefund(ctx, cdb, res.ItemGUID, itemEntry, totalCost, uint32(extCost))
 		}
 	}
-	newCount := uint32(remainingStock)
-	if maxCount <= 0 {
-		newCount = ^uint32(0)
-	}
+	newCount := vendorPacketStock(remainingStock)
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, slot, newCount, count), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
