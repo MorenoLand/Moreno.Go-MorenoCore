@@ -355,6 +355,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.loadPlayerReputations(ctx, &state)
 	_ = s.loadPlayerAuras(ctx, &state)
 	restoreLoadedDeathState(&state)
+	s.restoreLoadedCorpseState(ctx, &state)
 	s.player = &state
 	return state, nil
 }
@@ -675,6 +676,21 @@ func restoreLoadedDeathState(state *playerState) {
 	state.PlayerFlags |= playerFlagGhost
 	state.PlayerFieldBytes |= playerFieldByteReleaseTimer
 	state.Health = 1
+}
+
+func (s *session) restoreLoadedCorpseState(ctx context.Context, state *playerState) {
+	if s == nil || state == nil || state.AtLogin&uint32(atLoginResurrect) != 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	var corpseType int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT corpseType FROM corpse WHERE guid = ? AND corpseType <> ? LIMIT 1", state.GUID, corpseTypeBones).Scan(&corpseType); err != nil {
+		return
+	}
+	state.PlayerFlags |= playerFlagGhost
+	state.PlayerFieldBytes |= playerFieldByteReleaseTimer
+	if state.Health == 0 {
+		state.Health = 1
+	}
 }
 
 func (s *session) loadPlayerReputations(ctx context.Context, state *playerState) error {

@@ -1,10 +1,14 @@
 package world
 
 import (
+	"context"
+	"database/sql"
 	"math"
 	"testing"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+	_ "modernc.org/sqlite"
 )
 
 func TestPlayerCreateMask(t *testing.T) {
@@ -38,6 +42,26 @@ func TestRestoreLoadedDeathStateReconstructsGhost(t *testing.T) {
 	restoreLoadedDeathState(resurrected)
 	if resurrected.Health != 0 || resurrected.PlayerFlags&playerFlagGhost != 0 {
 		t.Fatalf("at-login resurrect state=%+v", resurrected)
+	}
+}
+
+func TestRestoreLoadedCorpseStateUsesPersistedCorpse(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE corpse (guid INTEGER, corpseType INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO corpse VALUES (9, 1)"); err != nil {
+		t.Fatal(err)
+	}
+	sess := &session{server: &Server{CharactersStore: &database.Store{DB: db}}}
+	state := &playerState{GUID: 9, Health: 0}
+	sess.restoreLoadedCorpseState(context.Background(), state)
+	if state.Health != 1 || state.PlayerFlags&playerFlagGhost == 0 || state.PlayerFieldBytes&playerFieldByteReleaseTimer == 0 {
+		t.Fatalf("corpse state=%+v", state)
 	}
 }
 
