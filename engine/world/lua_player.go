@@ -50,7 +50,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		return nil
 	}
 	state := s.player
-	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender, "Team": teamForRace(state.Race), "IsGM": s.security > 0}
+	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender, "Team": teamForRace(state.Race), "IsGM": s.security > 0, "InWorld": true, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "Health": state.Health, "MaxHealth": state.MaxHealth, "Power": state.Powers[0], "MaxPower": state.MaxPowers[0], "PowerType": uint32(0), "InCombat": s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0}
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
@@ -69,7 +69,7 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
 	methods["GetGMRank"] = luaNoArgs(func() any { return s.security })
 	methods["IsGM"] = luaNoArgs(func() any { return s.security > 0 })
-	methods["IsInCombat"] = luaNoArgs(func() any { return false })
+	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
 	methods["HasAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)

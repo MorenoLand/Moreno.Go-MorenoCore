@@ -383,7 +383,7 @@ func (r *Runtime) initializeLocked() {
 	lua.SetFunctions(r.state, []lua.RegistryFunction{{Name: "__index", Function: queryIndex}}, 0)
 	r.state.Pop(1)
 	lua.NewMetaTable(r.state, objectMetaTable)
-	lua.SetFunctions(r.state, []lua.RegistryFunction{{Name: "__index", Function: objectIndex}}, 0)
+	lua.SetFunctions(r.state, []lua.RegistryFunction{{Name: "__index", Function: objectIndex}, {Name: "__eq", Function: objectEqual}}, 0)
 	r.state.Pop(1)
 	installUInt64MetaTable(r.state)
 	setPackagePath(r.state, r.config.ScriptPath)

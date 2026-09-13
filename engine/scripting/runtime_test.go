@@ -1,8 +1,10 @@
 package scripting
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -228,5 +230,35 @@ func TestElunaRegistrationFamiliesShotsAndClear(t *testing.T) {
 	}
 	if len(runtime.Hooks()) != 10 {
 		t.Fatalf("hooks after server clear=%d", len(runtime.Hooks()))
+	}
+}
+
+func TestElunaGenericObjectMethods(t *testing.T) {
+	var logs bytes.Buffer
+	runtime := NewRuntime(Config{Enabled: true, Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	creature := &Object{Type: "Creature", Fields: map[string]any{"GUID": uint64(7) | uint64(68)<<24 | uint64(0xF130)<<48, "Entry": uint32(68), "MapId": uint32(0), "X": float32(10), "Y": float32(20), "Z": float32(30), "Orientation": float32(1), "Health": uint32(50), "MaxHealth": uint32(100), "Level": uint32(10), "Power": uint32(25), "MaxPower": uint32(50), "InWorld": true}}
+	other := &Object{Type: "GameObject", Fields: map[string]any{"GUID": uint64(8) | uint64(9001)<<24 | uint64(0xF110)<<48, "Entry": uint32(9001), "MapId": uint32(0), "X": float32(13), "Y": float32(24), "Z": float32(30), "InWorld": true}}
+	if err := runtime.LoadString(`RegisterPlayerEvent(88, function(event, object, other)
+		assert(object:GetEntry() == 68)
+		assert(GetGUIDLow(object:GetGUID()) == 7)
+		assert(object:GetTypeId() == 3)
+		assert(object:IsInWorld())
+		assert(object:GetMapId() == 0)
+		assert(object:GetX() == 10 and object:GetY() == 20 and object:GetZ() == 30 and object:GetO() == 1)
+		local x, y, z, o = object:GetLocation()
+		assert(x == 10 and y == 20 and z == 30 and o == 1)
+		assert(object:GetHealth() == 50 and object:GetMaxHealth() == 100)
+		assert(object:GetHealthPct() == 50 and object:GetPowerPct() == 50)
+		assert(object:IsAlive() and not object:IsDead() and not object:IsFullHealth())
+		assert(object:IsInMap(other) and object:GetDistance(other) == 5)
+		assert(object:IsWithinDist3d(other, 5.1) and object:IsWithinDist2d(other, 5.1))
+		assert(object:ToCreature() == object and object:ToUnit() == object and object:ToPlayer() == nil)
+		return true
+	end)`); err != nil {
+		t.Fatal(err)
+	}
+	values, err := runtime.TriggerPlayerEvent(context.Background(), 88, 88, creature, other)
+	if err != nil || len(values) != 1 || values[0] != true {
+		t.Fatalf("values=%v err=%v logs=%s", values, err, logs.String())
 	}
 }

@@ -278,13 +278,31 @@ func objectUint64(object *Object, field string) (uint64, bool) {
 		return 0, false
 	}
 	switch value := value.(type) {
+	case UInt64:
+		return uint64(value), true
 	case uint64:
 		return value, true
 	case uint32:
 		return uint64(value), true
+	case uint16:
+		return uint64(value), true
+	case uint8:
+		return uint64(value), true
 	case uint:
 		return uint64(value), true
 	case int:
+		if value >= 0 {
+			return uint64(value), true
+		}
+	case int8:
+		if value >= 0 {
+			return uint64(value), true
+		}
+	case int16:
+		if value >= 0 {
+			return uint64(value), true
+		}
+	case int32:
 		if value >= 0 {
 			return uint64(value), true
 		}

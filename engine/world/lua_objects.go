@@ -15,6 +15,7 @@ type luaCreatureState struct {
 	DisplayID    uint32
 	Health       uint32
 	MaxHealth    uint32
+	Level        uint32
 	GossipMenuID uint32
 	NPCFlags     uint32
 	Map          uint32
@@ -74,7 +75,13 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	methods["GetGUIDLow"] = luaNoArgs(func() any { return uint32(state.GUID & 0x00FFFFFF) })
 	methods["GetObjectType"] = luaNoArgs(func() any { return "Creature" })
 	methods["GetMaxHealth"] = luaNoArgs(func() any { return state.MaxHealth })
-	methods["IsInCombat"] = luaNoArgs(func() any { return false })
+	methods["IsInCombat"] = luaNoArgs(func() any {
+		motion := s.server.creatureMotion[state.GUID]
+		if motion == nil {
+			motion = s.server.creatureMotion[creatureWorldGUID(uint32(state.GUID&0x00FFFFFF), state.Entry)]
+		}
+		return motion != nil && motion.InCombat
+	})
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
 	methods["AddAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
@@ -105,7 +112,8 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 		return nil, err
 	}
 	methods["SendBroadcastMessage"] = s.luaMessageMethod()
-	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "GossipMenuID": state.GossipMenuID, "NPCFlags": state.NPCFlags, "Map": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z}, Methods: methods}
+	state.Level = uint32(maxLevel)
+	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "GossipMenuID": state.GossipMenuID, "NPCFlags": state.NPCFlags, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level, "InWorld": true}, Methods: methods}
 }
 
 func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Object {
@@ -152,7 +160,7 @@ func (s *session) luaGameObjectObject(state luaGameObjectState) *scripting.Objec
 		s.server.objectsMu.Unlock()
 		return nil, nil
 	}
-	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry}, Methods: methods}
+	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "InWorld": true}, Methods: methods}
 }
 
 func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y float32, distance float32) *scripting.Object {
