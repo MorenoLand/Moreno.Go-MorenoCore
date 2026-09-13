@@ -654,7 +654,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	bbItemGUID := uint64(itemGUID)
 	if currentCount <= int64(count) {
 		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, itemGUID)
-		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = ? WHERE guid = ?", count, itemGUID)
 	} else {
 		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", count, itemGUID)
 		var newGUID int64
@@ -663,6 +663,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		} else {
 			bbItemGUID = uint64(time.Now().UnixNano() & 0x7FFFFFFF)
 		}
+		_, _ = cdb.ExecContext(ctx, "INSERT INTO item_instance (guid, itemEntry, owner_guid, count) VALUES (?, ?, ?, ?)", bbItemGUID, itemEntry, s.playerGUID, count)
 	}
 
 	// TrinityCore: Player::AddItemToBuyBackSlot (Player.cpp:13495)
@@ -690,6 +691,11 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 		s.sendDestroyObject(evictedGUID, false)
 		s.despawnItem(evictedGUID)
 	}
+	var evictedDBGUID int64
+	if err := cdb.QueryRowContext(ctx, "SELECT item FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, 74+slot).Scan(&evictedDBGUID); err == nil {
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, 74+slot)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", evictedDBGUID)
+	}
 
 	fullBBGUID := bbItemGUID | (uint64(0x4000) << 48)
 	s.buyback[slot] = &buybackSlot{
@@ -702,6 +708,7 @@ func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {
 	if s.currentBuybackSlot < 11 {
 		s.currentBuybackSlot++
 	}
+	_, _ = cdb.ExecContext(ctx, "INSERT OR REPLACE INTO character_inventory (guid, bag, slot, item) VALUES (?, 0, ?, ?)", s.playerGUID, 74+slot, bbItemGUID)
 
 	s.syncEquipmentCache(ctx)
 	_ = s.write(uint16(protocol.OpcodeSMSG_SELL_ITEM), buildSellResult(vendorGUID, rawItemGUID, 0), true)
@@ -756,6 +763,8 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 	s.player.Money -= entry.Price
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND bag = 0 AND slot = ?", s.playerGUID, 74+eslot)
+		_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", int64(oldItemGUID&0xFFFFFFFF))
 	}
 
 	// Destroy temporary buyback item if stored GUID is different
@@ -770,6 +779,48 @@ func (s *session) handleBuybackItem(ctx context.Context, payload []byte) bool {
 	s.sendPlayerUpdate()
 	s.debug("buyback item purchased", "account", s.accountName, "item", entry.ItemEntry, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
 	return true
+}
+
+func (s *session) loadBuybackState(ctx context.Context, guid uint64) {
+	for index := range s.buyback {
+		s.buyback[index] = nil
+	}
+	s.currentBuybackSlot = 0
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, ii.guid, ii.itemEntry, ii.count
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot BETWEEN 74 AND 85 ORDER BY ci.slot`, guid)
+	if err != nil {
+		return
+	}
+	for rows.Next() {
+		var slot, itemGUID, itemEntry, count int64
+		if rows.Scan(&slot, &itemGUID, &itemEntry, &count) != nil || slot < 74 || slot > 85 || itemGUID <= 0 || itemEntry <= 0 {
+			continue
+		}
+		price := int64(0)
+		if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+			_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT SellPrice FROM item_template WHERE entry = ?", itemEntry).Scan(&price)
+		}
+		if price < 0 {
+			price = 0
+		}
+		eslot := int(slot - 74)
+		s.buyback[eslot] = &buybackSlot{ItemGUID: uint64(itemGUID) | (uint64(0x4000) << 48), ItemEntry: uint32(itemEntry), Count: uint32(count), Price: uint32(price) * uint32(count), Timestamp: uint32(time.Now().Unix())}
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return
+	}
+	for index := range s.buyback {
+		if s.buyback[index] == nil {
+			s.currentBuybackSlot = uint8(index)
+			return
+		}
+	}
+	s.currentBuybackSlot = 11
 }
 
 func buildBuyFailed(vendorGUID uint64, itemEntry uint32, result uint8) []byte {

@@ -1679,6 +1679,9 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		if scanErr != nil {
 			continue
 		}
+		if item.bag == 0 && item.slot >= 74 && item.slot <= 85 {
+			continue
+		}
 		items = append(items, item)
 		if item.bag == 0 && ((item.slot >= 19 && item.slot <= 22) || (item.slot >= 67 && item.slot <= 73)) {
 			bagItems[item.itemGUID] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
