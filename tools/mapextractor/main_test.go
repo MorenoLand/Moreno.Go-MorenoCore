@@ -80,12 +80,31 @@ func TestParseADTChunkInventory(t *testing.T) {
 	binary.LittleEndian.PutUint32(mh2o[3072+20:], 3113)
 	mh2o[3072+14], mh2o[3072+15] = 1, 1
 	data = append(data, wdtChunk("MH2O", mh2o)...)
+	mddf := make([]byte, 36)
+	binary.LittleEndian.PutUint32(mddf[0:], 2)
+	binary.LittleEndian.PutUint32(mddf[4:], 99)
+	binary.LittleEndian.PutUint32(mddf[8:], math.Float32bits(1))
+	binary.LittleEndian.PutUint32(mddf[20:], math.Float32bits(2))
+	binary.LittleEndian.PutUint16(mddf[32:], 1024)
+	binary.LittleEndian.PutUint16(mddf[34:], 1)
+	data = append(data, wdtChunk("MDDF", mddf)...)
+	modf := make([]byte, 64)
+	binary.LittleEndian.PutUint32(modf[0:], 3)
+	binary.LittleEndian.PutUint32(modf[4:], 100)
+	binary.LittleEndian.PutUint32(modf[8:], math.Float32bits(3))
+	binary.LittleEndian.PutUint32(modf[32:], math.Float32bits(-1))
+	binary.LittleEndian.PutUint32(modf[44:], math.Float32bits(1))
+	binary.LittleEndian.PutUint16(modf[56:], 2)
+	binary.LittleEndian.PutUint16(modf[58:], 4)
+	binary.LittleEndian.PutUint16(modf[60:], 5)
+	binary.LittleEndian.PutUint16(modf[62:], 1024)
+	data = append(data, wdtChunk("MODF", modf)...)
 	data = append(data, wdtChunk("MCNK", mcnk)...)
 	info, err := parseADT(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MH2OHeaders != 256 || info.LiquidLayers != 1 || info.LiquidInstances != 1 || info.LiquidTiles != 1 || info.LiquidAttributes != 1 || info.LiquidExistsBytes != 1 || info.LiquidVertexBytes != 20 || info.MCNKCount != 1 || len(info.Cells) != 1 || info.Cells[0].X != 2 || info.Cells[0].Y != 3 || info.Cells[0].AreaID != 42 || info.Cells[0].Holes != 0x100 || info.MCVTCount != 1 || info.MCVTHeights != 145 || info.HeightMin != 10 || info.HeightMax != 20 || info.MCLYCount != 1 || info.MCALCount != 1 || info.MCLQCount != 1 || info.MCLQBytes != 804 {
+	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MH2OHeaders != 256 || info.LiquidLayers != 1 || info.LiquidInstances != 1 || info.LiquidTiles != 1 || info.LiquidAttributes != 1 || info.LiquidExistsBytes != 1 || info.LiquidVertexBytes != 20 || info.MCNKCount != 1 || len(info.Cells) != 1 || info.Cells[0].X != 2 || info.Cells[0].Y != 3 || info.Cells[0].AreaID != 42 || info.Cells[0].Holes != 0x100 || info.MCVTCount != 1 || info.MCVTHeights != 145 || info.HeightMin != 10 || info.HeightMax != 20 || info.MCLYCount != 1 || info.MCALCount != 1 || info.MCLQCount != 1 || info.MCLQBytes != 804 || len(info.Doodads) != 1 || info.Doodads[0].NameID != 2 || info.Doodads[0].UniqueID != 99 || info.Doodads[0].Scale != 1 || len(info.WorldModels) != 1 || info.WorldModels[0].NameID != 3 || info.WorldModels[0].DoodadSet != 4 || info.WorldModels[0].NameSet != 5 {
 		t.Fatalf("unexpected ADT info: %+v", info)
 	}
 }

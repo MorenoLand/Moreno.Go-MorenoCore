@@ -35,6 +35,28 @@ type adtInfo struct {
 	LiquidVertexBytes int
 	MCLQBytes         int
 	Cells             []adtCellInfo
+	Doodads           []adtDoodadInstance
+	WorldModels       []adtWorldModelInstance
+}
+
+type adtDoodadInstance struct {
+	NameID, UniqueID uint32
+	Position         [3]float32
+	Rotation         [3]float32
+	Scale            float32
+	Flags            uint16
+}
+
+type adtWorldModelInstance struct {
+	NameID, UniqueID uint32
+	Position         [3]float32
+	Rotation         [3]float32
+	BoundsMin        [3]float32
+	BoundsMax        [3]float32
+	Flags            uint16
+	DoodadSet        uint16
+	NameSet          uint16
+	Scale            float32
 }
 
 type adtCellInfo struct {
@@ -77,8 +99,18 @@ func parseADT(data []byte) (adtInfo, error) {
 			info.HasMWID = true
 		case "MDDF":
 			info.HasMDDF = true
+			instances, err := parseMDDF(chunk)
+			if err != nil {
+				return adtInfo{}, err
+			}
+			info.Doodads = append(info.Doodads, instances...)
 		case "MODF":
 			info.HasMODF = true
+			instances, err := parseMODF(chunk)
+			if err != nil {
+				return adtInfo{}, err
+			}
+			info.WorldModels = append(info.WorldModels, instances...)
 		case "MH2O":
 			info.MH2OCount++
 			if err := parseMH2O(chunk, &info); err != nil {
@@ -96,6 +128,52 @@ func parseADT(data []byte) (adtInfo, error) {
 		return adtInfo{}, errors.New("ADT MCNK chunks not found")
 	}
 	return info, nil
+}
+
+func parseMDDF(chunk []byte) ([]adtDoodadInstance, error) {
+	const recordSize = 36
+	if len(chunk)%recordSize != 0 {
+		return nil, fmt.Errorf("invalid MDDF size %d", len(chunk))
+	}
+	instances := make([]adtDoodadInstance, len(chunk)/recordSize)
+	for index := range instances {
+		base := index * recordSize
+		instance := &instances[index]
+		instance.NameID = binary.LittleEndian.Uint32(chunk[base:])
+		instance.UniqueID = binary.LittleEndian.Uint32(chunk[base+4:])
+		for axis := 0; axis < 3; axis++ {
+			instance.Position[axis] = math.Float32frombits(binary.LittleEndian.Uint32(chunk[base+8+axis*4:]))
+			instance.Rotation[axis] = math.Float32frombits(binary.LittleEndian.Uint32(chunk[base+20+axis*4:]))
+		}
+		instance.Scale = float32(binary.LittleEndian.Uint16(chunk[base+32:])) / 1024.0
+		instance.Flags = binary.LittleEndian.Uint16(chunk[base+34:])
+	}
+	return instances, nil
+}
+
+func parseMODF(chunk []byte) ([]adtWorldModelInstance, error) {
+	const recordSize = 64
+	if len(chunk)%recordSize != 0 {
+		return nil, fmt.Errorf("invalid MODF size %d", len(chunk))
+	}
+	instances := make([]adtWorldModelInstance, len(chunk)/recordSize)
+	for index := range instances {
+		base := index * recordSize
+		instance := &instances[index]
+		instance.NameID = binary.LittleEndian.Uint32(chunk[base:])
+		instance.UniqueID = binary.LittleEndian.Uint32(chunk[base+4:])
+		for axis := 0; axis < 3; axis++ {
+			instance.Position[axis] = math.Float32frombits(binary.LittleEndian.Uint32(chunk[base+8+axis*4:]))
+			instance.Rotation[axis] = math.Float32frombits(binary.LittleEndian.Uint32(chunk[base+20+axis*4:]))
+			instance.BoundsMin[axis] = math.Float32frombits(binary.LittleEndian.Uint32(chunk[base+32+axis*4:]))
+			instance.BoundsMax[axis] = math.Float32frombits(binary.LittleEndian.Uint32(chunk[base+44+axis*4:]))
+		}
+		instance.Flags = binary.LittleEndian.Uint16(chunk[base+56:])
+		instance.DoodadSet = binary.LittleEndian.Uint16(chunk[base+58:])
+		instance.NameSet = binary.LittleEndian.Uint16(chunk[base+60:])
+		instance.Scale = float32(binary.LittleEndian.Uint16(chunk[base+62:])) / 1024.0
+	}
+	return instances, nil
 }
 
 func parseMH2O(chunk []byte, info *adtInfo) error {
