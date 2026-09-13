@@ -106,6 +106,22 @@ func TestVendorLimitedStockTracksBundleConsumption(t *testing.T) {
 	}
 }
 
+func TestVendorStockSeparatesSlotsAndExtendedCosts(t *testing.T) {
+	srv := &Server{}
+	if got := srv.currentVendorStockFor(101, 5001, 1, 0, 2, time.Minute, 1); got != 2 {
+		t.Fatalf("slot 1 stock=%d", got)
+	}
+	if got := srv.currentVendorStockFor(101, 5001, 2, 99, 5, time.Minute, 1); got != 5 {
+		t.Fatalf("slot 2 stock=%d", got)
+	}
+	if got, ok := srv.consumeVendorStockFor(101, 5001, 1, 0, 1); !ok || got != 1 {
+		t.Fatalf("slot 1 consume stock=%d ok=%v", got, ok)
+	}
+	if got := srv.currentVendorStockFor(101, 5001, 2, 99, 5, time.Minute, 1); got != 5 {
+		t.Fatalf("slot 2 stock changed=%d", got)
+	}
+}
+
 func TestVendorListEncodesUnlimitedStockAsFFFFFFFF(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

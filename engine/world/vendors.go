@@ -19,8 +19,10 @@ type vendorItemRecord struct {
 }
 
 type vendorStockKey struct {
-	Vendor uint32
-	Item   uint32
+	Vendor       uint32
+	Item         uint32
+	Slot         uint32
+	ExtendedCost uint32
 }
 
 type vendorStockState struct {
@@ -29,6 +31,10 @@ type vendorStockState struct {
 }
 
 func (s *Server) currentVendorStock(vendor, item uint32, maxCount int32, increment time.Duration, buyCount uint32) int32 {
+	return s.currentVendorStockFor(vendor, item, 0, 0, maxCount, increment, buyCount)
+}
+
+func (s *Server) currentVendorStockFor(vendor, item, slot, extendedCost uint32, maxCount int32, increment time.Duration, buyCount uint32) int32 {
 	if maxCount <= 0 {
 		return -1
 	}
@@ -40,7 +46,7 @@ func (s *Server) currentVendorStock(vendor, item uint32, maxCount int32, increme
 	if s.vendorStock == nil {
 		s.vendorStock = make(map[vendorStockKey]*vendorStockState)
 	}
-	key := vendorStockKey{Vendor: vendor, Item: item}
+	key := vendorStockKey{Vendor: vendor, Item: item, Slot: slot, ExtendedCost: extendedCost}
 	stock := s.vendorStock[key]
 	if stock == nil {
 		stock = &vendorStockState{Current: maxCount, Updated: time.Now()}
@@ -63,9 +69,13 @@ func (s *Server) currentVendorStock(vendor, item uint32, maxCount int32, increme
 }
 
 func (s *Server) consumeVendorStock(vendor, item uint32, amount uint32) (int32, bool) {
+	return s.consumeVendorStockFor(vendor, item, 0, 0, amount)
+}
+
+func (s *Server) consumeVendorStockFor(vendor, item, slot, extendedCost, amount uint32) (int32, bool) {
 	s.vendorMu.Lock()
 	defer s.vendorMu.Unlock()
-	stock := s.vendorStock[vendorStockKey{Vendor: vendor, Item: item}]
+	stock := s.vendorStock[vendorStockKey{Vendor: vendor, Item: item, Slot: slot, ExtendedCost: extendedCost}]
 	if stock == nil || stock.Current < int32(amount) {
 		return 0, false
 	}
@@ -74,8 +84,12 @@ func (s *Server) consumeVendorStock(vendor, item uint32, amount uint32) (int32, 
 }
 
 func (s *Server) restoreVendorStock(vendor, item uint32, amount uint32) {
+	s.restoreVendorStockFor(vendor, item, 0, 0, amount)
+}
+
+func (s *Server) restoreVendorStockFor(vendor, item, slot, extendedCost, amount uint32) {
 	s.vendorMu.Lock()
-	if stock := s.vendorStock[vendorStockKey{Vendor: vendor, Item: item}]; stock != nil {
+	if stock := s.vendorStock[vendorStockKey{Vendor: vendor, Item: item, Slot: slot, ExtendedCost: extendedCost}]; stock != nil {
 		stock.Current += int32(amount)
 	}
 	s.vendorMu.Unlock()
@@ -123,7 +137,7 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		if buyCount <= 0 {
 			buyCount = 1
 		}
-		inStock := s.server.currentVendorStock(creatureEntry, uint32(item), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
+		inStock := s.server.currentVendorStockFor(creatureEntry, uint32(item), itemSlot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
 		if inStock == 0 && !isGM {
 			continue
 		}
@@ -199,8 +213,8 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		return true
 	}
 	vendorEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
-	var maxCount, incrTime, buyPrice, buyCount int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT v.maxcount, v.incrtime, t.BuyPrice, t.BuyCount FROM npc_vendor AS v JOIN item_template AS t ON t.entry = v.item WHERE v.entry = ? AND v.item = ? AND v.slot = ? LIMIT 1", vendorEntry, itemEntry, slot).Scan(&maxCount, &incrTime, &buyPrice, &buyCount); err != nil {
+	var maxCount, incrTime, extCost, buyPrice, buyCount int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT v.maxcount, v.incrtime, v.ExtendedCost, t.BuyPrice, t.BuyCount FROM npc_vendor AS v JOIN item_template AS t ON t.entry = v.item WHERE v.entry = ? AND v.item = ? AND v.slot = ? LIMIT 1", vendorEntry, itemEntry, slot).Scan(&maxCount, &incrTime, &extCost, &buyPrice, &buyCount); err != nil {
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 0), true)
 		return true
 	}
@@ -214,13 +228,13 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	totalCost := uint32(buyPrice) * count
 	remainingStock := int32(-1)
 	if maxCount > 0 {
-		current := s.server.currentVendorStock(vendorEntry, itemEntry, int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
+		current := s.server.currentVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
 		if current < int32(amount) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 5), true)
 			return true
 		}
 		var ok bool
-		remainingStock, ok = s.server.consumeVendorStock(vendorEntry, itemEntry, uint32(amount))
+		remainingStock, ok = s.server.consumeVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), uint32(amount))
 		if !ok {
 			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 5), true)
 			return true
@@ -233,7 +247,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	res, err := s.storeOrStackItem(ctx, s.playerGUID, itemEntry, uint32(amount))
 	if err != nil {
 		if maxCount > 0 {
-			s.server.restoreVendorStock(vendorEntry, itemEntry, uint32(amount))
+			s.server.restoreVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), uint32(amount))
 		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 1), true) // BUY_ERR_CANT_CARRY_MORE = 1
 		return true
