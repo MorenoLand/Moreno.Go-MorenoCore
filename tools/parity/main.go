@@ -402,6 +402,7 @@ func goTestHandlers(root string) ([]string, error) {
 func goSessionHandlerAudit(root string) (int, []string, error) {
 	trivial := make([]string, 0)
 	total := 0
+	intentional := map[string]struct{}{"handleKeepAlive": {}, "handlePlayerLogout": {}}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -420,6 +421,9 @@ func goSessionHandlerAudit(root string) (int, []string, error) {
 				continue
 			}
 			name := text[match[2]:match[3]]
+			if _, ok := intentional[name]; ok {
+				continue
+			}
 			line := 1 + strings.Count(text[:match[0]], "\n")
 			trivial = append(trivial, fmt.Sprintf("%s (%s:%d)", name, filepath.Base(path), line))
 		}

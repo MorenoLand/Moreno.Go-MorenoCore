@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -11,6 +13,26 @@ func TestDifference(t *testing.T) {
 	diff := difference(left, right)
 	if len(diff) != 2 || diff[0] != "alpha" || diff[1] != "charlie" {
 		t.Fatalf("unexpected diff: %+v", diff)
+	}
+}
+
+func TestSessionHandlerAuditExcludesReferenceNoOps(t *testing.T) {
+	root := t.TempDir()
+	source := `package world
+type session struct{}
+func (s *session) handleKeepAlive() bool { return true }
+func (s *session) handlePlayerLogout() bool { return true }
+func (s *session) handleMissingBehavior() bool { return true }
+`
+	if err := os.WriteFile(filepath.Join(root, "audit.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	total, trivial, err := goSessionHandlerAudit(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || len(trivial) != 1 || !strings.Contains(trivial[0], "handleMissingBehavior") {
+		t.Fatalf("total=%d trivial=%v", total, trivial)
 	}
 }
 
