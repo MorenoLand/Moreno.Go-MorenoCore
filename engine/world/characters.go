@@ -477,7 +477,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if s.player.ChosenTitle > 0 {
 		s.updateAchievementCriteria(criteriaTypeOwnRank, s.player.ChosenTitle, 1)
 	}
+	s.debug("world login stage", "stage", "equipment-set-list-start", "guid", guid)
 	s.sendEquipmentSetList(ctx)
+	s.debug("world login stage", "stage", "equipment-set-list-complete", "guid", guid)
 	// Persist cinematic state before spawning into world (TC: CharacterHandler.cpp)
 	// The actual SMSG_TRIGGER_CINEMATIC is sent after SMSG_UPDATE_OBJECT (player spawn)
 	// so the client world is loaded when the cinematic begins.
@@ -496,12 +498,16 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
 		return false
 	}
+	s.debug("world login stage", "stage", "character-online-complete", "guid", guid)
 	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", s.accountID); err != nil {
 		return false
 	}
+	s.debug("world login stage", "stage", "account-online-complete", "guid", guid)
 	s.lastFallZ = state.Z
 	s.lastFallTime = 0
+	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
+	s.debug("world login stage", "stage", "player-login-hooks-complete", "guid", guid)
 	timePacket := buildLoginSetTimeSpeed(time.Now())
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), timePacket, true); err != nil {
 		return false
