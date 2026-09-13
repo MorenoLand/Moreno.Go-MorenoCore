@@ -29,6 +29,8 @@ type adtInfo struct {
 	MH2OHeaders      int
 	LiquidLayers     int
 	LiquidAttributes int
+	LiquidInstances  int
+	LiquidTiles      int
 }
 
 func parseADT(data []byte) (adtInfo, error) {
@@ -99,6 +101,30 @@ func parseMH2O(chunk []byte, info *adtInfo) error {
 		info.LiquidLayers += int(layers)
 		if offsetInstances == 0 || uint64(offsetInstances) >= uint64(len(chunk)) {
 			return fmt.Errorf("invalid ADT MH2O instance offset %d", offsetInstances)
+		}
+		instancesEnd := uint64(offsetInstances) + uint64(layers)*24
+		if instancesEnd > uint64(len(chunk)) {
+			return fmt.Errorf("truncated ADT MH2O instances at offset %d", offsetInstances)
+		}
+		for layer := uint32(0); layer < layers; layer++ {
+			base := int(offsetInstances + layer*24)
+			width, height := chunk[base+14], chunk[base+15]
+			if width == 0 || height == 0 || width > 8 || height > 8 {
+				return fmt.Errorf("invalid ADT MH2O liquid dimensions %d x %d", width, height)
+			}
+			info.LiquidInstances++
+			info.LiquidTiles += int(width) * int(height)
+			existsOffset := binary.LittleEndian.Uint32(chunk[base+16:])
+			if existsOffset != 0 {
+				bitmapBytes := (uint32(width)*uint32(height) + 7) / 8
+				if uint64(existsOffset)+uint64(bitmapBytes) > uint64(len(chunk)) {
+					return fmt.Errorf("invalid ADT MH2O exists bitmap offset %d", existsOffset)
+				}
+			}
+			vertexOffset := binary.LittleEndian.Uint32(chunk[base+20:])
+			if vertexOffset != 0 && uint64(vertexOffset) >= uint64(len(chunk)) {
+				return fmt.Errorf("invalid ADT MH2O vertex offset %d", vertexOffset)
+			}
 		}
 		if offsetAttributes != 0 {
 			if uint64(offsetAttributes)+16 > uint64(len(chunk)) {
