@@ -199,7 +199,9 @@ func (s *session) handleGMReportLag(ctx context.Context, payload []byte) bool {
 
 // handleGmTicketSystemToggle processes CMSG_GMTICKETSYSTEM_TOGGLE (0x29A).
 func (s *session) handleGmTicketSystemToggle(ctx context.Context, payload []byte) bool {
-	return true
+	buf := protocol.NewBuffer(4)
+	buf.WriteU32(gmTicketQueueStatusEnabled)
+	return s.write(uint16(protocol.OpcodeSMSG_GMTICKET_SYSTEMSTATUS), buf.Bytes(), true) == nil
 }
 
 // handleBug processes CMSG_BUG (0x1CA).

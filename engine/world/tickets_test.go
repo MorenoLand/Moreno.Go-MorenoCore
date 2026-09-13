@@ -42,6 +42,34 @@ func TestGMTicketSystemStatus(t *testing.T) {
 	}
 }
 
+func TestGMTicketSystemToggleReturnsStatus(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{conn: serverConn, authed: true, playerLoaded: true, playerGUID: 1}
+	done := make(chan struct{})
+	go func() {
+		if !sess.handleGmTicketSystemToggle(context.Background(), nil) {
+			t.Error("handleGmTicketSystemToggle returned false")
+		}
+		close(done)
+	}()
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	opcode, data, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if opcode != uint16(protocol.OpcodeSMSG_GMTICKET_SYSTEMSTATUS) {
+		t.Fatalf("unexpected opcode %x", opcode)
+	}
+	r := protocol.NewReader(data)
+	status, err := r.ReadU32()
+	if err != nil || status != gmTicketQueueStatusEnabled {
+		t.Fatalf("status=%d err=%v", status, err)
+	}
+}
+
 func TestGMTicketGetTicket(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
