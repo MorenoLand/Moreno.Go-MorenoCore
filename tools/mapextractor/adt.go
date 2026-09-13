@@ -4,24 +4,28 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 )
 
 type adtInfo struct {
-	HasMHDR   bool
-	HasMCIN   bool
-	HasMTEX   bool
-	HasMMDX   bool
-	HasMMID   bool
-	HasMWMO   bool
-	HasMWID   bool
-	HasMDDF   bool
-	HasMODF   bool
-	MCNKCount int
-	MH2OCount int
-	MCLQCount int
-	MCVTCount int
-	MCLYCount int
-	MCALCount int
+	HasMHDR     bool
+	HasMCIN     bool
+	HasMTEX     bool
+	HasMMDX     bool
+	HasMMID     bool
+	HasMWMO     bool
+	HasMWID     bool
+	HasMDDF     bool
+	HasMODF     bool
+	MCNKCount   int
+	MH2OCount   int
+	MCLQCount   int
+	MCVTCount   int
+	MCLYCount   int
+	MCALCount   int
+	MCVTHeights int
+	HeightMin   float32
+	HeightMax   float32
 }
 
 func parseADT(data []byte) (adtInfo, error) {
@@ -60,7 +64,9 @@ func parseADT(data []byte) (adtInfo, error) {
 			info.MH2OCount++
 		case "MCNK":
 			info.MCNKCount++
-			countADTSubchunks(chunk, &info)
+			if err := countADTSubchunks(chunk, &info); err != nil {
+				return adtInfo{}, err
+			}
 		}
 		offset += size
 	}
@@ -70,21 +76,39 @@ func parseADT(data []byte) (adtInfo, error) {
 	return info, nil
 }
 
-func countADTSubchunks(chunk []byte, info *adtInfo) {
+func countADTSubchunks(chunk []byte, info *adtInfo) error {
 	const mcnkHeaderSize = 128
 	if len(chunk) <= mcnkHeaderSize {
-		return
+		return nil
 	}
 	for offset := mcnkHeaderSize; offset+8 <= len(chunk); {
 		name := string(chunk[offset : offset+4])
 		size := int(binary.LittleEndian.Uint32(chunk[offset+4 : offset+8]))
 		offset += 8
 		if size < 0 || size > len(chunk)-offset {
-			return
+			return fmt.Errorf("invalid ADT MCNK subchunk %q size %d", name, size)
 		}
 		switch name {
 		case "MCVT":
+			if size < 145*4 {
+				return fmt.Errorf("truncated ADT MCVT subchunk: got %d, want %d", size, 145*4)
+			}
 			info.MCVTCount++
+			previousHeights := info.MCVTHeights
+			info.MCVTHeights += size / 4
+			for index := 0; index < 145; index++ {
+				value := math.Float32frombits(binary.LittleEndian.Uint32(chunk[offset+index*4:]))
+				if previousHeights == 0 && index == 0 {
+					info.HeightMin, info.HeightMax = value, value
+				} else {
+					if value < info.HeightMin {
+						info.HeightMin = value
+					}
+					if value > info.HeightMax {
+						info.HeightMax = value
+					}
+				}
+			}
 		case "MCLY":
 			info.MCLYCount++
 		case "MCAL":
@@ -94,4 +118,5 @@ func countADTSubchunks(chunk []byte, info *adtInfo) {
 		}
 		offset += size
 	}
+	return nil
 }

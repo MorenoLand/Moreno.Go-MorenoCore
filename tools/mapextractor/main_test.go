@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -53,7 +54,12 @@ func TestParseWDTRejectsTruncatedMain(t *testing.T) {
 
 func TestParseADTChunkInventory(t *testing.T) {
 	mcnk := make([]byte, 128)
-	mcnk = append(mcnk, wdtChunk("MCVT", make([]byte, 4))...)
+	heights := make([]byte, 145*4)
+	for index := 0; index < 145; index++ {
+		binary.LittleEndian.PutUint32(heights[index*4:], math.Float32bits(10))
+	}
+	binary.LittleEndian.PutUint32(heights[len(heights)-4:], math.Float32bits(20))
+	mcnk = append(mcnk, wdtChunk("MCVT", heights)...)
 	mcnk = append(mcnk, wdtChunk("MCLY", make([]byte, 4))...)
 	mcnk = append(mcnk, wdtChunk("MCAL", make([]byte, 4))...)
 	data := append(wdtChunk("MHDR", make([]byte, 16)), wdtChunk("MCIN", make([]byte, 8))...)
@@ -64,7 +70,7 @@ func TestParseADTChunkInventory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MCNKCount != 1 || info.MCVTCount != 1 || info.MCLYCount != 1 || info.MCALCount != 1 {
+	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MCNKCount != 1 || info.MCVTCount != 1 || info.MCVTHeights != 145 || info.HeightMin != 10 || info.HeightMax != 20 || info.MCLYCount != 1 || info.MCALCount != 1 {
 		t.Fatalf("unexpected ADT info: %+v", info)
 	}
 }
