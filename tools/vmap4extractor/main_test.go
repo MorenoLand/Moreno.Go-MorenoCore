@@ -55,6 +55,32 @@ func TestWMOGroupNameDetection(t *testing.T) {
 	}
 }
 
+func TestM2ConversionWritesVMAPRawGeometry(t *testing.T) {
+	data := make([]byte, 240+6+36)
+	copy(data, []byte("MD20"))
+	binary.LittleEndian.PutUint32(data[216:], 3)
+	binary.LittleEndian.PutUint32(data[220:], 240)
+	binary.LittleEndian.PutUint32(data[224:], 3)
+	binary.LittleEndian.PutUint32(data[228:], 246)
+	for index, value := range []uint16{0, 1, 2} {
+		binary.LittleEndian.PutUint16(data[240+index*2:], value)
+	}
+	for index, value := range []float32{0, 0, 0, 1, 0, 0, 0, 1, 0} {
+		binary.LittleEndian.PutUint32(data[246+index*4:], mathFloat32Bits(value))
+	}
+	raw, err := extractM2(data)
+	if err != nil || len(raw) < 56 || string(raw[:8]) != "VMAP047\x00" || binary.LittleEndian.Uint32(raw[8:12]) != 3 {
+		t.Fatalf("raw len=%d err=%v header=%x", len(raw), err, raw[:minRaw(len(raw), 12)])
+	}
+}
+
+func minRaw(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func wmoTestChunk(name string, payload []byte) []byte {
 	result := make([]byte, 8+len(payload))
 	copy(result, name)

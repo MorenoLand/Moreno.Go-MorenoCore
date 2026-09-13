@@ -102,6 +102,9 @@ func main() {
 				data, err = extractWMO(arc, name, files)
 			} else {
 				data, err = arc.ReadFile(name)
+				if err == nil && (ext == ".m2" || ext == ".mdx") {
+					data, err = extractM2(data)
+				}
 			}
 			if err != nil {
 				if *verbose {
