@@ -53,6 +53,10 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		s.debug("gossip hello unknown", "account", s.accountName, "guid", guid)
 		return true
 	}
+	if !s.canInteractWithCreature(creature) {
+		s.debug("gossip hello out of interaction range", "account", s.accountName, "guid", guid)
+		return true
+	}
 	entry, ok := objectUint32Field(creature, "Entry")
 	if !ok {
 		return true
@@ -163,6 +167,10 @@ func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) 
 	}
 	creature := s.luaCreature(ctx, guid)
 	if creature == nil {
+		return true
+	}
+	if !s.canInteractWithCreature(creature) {
+		s.debug("gossip selection out of interaction range", "account", s.accountName, "guid", guid)
 		return true
 	}
 	entry, ok := objectUint32Field(creature, "Entry")
@@ -464,6 +472,23 @@ func (s *session) sendGossipMenu() error {
 	}
 	s.debug("gossip menu response", "account", s.accountName, "guid", s.gossip.SenderGUID, "menu", s.gossip.MenuID, "title", s.gossip.TitleID, "options", len(s.gossip.Items), "quests", len(s.gossip.Quests))
 	return s.write(uint16(protocol.OpcodeSMSG_GOSSIP_MESSAGE), buildGossipMessage(*s.gossip), true)
+}
+
+func (s *session) canInteractWithCreature(creature *scripting.Object) bool {
+	if s == nil || s.player == nil || creature == nil {
+		return false
+	}
+	mapID, mapOK := objectUint32Field(creature, "Map")
+	x, xOK := objectFloat32Field(creature, "X")
+	y, yOK := objectFloat32Field(creature, "Y")
+	z, zOK := objectFloat32Field(creature, "Z")
+	if mapOK && mapID != s.player.Map {
+		return false
+	}
+	if xOK && yOK && zOK && distance3D(s.player.X, s.player.Y, s.player.Z, x, y, z) > 5.0 {
+		return false
+	}
+	return true
 }
 
 func buildGossipMessage(menu gossipMenuState) []byte {
