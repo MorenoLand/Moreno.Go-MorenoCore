@@ -301,6 +301,18 @@ func decompress(data []byte, expected, flags uint32) ([]byte, error) {
 		reader, err = zlib.NewReader(bytes.NewReader(data[1:]))
 	case data[0]&0x10 != 0:
 		reader = io.NopCloser(bzip2.NewReader(bytes.NewReader(data[1:])))
+	case data[0]&0x40 != 0:
+		decoded, decodeErr := decompressWave(data[1:], expected, 1)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		return decoded, nil
+	case data[0]&0x80 != 0:
+		decoded, decodeErr := decompressWave(data[1:], expected, 2)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		return decoded, nil
 	default:
 		return nil, errors.New("unsupported MPQ compression method")
 	}
@@ -335,6 +347,121 @@ func decompressImplode(data []byte, expected uint32) ([]byte, error) {
 		return nil, fmt.Errorf("MPQ imploded size mismatch: got %d, want %d", len(output), expected)
 	}
 	return output, nil
+}
+
+var waveIndexAdjust = [...]int32{-1, 0, -1, 4, -1, 2, -1, 6, -1, 1, -1, 5, -1, 3, -1, 7, -1, 1, -1, 5, -1, 3, -1, 7, -1, 2, -1, 4, -1, 6, -1, 8}
+
+var waveStepTable = [...]int32{7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45, 50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371, 408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1165, 1282, 1411, 1552, 1707, 1878, 2066, 2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767}
+
+func decompressWave(data []byte, expected uint32, channels int) ([]byte, error) {
+	if channels < 1 || channels > 2 || len(data) < 2+channels*2 {
+		return nil, errors.New("invalid MPQ ADPCM stream")
+	}
+	result := make([]byte, 0, expected)
+	index := channels - 1
+	indices := [2]int32{0x2C, 0x2C}
+	samples := [2]int32{}
+	appendSample := func(value int32) {
+		if len(result)+2 > int(expected) {
+			return
+		}
+		result = append(result, byte(value), byte(value>>8))
+	}
+	position := 2
+	for channel := 0; channel < channels; channel++ {
+		samples[channel] = int32(int16(binary.LittleEndian.Uint16(data[position:])))
+		position += 2
+		appendSample(samples[channel])
+	}
+	shift := uint(data[1])
+	for position < len(data) && len(result) < int(expected) {
+		value := data[position]
+		position++
+		if channels == 2 {
+			if index == 0 {
+				index = 1
+			} else {
+				index = 0
+			}
+		}
+		if value&0x80 != 0 {
+			switch value & 0x7F {
+			case 0:
+				if indices[index] > 0 {
+					indices[index]--
+				}
+				appendSample(samples[index])
+			case 1:
+				indices[index] += 8
+				if indices[index] > 0x58 {
+					indices[index] = 0x58
+				}
+				if channels == 2 {
+					if index == 0 {
+						index = 1
+					} else {
+						index = 0
+					}
+				}
+			case 2:
+			default:
+				indices[index] -= 8
+				if indices[index] < 0 {
+					indices[index] = 0
+				}
+				if channels == 2 {
+					if index == 0 {
+						index = 1
+					} else {
+						index = 0
+					}
+				}
+			}
+			continue
+		}
+		step := waveStepTable[indices[index]]
+		delta := step >> shift
+		if value&0x01 != 0 {
+			delta += step
+		}
+		if value&0x02 != 0 {
+			delta += step >> 1
+		}
+		if value&0x04 != 0 {
+			delta += step >> 2
+		}
+		if value&0x08 != 0 {
+			delta += step >> 3
+		}
+		if value&0x10 != 0 {
+			delta += step >> 4
+		}
+		if value&0x20 != 0 {
+			delta += step >> 5
+		}
+		if value&0x40 != 0 {
+			samples[index] -= delta
+			if samples[index] < -32768 {
+				samples[index] = -32768
+			}
+		} else {
+			samples[index] += delta
+			if samples[index] > 32767 {
+				samples[index] = 32767
+			}
+		}
+		appendSample(samples[index])
+		indices[index] += waveIndexAdjust[value&0x1F]
+		if indices[index] < 0 {
+			indices[index] = 0
+		} else if indices[index] > 0x58 {
+			indices[index] = 0x58
+		}
+	}
+	if uint32(len(result)) != expected {
+		return nil, fmt.Errorf("MPQ ADPCM decompressed size mismatch: got %d, want %d", len(result), expected)
+	}
+	return result, nil
 }
 
 func normalize(name string) string {

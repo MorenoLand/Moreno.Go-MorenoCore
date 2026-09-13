@@ -43,6 +43,19 @@ func TestDecompressBzip2Sector(t *testing.T) {
 	}
 }
 
+func TestDecompressWaveADPCM(t *testing.T) {
+	mono := append([]byte{0x40}, 0, 0, 0, 0, 0)
+	decoded, err := decompress(mono, 4, fileCompress)
+	if err != nil || len(decoded) != 4 || decoded[0] != 0 || decoded[1] != 0 {
+		t.Fatalf("mono decoded=%x err=%v", decoded, err)
+	}
+	stereo := append([]byte{0x80}, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+	decoded, err = decompress(stereo, 8, fileCompress)
+	if err != nil || len(decoded) != 8 {
+		t.Fatalf("stereo decoded=%x err=%v", decoded, err)
+	}
+}
+
 func TestNormalize(t *testing.T) {
 	cases := []struct {
 		input    string
