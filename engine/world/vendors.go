@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -160,6 +161,9 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 				buyPrice = 0
 			}
 		}
+		if buyPrice > 0 {
+			buyPrice = int64(math.Floor(float64(buyPrice) * s.vendorReputationPriceDiscount(ctx, creatureEntry)))
+		}
 		itemSlot := uint32(slot)
 		if itemSlot == 0 {
 			itemSlot = fallbackSlot
@@ -265,6 +269,9 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	}
 	if extCost != 0 && flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) == 0 {
 		buyPrice = 0
+	}
+	if buyPrice > 0 {
+		buyPrice = int64(math.Floor(float64(buyPrice) * s.vendorReputationPriceDiscount(ctx, vendorEntry)))
 	}
 	if uint64(buyPrice) > uint64(^uint32(0))/uint64(count) {
 		return true
@@ -375,6 +382,25 @@ func (s *session) vendorReputationRank(ctx context.Context, factionID uint32) ui
 		return 0
 	}
 	return reputationRank(standing)
+}
+
+func (s *session) vendorReputationPriceDiscount(ctx context.Context, vendorEntry uint32) float64 {
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.Data == nil {
+		return 1
+	}
+	var faction int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT faction FROM creature_template WHERE entry = ?", vendorEntry).Scan(&faction); err != nil || faction <= 0 {
+		return 1
+	}
+	template, found, err := s.server.Data.FactionTemplate(uint32(faction))
+	if err != nil || !found || template.Faction == 0 {
+		return 1
+	}
+	rank := s.vendorReputationRank(ctx, template.Faction)
+	if rank <= 3 {
+		return 1
+	}
+	return 1 - 0.05*float64(rank-3)
 }
 
 func (s *session) vendorExtendedCost(ctx context.Context, id, count uint32) (wotlk.ItemExtendedCostEntry, uint8, bool) {
