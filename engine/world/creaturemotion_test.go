@@ -129,11 +129,28 @@ func TestCreatureReactStateMatchesReferenceDefaults(t *testing.T) {
 	if got := creatureReactState(7, 0, 0x80, ""); got != creatureReactPassive {
 		t.Fatalf("trigger react state=%d", got)
 	}
+	if got := creatureReactState(7, 0, 0x02, ""); got != creatureReactPassive {
+		t.Fatalf("civilian react state=%d", got)
+	}
 	if got := creatureReactState(7, 0, 0, "PassiveAI"); got != creatureReactPassive {
 		t.Fatalf("PassiveAI react state=%d", got)
 	}
 	if got := creatureReactState(7, 0, 0, ""); got != creatureReactAggressive {
 		t.Fatalf("ordinary react state=%d", got)
+	}
+}
+
+func TestFactionHostilityHonorsSavedTownReputation(t *testing.T) {
+	server := &Server{Data: wotlk.NewStore("../../data/dbc")}
+	player := playerPos{Race: 7, Class: 2, FactionTemplate: 115, Reputations: map[uint32]playerReputation{
+		21: {FactionID: 21, Standing: 1510},
+		47: {FactionID: 47, Standing: 3001},
+	}}
+	if server.isHostileFaction(121, player) {
+		t.Fatal("Booty Bay Bruiser was hostile at neutral saved Booty Bay reputation")
+	}
+	if server.isHostileFaction(57, player) {
+		t.Fatal("Ironforge guard was hostile at friendly saved Ironforge reputation")
 	}
 }
 

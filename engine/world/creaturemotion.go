@@ -115,7 +115,7 @@ const (
 )
 
 func creatureReactState(creatureType, npcFlags, flagsExtra uint32, aiName string) uint8 {
-	if creatureType == 8 || creatureType == 11 || flagsExtra&0x00000080 != 0 || npcFlags&0x0000C000 != 0 || aiName == "PassiveAI" || aiName == "NullCreatureAI" || aiName == "TriggerAI" {
+	if creatureType == 8 || creatureType == 11 || flagsExtra&(0x00000002|0x00000080) != 0 || npcFlags&0x0000C000 != 0 || aiName == "PassiveAI" || aiName == "NullCreatureAI" || aiName == "TriggerAI" {
 		return creatureReactPassive
 	}
 	return creatureReactAggressive
@@ -591,6 +591,9 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if len(motion.Spells) > 0 && dist >= spellMinDist && dist <= spellMaxDist && (motion.LastSpell.IsZero() || now.Sub(motion.LastSpell) >= 6*time.Second) {
 			spellID := motion.Spells[motion.NextSpellIdx%len(motion.Spells)]
 			motion.NextSpellIdx++
+			if target.Sess != nil {
+				target.Sess.debug("creature spell attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)
+			}
 			castID := uint8(1)
 			castTimeStamp := uint32(now.UnixMilli())
 			hitTargets := []uint64{target.GUID}
@@ -803,6 +806,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				}
 			}
 			asuPkt := protocol.BuildAttackerStateUpdate(motion.GUID, target.GUID, damage, overkill, hitInfo, targetState, blocked)
+			target.Sess.debug("creature melee attack", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "target_guid", target.GUID)
 			_ = target.Sess.write(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, true)
 			if s != nil {
 				s.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACKERSTATEUPDATE), asuPkt, target.Sess)
@@ -840,6 +844,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		}
 		aggroDist := float32(15.0)
 		if s.isHostileFaction(motion.Faction, p) && dist <= aggroDist {
+			s.debug("creature aggro", "creature_guid", motion.GUID, "creature_entry", motion.Entry, "faction", motion.Faction, "unit_flags", motion.UnitFlags, "flags_extra", motion.FlagsExtra, "player_guid", p.GUID, "player_zone", p.Sess.player.Zone)
 			motion.InCombat = true
 			if motion.ThreatMgr == nil {
 				motion.ThreatMgr = NewThreatManager(motion.GUID)
