@@ -353,6 +353,8 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("GetRealmID", r.getRealmID)
 	r.state.Register("GetCoreVersion", r.getCoreVersion)
 	r.state.Register("GetQuest", r.getQuest)
+	r.state.Register("GetGuildByName", r.getGuildByName)
+	r.state.Register("GetGuildByLeaderGUID", r.getGuildByLeaderGUID)
 	r.state.Register("GetPlayersInWorld", r.getPlayersInWorld)
 	r.state.Register("GetPlayerByGUID", r.getPlayerByGUID)
 	r.state.Register("GetPlayerByName", r.getPlayerByName)

@@ -359,3 +359,24 @@ func TestElunaQuestLookup(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestElunaGuildLookup(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE guild (guildid INTEGER PRIMARY KEY, name TEXT, leaderguid INTEGER); CREATE TABLE guild_member (guildid INTEGER, guid INTEGER); INSERT INTO guild VALUES (7, 'Moreno Land', 99); INSERT INTO guild_member VALUES (7, 99), (7, 100)"); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(Config{Enabled: true, CharacterDB: db})
+	if err := runtime.LoadString(`
+		guild = GetGuildByName("Moreno Land")
+		assert(guild:GetId() == 7 and guild:GetName() == "Moreno Land")
+		assert(GetGUIDLow(guild:GetLeaderGUID()) == 99 and guild:GetMemberCount() == 2)
+		assert(GetGuildByLeaderGUID(CreateUint64(99)):GetId() == 7)
+		assert(GetGuildByName("Missing") == nil)
+	`); err != nil {
+		t.Fatal(err)
+	}
+}

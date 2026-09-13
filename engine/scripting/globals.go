@@ -128,6 +128,37 @@ func (r *Runtime) getPlayerByGUID(state *lua.State) int {
 	return 1
 }
 
+func (r *Runtime) getGuildByName(state *lua.State) int {
+	return r.pushGuildLookup(state, "SELECT guildid, name, leaderguid FROM guild WHERE name = ? LIMIT 1", lua.CheckString(state, 1))
+}
+
+func (r *Runtime) getGuildByLeaderGUID(state *lua.State) int {
+	return r.pushGuildLookup(state, "SELECT guildid, name, leaderguid FROM guild WHERE leaderguid = ? LIMIT 1", checkLuaUint64(state, 1))
+}
+
+func (r *Runtime) pushGuildLookup(state *lua.State, statement string, arg any) int {
+	if r.config.CharacterDB == nil {
+		state.PushNil()
+		return 1
+	}
+	var guildID, leaderGUID int64
+	var name string
+	if err := r.config.CharacterDB.QueryRow(statement, arg).Scan(&guildID, &name, &leaderGUID); err != nil {
+		state.PushNil()
+		return 1
+	}
+	memberCount := int64(0)
+	_ = r.config.CharacterDB.QueryRow("SELECT COUNT(1) FROM guild_member WHERE guildid = ?", guildID).Scan(&memberCount)
+	methods := map[string]ObjectMethod{
+		"GetId":          func(context.Context, []any) ([]any, error) { return []any{uint32(guildID)}, nil },
+		"GetName":        func(context.Context, []any) ([]any, error) { return []any{name}, nil },
+		"GetLeaderGUID":  func(context.Context, []any) ([]any, error) { return []any{uint64(leaderGUID)}, nil },
+		"GetMemberCount": func(context.Context, []any) ([]any, error) { return []any{uint32(memberCount)}, nil },
+	}
+	PushObject(state, &Object{Type: "Guild", Fields: map[string]any{"ID": uint32(guildID), "Name": name, "LeaderGUID": uint64(leaderGUID), "MemberCount": uint32(memberCount)}, Methods: methods})
+	return 1
+}
+
 func (r *Runtime) getPlayerCount(state *lua.State) int {
 	count := 0
 	if r.config.PlayerProvider != nil {
