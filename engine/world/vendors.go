@@ -332,6 +332,9 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {
 		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ?, arenaPoints = ?, totalHonorPoints = ? WHERE guid = ?", s.player.Money, s.player.ArenaPoints, s.player.TotalHonorPoints, s.playerGUID)
+		if extendedCost.ID != 0 && uint32(amount) == 1 {
+			s.recordVendorRefund(ctx, cdb, res.ItemGUID, itemEntry, totalCost, uint32(extCost))
+		}
 	}
 	newCount := uint32(remainingStock)
 	if maxCount <= 0 {
@@ -342,6 +345,17 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	s.sendPlayerUpdate()
 	s.debug("item bought from vendor", "account", s.accountName, "item", itemEntry, "count", count, "cost", totalCost, "extended_cost", extCost, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
 	return true
+}
+
+func (s *session) recordVendorRefund(ctx context.Context, cdb *sql.DB, itemGUID uint64, itemEntry, paidMoney, extendedCost uint32) {
+	if cdb == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	var flags, stackable int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(Flags, 0), COALESCE(stackable, 1) FROM item_template WHERE entry = ?", itemEntry).Scan(&flags, &stackable); err != nil || uint32(flags)&0x00001000 == 0 || stackable != 1 {
+		return
+	}
+	_, _ = cdb.ExecContext(ctx, "REPLACE INTO item_refund_instance (item_guid, player_guid, paidMoney, paidExtendedCost) VALUES (?, ?, ?, ?)", itemGUID, s.playerGUID, paidMoney, extendedCost)
 }
 
 func (s *session) vendorItemAccess(allowableClass, bonding, flagsExtra, requiredFaction, requiredRank uint32, ctx context.Context) (int, bool) {

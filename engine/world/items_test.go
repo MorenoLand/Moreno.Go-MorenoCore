@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -308,10 +309,12 @@ func TestItemRefundInfoAndRefund(t *testing.T) {
 	for _, stmt := range []string{
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER)",
+		"CREATE TABLE item_refund_instance (item_guid INTEGER, player_guid INTEGER, paidMoney INTEGER, paidExtendedCost INTEGER, PRIMARY KEY (item_guid, player_guid))",
 		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, BuyPrice INTEGER)",
 		"INSERT INTO item_template VALUES (5001, 2500)",
 		"INSERT INTO item_instance VALUES (600, 5001)",
 		"INSERT INTO character_inventory VALUES (1, 0, 23, 600)",
+		"INSERT INTO item_refund_instance VALUES (600, 1, 2500, 0)",
 	} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -415,6 +418,54 @@ func TestItemRefundInfoAndRefund(t *testing.T) {
 	bres, _ := br.ReadU32()
 	if bguid != 999 || bres != 10 {
 		t.Fatalf("expected error result 10, got %d for guid %d", bres, bguid)
+	}
+}
+
+func TestExtendedCostRefundRestoresCurrenciesAndTurnIns(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, stmt := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, arenaPoints INTEGER, totalHonorPoints INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"CREATE TABLE item_refund_instance (item_guid INTEGER, player_guid INTEGER, paidMoney INTEGER, paidExtendedCost INTEGER, PRIMARY KEY (item_guid, player_guid))",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, BuyPrice INTEGER, MaxDurability INTEGER, stackable INTEGER, ContainerSlots INTEGER)",
+		"INSERT INTO characters VALUES (1, 100, 0, 0, '')",
+		"INSERT INTO item_template VALUES (5001, 75, 100, 1, 0)",
+		"INSERT INTO item_template VALUES (6001, 1, 100, 20, 0)",
+		"INSERT INTO item_instance VALUES (600, 5001, 1, 0, 1, 0, '', 0, '', 0, 100, 0, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 600)",
+		"INSERT INTO item_refund_instance VALUES (600, 1, 25, 7)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dbcDir := t.TempDir()
+	writeVendorExtendedCostDBC(t, dbcDir)
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	sess := &session{server: &Server{CharactersStore: store, WorldStore: store, Data: wotlk.NewStore(dbcDir)}, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Money: 100, ArenaPoints: 0, TotalHonorPoints: 0}}
+	if sess.handleItemRefund(context.Background(), protocol.NewBuffer(8).Bytes()) {
+		t.Fatal("empty refund payload should be rejected")
+	}
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(600)
+	if !sess.handleItemRefund(context.Background(), payload.Bytes()) {
+		t.Fatal("extended-cost refund failed")
+	}
+	if sess.player.Money != 125 || sess.player.ArenaPoints != 5 || sess.player.TotalHonorPoints != 10 {
+		t.Fatalf("balances money=%d arena=%d honor=%d", sess.player.Money, sess.player.ArenaPoints, sess.player.TotalHonorPoints)
+	}
+	var remainingProduct, turnInCount, refundCount int
+	_ = db.QueryRow("SELECT COUNT(1) FROM item_instance WHERE guid = 600").Scan(&remainingProduct)
+	_ = db.QueryRow("SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = 1 AND ii.itemEntry = 6001").Scan(&turnInCount)
+	_ = db.QueryRow("SELECT COUNT(1) FROM item_refund_instance WHERE item_guid = 600").Scan(&refundCount)
+	if remainingProduct != 0 || turnInCount != 2 || refundCount != 0 {
+		t.Fatalf("refund persistence product=%d turnins=%d records=%d", remainingProduct, turnInCount, refundCount)
 	}
 }
 

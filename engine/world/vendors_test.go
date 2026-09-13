@@ -158,11 +158,12 @@ func TestVendorExtendedCostPurchase(t *testing.T) {
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, arenaPoints INTEGER, totalHonorPoints INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
-		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER, AllowableClass INTEGER, Bonding INTEGER, RequiredReputationFaction INTEGER, RequiredReputationRank INTEGER, stackable INTEGER, ContainerSlots INTEGER)",
+		"CREATE TABLE item_refund_instance (item_guid INTEGER, player_guid INTEGER, paidMoney INTEGER, paidExtendedCost INTEGER, PRIMARY KEY (item_guid, player_guid))",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, Flags INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER, AllowableClass INTEGER, Bonding INTEGER, RequiredReputationFaction INTEGER, RequiredReputationRank INTEGER, stackable INTEGER, ContainerSlots INTEGER)",
 		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
 		"INSERT INTO characters VALUES (1, 1000, 20, 30, '')",
-		"INSERT INTO item_template VALUES (5001, 100, 75, 10, 100, 1, 0, -1, 0, 0, 0, 1, 0)",
-		"INSERT INTO item_template VALUES (6001, 101, 1, 1, 100, 1, 0, -1, 0, 0, 0, 20, 0)",
+		"INSERT INTO item_template VALUES (5001, 100, 4096, 75, 10, 100, 1, 0, -1, 0, 0, 0, 1, 0)",
+		"INSERT INTO item_template VALUES (6001, 101, 0, 1, 1, 100, 1, 0, -1, 0, 0, 0, 20, 0)",
 		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 7)",
 		"INSERT INTO item_instance VALUES (700, 6001, 1, 0, 4, 0, '', 0, '', 0, 100, 0, '')",
 		"INSERT INTO character_inventory VALUES (1, 0, 23, 700)",
@@ -188,6 +189,10 @@ func TestVendorExtendedCostPurchase(t *testing.T) {
 	var productCount int
 	if err := db.QueryRow("SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = 1 AND ii.itemEntry = 5001").Scan(&productCount); err != nil || productCount != 1 {
 		t.Fatalf("product count=%d err=%v", productCount, err)
+	}
+	var paidMoney, paidCost int
+	if err := db.QueryRow("SELECT paidMoney, paidExtendedCost FROM item_refund_instance WHERE player_guid = 1").Scan(&paidMoney, &paidCost); err != nil || paidMoney != 0 || paidCost != 7 {
+		t.Fatalf("refund record money=%d cost=%d err=%v", paidMoney, paidCost, err)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -892,28 +893,36 @@ func (s *session) handleItemRefundInfo(ctx context.Context, payload []byte) bool
 		return true
 	}
 
-	var itemEntry int64
-	err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT itemEntry FROM item_instance WHERE guid = ? LIMIT 1", itemGUID).Scan(&itemEntry)
+	var itemEntry, paidMoney, paidExtendedCost int64
+	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry, iri.paidMoney, iri.paidExtendedCost
+		FROM item_instance AS ii JOIN item_refund_instance AS iri ON iri.item_guid = ii.guid AND iri.player_guid = ?
+		WHERE ii.guid = ? LIMIT 1`, s.playerGUID, itemGUID).Scan(&itemEntry, &paidMoney, &paidExtendedCost)
 	if err != nil || itemEntry == 0 {
 		return true
 	}
-
-	var buyPrice uint32
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT BuyPrice FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&buyPrice)
+	extendedCost := wotlk.ItemExtendedCostEntry{}
+	if paidExtendedCost != 0 {
+		if s.server.Data == nil {
+			return true
+		}
+		var found bool
+		extendedCost, found, err = s.server.Data.ItemExtendedCost(uint32(paidExtendedCost))
+		if err != nil || !found {
+			return true
+		}
 	}
 
 	buf := protocol.NewBuffer(64)
 	buf.WriteU64(rawItemGUID)
-	buf.WriteU32(buyPrice) // money cost
-	buf.WriteU32(0)        // honor points
-	buf.WriteU32(0)        // arena points
-	for i := 0; i < 5; i++ {
-		buf.WriteU32(0) // item requirement id
-		buf.WriteU32(0) // item requirement count
+	buf.WriteU32(uint32(paidMoney))
+	buf.WriteU32(extendedCost.HonorPoints)
+	buf.WriteU32(extendedCost.ArenaPoints)
+	for i := 0; i < len(extendedCost.ItemIDs); i++ {
+		buf.WriteU32(extendedCost.ItemIDs[i])
+		buf.WriteU32(extendedCost.ItemCounts[i])
 	}
-	buf.WriteU32(0)    // unk
-	buf.WriteU32(7200) // remaining seconds (2 hours)
+	buf.WriteU32(0)
+	buf.WriteU32(7200)
 	return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_INFO_RESPONSE), buf.Bytes(), true) == nil
 }
 
@@ -933,32 +942,61 @@ func (s *session) handleItemRefund(ctx context.Context, payload []byte) bool {
 		return true
 	}
 
-	var itemEntry int64
-	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry FROM item_instance AS ii
+	var itemEntry, paidMoney, paidExtendedCost int64
+	err = s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT ii.itemEntry, iri.paidMoney, iri.paidExtendedCost FROM item_instance AS ii
 		JOIN character_inventory AS ci ON ci.item = ii.guid
-		WHERE ii.guid = ? AND ci.guid = ? LIMIT 1`, itemGUID, s.playerGUID).Scan(&itemEntry)
+		JOIN item_refund_instance AS iri ON iri.item_guid = ii.guid AND iri.player_guid = ci.guid
+		WHERE ii.guid = ? AND ci.guid = ? LIMIT 1`, itemGUID, s.playerGUID).Scan(&itemEntry, &paidMoney, &paidExtendedCost)
 
-	buf := protocol.NewBuffer(16)
+	buf := protocol.NewBuffer(64)
 	buf.WriteU64(rawItemGUID)
 	if err != nil || itemEntry == 0 {
 		buf.WriteU32(10) // error (expired or not refundable)
 		return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
 	}
-
-	var buyPrice uint32
-	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
-		_ = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT BuyPrice FROM item_template WHERE entry = ? LIMIT 1", itemEntry).Scan(&buyPrice)
+	extendedCost := wotlk.ItemExtendedCostEntry{}
+	if paidExtendedCost != 0 {
+		if s.server.Data == nil {
+			buf.WriteU32(10)
+			return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
+		}
+		var found bool
+		extendedCost, found, err = s.server.Data.ItemExtendedCost(uint32(paidExtendedCost))
+		if err != nil || !found {
+			buf.WriteU32(10)
+			return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
+		}
+	}
+	for i := 0; i < len(extendedCost.ItemIDs); i++ {
+		if extendedCost.ItemIDs[i] == 0 || extendedCost.ItemCounts[i] == 0 {
+			continue
+		}
+		if _, err := s.storeOrStackItem(ctx, s.playerGUID, extendedCost.ItemIDs[i], extendedCost.ItemCounts[i]); err != nil {
+			buf.WriteU32(10)
+			return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
+		}
 	}
 
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_inventory WHERE item = ? AND guid = ?", itemGUID, s.playerGUID)
 	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", itemGUID)
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM item_refund_instance WHERE item_guid = ? AND player_guid = ?", itemGUID, s.playerGUID)
 
-	if buyPrice > 0 {
-		s.player.Money += buyPrice
-		s.sendPlayerUpdate()
+	s.player.Money += uint32(paidMoney)
+	s.player.TotalHonorPoints += extendedCost.HonorPoints
+	s.player.ArenaPoints += extendedCost.ArenaPoints
+	if cdb := s.server.CharactersStore.DB; cdb != nil {
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ?, arenaPoints = ?, totalHonorPoints = ? WHERE guid = ?", s.player.Money, s.player.ArenaPoints, s.player.TotalHonorPoints, s.playerGUID)
 	}
-
-	buf.WriteU32(0) // success
+	_ = s.sendInventoryItems(ctx)
+	s.sendPlayerUpdate()
+	buf.WriteU32(0)
+	buf.WriteU32(uint32(paidMoney))
+	buf.WriteU32(extendedCost.HonorPoints)
+	buf.WriteU32(extendedCost.ArenaPoints)
+	for i := 0; i < len(extendedCost.ItemIDs); i++ {
+		buf.WriteU32(extendedCost.ItemIDs[i])
+		buf.WriteU32(extendedCost.ItemCounts[i])
+	}
 	return s.write(uint16(protocol.OpcodeSMSG_ITEM_REFUND_RESULT), buf.Bytes(), true) == nil
 }
 
