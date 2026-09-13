@@ -63,6 +63,19 @@ func TestLuaTimerAcceptsDelayRange(t *testing.T) {
 	}
 }
 
+func TestRemoveEventsCancelsGlobalLuaTimers(t *testing.T) {
+	runtime := NewRuntime(Config{Enabled: true})
+	if err := runtime.LoadString(`count = 0; CreateLuaEvent(function() count = count + 1 end, 10, 0); RemoveEvents()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Tick(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadString(`assert(count == 0)`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFileChunkEnvironment(t *testing.T) {
 	runtime := NewRuntime(Config{Enabled: true})
 	runtime.mu.Lock()

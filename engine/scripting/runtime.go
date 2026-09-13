@@ -280,6 +280,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("GetPlayerByName", r.getPlayerByName)
 	r.state.Register("CreateLuaEvent", r.createLuaEvent)
 	r.state.Register("RemoveEventById", r.removeEvent)
+	r.state.Register("RemoveEvents", r.removeEvents)
 	r.state.Register("CharDBQuery", r.charDBQuery)
 	r.state.Register("WorldDBQuery", r.worldDBQuery)
 	r.state.Register("AuthDBQuery", r.authDBQuery)
@@ -441,6 +442,11 @@ func (r *Runtime) removeEvent(state *lua.State) int {
 			break
 		}
 	}
+	return 0
+}
+
+func (r *Runtime) removeEvents(state *lua.State) int {
+	r.timers = nil
 	return 0
 }
 
