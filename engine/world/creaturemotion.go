@@ -530,7 +530,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 		}
 		// If target left map, logged out, dead, or turned on GM mode: drop threat
-		if target == nil || target.IsDead || target.IsGM {
+		if target == nil || target.IsDead || target.IsGM || target.Sess == nil || target.Sess.player == nil || target.Sess.isDeadOrGhost() {
 			if motion.ThreatMgr != nil {
 				motion.ThreatMgr.RemoveThreat(motion.TargetGUID)
 			}
@@ -609,6 +609,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health
 					target.Sess.player.Health = 0
+					target.IsDead = true
 					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
 					target.Sess.killPlayer(ctx)
 					if motion.BossAI != nil {
@@ -782,6 +783,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if damage >= target.Sess.player.Health {
 					overkill = damage - target.Sess.player.Health
 					target.Sess.player.Health = 0
+					target.IsDead = true
 					target.Sess.updateAchievementCriteria(criteriaTypeKilledByCreature, uint32((motion.GUID>>24)&0xFFFFFF), 1)
 					target.Sess.killPlayer(ctx)
 					if motion.BossAI != nil {

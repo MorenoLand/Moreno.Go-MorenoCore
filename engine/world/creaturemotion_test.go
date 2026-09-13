@@ -152,6 +152,24 @@ func TestDeadGhostIsNotTargetedAndPassiveCreaturesDoNotAggro(t *testing.T) {
 	}
 }
 
+func TestCreatureDoesNotDamageDeadSessionFromStalePlayerSnapshot(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Map: 0, Health: 0, MaxHealth: 100}}
+	server := &Server{sessions: map[*session]struct{}{sess: {}}, creatureMotion: make(map[uint64]*creatureMotion)}
+	motion := &creatureMotion{GUID: creatureWorldGUID(102, 68), Entry: 68, Map: 0, X: 0, Y: 0, Z: 0, Health: 100, MaxHealth: 100, InCombat: true, TargetGUID: 1, AttackTime: 1000, MinDamage: 100, MaxDamage: 100}
+	players := []playerPos{{Map: 0, GUID: 1, X: 0, Y: 0, Z: 0, IsDead: false, Sess: sess}}
+	drainServerFrames(t, clientConn)
+	server.stepCreatureMotion(context.Background(), motion, players, time.Now())
+	if sess.player.Health != 0 {
+		t.Fatalf("dead player health changed to %d", sess.player.Health)
+	}
+	if motion.InCombat || motion.TargetGUID != 0 {
+		t.Fatalf("dead player remained a combat target: inCombat=%v target=%d", motion.InCombat, motion.TargetGUID)
+	}
+}
+
 func sqrt64(v float64) float64 {
 	if v <= 0 {
 		return 0
