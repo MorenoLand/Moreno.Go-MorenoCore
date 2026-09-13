@@ -64,13 +64,17 @@ func TestParseADTChunkInventory(t *testing.T) {
 	mcnk = append(mcnk, wdtChunk("MCAL", make([]byte, 4))...)
 	data := append(wdtChunk("MHDR", make([]byte, 16)), wdtChunk("MCIN", make([]byte, 8))...)
 	data = append(data, wdtChunk("MTEX", []byte("texture.blp\x00"))...)
-	data = append(data, wdtChunk("MH2O", make([]byte, 8))...)
+	mh2o := make([]byte, 3072+16)
+	binary.LittleEndian.PutUint32(mh2o[0:], 3072)
+	binary.LittleEndian.PutUint32(mh2o[4:], 1)
+	binary.LittleEndian.PutUint32(mh2o[8:], 3072)
+	data = append(data, wdtChunk("MH2O", mh2o)...)
 	data = append(data, wdtChunk("MCNK", mcnk)...)
 	info, err := parseADT(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MCNKCount != 1 || info.MCVTCount != 1 || info.MCVTHeights != 145 || info.HeightMin != 10 || info.HeightMax != 20 || info.MCLYCount != 1 || info.MCALCount != 1 {
+	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MH2OHeaders != 256 || info.LiquidLayers != 1 || info.LiquidAttributes != 1 || info.MCNKCount != 1 || info.MCVTCount != 1 || info.MCVTHeights != 145 || info.HeightMin != 10 || info.HeightMax != 20 || info.MCLYCount != 1 || info.MCALCount != 1 {
 		t.Fatalf("unexpected ADT info: %+v", info)
 	}
 }

@@ -8,24 +8,27 @@ import (
 )
 
 type adtInfo struct {
-	HasMHDR     bool
-	HasMCIN     bool
-	HasMTEX     bool
-	HasMMDX     bool
-	HasMMID     bool
-	HasMWMO     bool
-	HasMWID     bool
-	HasMDDF     bool
-	HasMODF     bool
-	MCNKCount   int
-	MH2OCount   int
-	MCLQCount   int
-	MCVTCount   int
-	MCLYCount   int
-	MCALCount   int
-	MCVTHeights int
-	HeightMin   float32
-	HeightMax   float32
+	HasMHDR          bool
+	HasMCIN          bool
+	HasMTEX          bool
+	HasMMDX          bool
+	HasMMID          bool
+	HasMWMO          bool
+	HasMWID          bool
+	HasMDDF          bool
+	HasMODF          bool
+	MCNKCount        int
+	MH2OCount        int
+	MCLQCount        int
+	MCVTCount        int
+	MCLYCount        int
+	MCALCount        int
+	MCVTHeights      int
+	HeightMin        float32
+	HeightMax        float32
+	MH2OHeaders      int
+	LiquidLayers     int
+	LiquidAttributes int
 }
 
 func parseADT(data []byte) (adtInfo, error) {
@@ -62,6 +65,9 @@ func parseADT(data []byte) (adtInfo, error) {
 			info.HasMODF = true
 		case "MH2O":
 			info.MH2OCount++
+			if err := parseMH2O(chunk, &info); err != nil {
+				return adtInfo{}, err
+			}
 		case "MCNK":
 			info.MCNKCount++
 			if err := countADTSubchunks(chunk, &info); err != nil {
@@ -74,6 +80,34 @@ func parseADT(data []byte) (adtInfo, error) {
 		return adtInfo{}, errors.New("ADT MCNK chunks not found")
 	}
 	return info, nil
+}
+
+func parseMH2O(chunk []byte, info *adtInfo) error {
+	const headerBytes = 256 * 12
+	if len(chunk) < headerBytes {
+		return fmt.Errorf("truncated ADT MH2O chunk: got %d, want at least %d", len(chunk), headerBytes)
+	}
+	info.MH2OHeaders = 256
+	for index := 0; index < 256; index++ {
+		base := index * 12
+		offsetInstances := binary.LittleEndian.Uint32(chunk[base:])
+		layers := binary.LittleEndian.Uint32(chunk[base+4:])
+		offsetAttributes := binary.LittleEndian.Uint32(chunk[base+8:])
+		if layers == 0 {
+			continue
+		}
+		info.LiquidLayers += int(layers)
+		if offsetInstances == 0 || uint64(offsetInstances) >= uint64(len(chunk)) {
+			return fmt.Errorf("invalid ADT MH2O instance offset %d", offsetInstances)
+		}
+		if offsetAttributes != 0 {
+			if uint64(offsetAttributes)+16 > uint64(len(chunk)) {
+				return fmt.Errorf("invalid ADT MH2O attribute offset %d", offsetAttributes)
+			}
+			info.LiquidAttributes++
+		}
+	}
+	return nil
 }
 
 func countADTSubchunks(chunk []byte, info *adtInfo) error {

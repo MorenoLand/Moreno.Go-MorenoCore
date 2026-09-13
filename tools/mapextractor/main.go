@@ -27,7 +27,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "ADT parse failed: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Parsed %s: mcnk=%d mh2o=%d mcvt=%d mcly=%d mcal=%d\n", filepath.Base(*adtFile), info.MCNKCount, info.MH2OCount, info.MCVTCount, info.MCLYCount, info.MCALCount)
+		fmt.Printf("Parsed %s: mcnk=%d mh2o=%d liquid_layers=%d mcvt=%d mcly=%d mcal=%d\n", filepath.Base(*adtFile), info.MCNKCount, info.MH2OCount, info.LiquidLayers, info.MCVTCount, info.MCLYCount, info.MCALCount)
 		if *input == "" && *wdtFile == "" {
 			return
 		}
