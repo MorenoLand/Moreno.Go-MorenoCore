@@ -2,6 +2,7 @@ package scripting
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -161,5 +162,71 @@ func TestElunaGlobalFunctions(t *testing.T) {
 	`
 	if err := runtime.LoadString(source); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestElunaRegistrationFamiliesShotsAndClear(t *testing.T) {
+	runtime := NewRuntime(Config{Enabled: true})
+	if err := runtime.LoadString(`
+		count = 0
+		RegisterPlayerEvent(90, function() count = count + 1 end, 1)
+		RegisterCreatureEvent(68, 4, function() count = count + 10 end)
+		RegisterCreatureGossipEvent(68, 1, function() count = count + 100 end)
+		RegisterUniqueCreatureEvent(GetUnitGUID(7, 68), 3, 2, function() count = count + 1000 end)
+		RegisterGameObjectEvent(9001, 14, function() count = count + 10000 end)
+		RegisterGameObjectGossipEvent(9001, 1, function() count = count + 100000 end)
+		RegisterItemEvent(6948, 2, function() count = count + 1000000 end)
+		RegisterItemGossipEvent(6948, 1, function() count = count + 10000000 end)
+		RegisterPacketEvent(0x123, 5, function() count = count + 100000000 end)
+		RegisterMapEvent(0, 17, function() count = count + 1000000000 end)
+		RegisterInstanceEvent(33, 17, function() count = count + 10000000000 end)
+		RegisterGuildEvent(1, function() count = count + 100000000000 end)
+		RegisterGroupEvent(1, function() count = count + 1000000000000 end)
+		RegisterBGEvent(1, function() count = count + 10000000000000 end)
+		RegisterServerEvent(31, function() count = count + 100000000000000 end)
+		cancel = RegisterPlayerEvent(91, function() count = count + 1000000000000000 end)
+		cancel()
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.Hooks()) != 15 {
+		t.Fatalf("hooks after cancel=%d", len(runtime.Hooks()))
+	}
+	if _, err := runtime.TriggerPlayerEvent(context.Background(), 90); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.TriggerPlayerEvent(context.Background(), 90); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadString(`assert(count == 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Trigger(context.Background(), "creature:68", 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Trigger(context.Background(), "creature_gossip:68", 1); err != nil {
+		t.Fatal(err)
+	}
+	uniqueKind := fmt.Sprintf("creature_unique:%d:3", uint64(0xF130)<<48|uint64(68)<<24|7)
+	if _, err := runtime.Trigger(context.Background(), uniqueKind, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadString(`assert(count == 1111)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadString(`ClearCreatureEvents(68, 4); ClearCreatureGossipEvents(68); ClearUniqueCreatureEvents(GetUnitGUID(7, 68), 3)`); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.Hooks()) != 11 {
+		t.Fatalf("hooks after targeted clear=%d", len(runtime.Hooks()))
+	}
+	if _, err := runtime.Trigger(context.Background(), "creature:68", 4); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadString(`assert(count == 1111); ClearServerEvents(31)`); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.Hooks()) != 10 {
+		t.Fatalf("hooks after server clear=%d", len(runtime.Hooks()))
 	}
 }

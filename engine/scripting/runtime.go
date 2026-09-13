@@ -57,7 +57,9 @@ type Runtime struct {
 	mu           sync.Mutex
 	state        *lua.State
 	nextRef      int
+	nextHook     int
 	hooks        []registeredHook
+	cancelled    map[int]struct{}
 	timers       []timer
 	loadedFiles  []string
 	loadFailures []error
@@ -65,7 +67,9 @@ type Runtime struct {
 
 type registeredHook struct {
 	Hook
-	ref int
+	id    int
+	ref   int
+	shots int
 }
 
 type timer struct {
@@ -79,7 +83,7 @@ type timer struct {
 }
 
 func NewRuntime(c Config) *Runtime {
-	return &Runtime{config: c, nextRef: 3}
+	return &Runtime{config: c, nextRef: 3, nextHook: 1, cancelled: make(map[int]struct{})}
 }
 
 func (r *Runtime) Load(ctx context.Context) error {
@@ -189,9 +193,23 @@ func (r *Runtime) Trigger(ctx context.Context, kind string, event int, args ...a
 		return nil, nil
 	}
 	result := make([]any, 0)
-	for _, hook := range r.hooks {
-		if hook.Kind != kind || hook.Event != event {
+	initial := append([]registeredHook(nil), r.hooks...)
+	initialIDs := make(map[int]struct{}, len(initial))
+	for _, hook := range initial {
+		initialIDs[hook.id] = struct{}{}
+	}
+	remaining := make([]registeredHook, 0, len(initial))
+	for _, hook := range initial {
+		if _, cancelled := r.cancelled[hook.id]; cancelled {
 			continue
+		}
+		if hook.Kind != kind || hook.Event != event {
+			remaining = append(remaining, hook)
+			continue
+		}
+		remove := hook.shots == 1
+		if hook.shots > 1 {
+			hook.shots--
 		}
 		r.state.SetTop(0)
 		r.state.RawGetInt(lua.RegistryIndex, hook.ref)
@@ -204,12 +222,31 @@ func (r *Runtime) Trigger(ctx context.Context, kind string, event int, args ...a
 			if r.config.Logger != nil {
 				r.config.Logger.Error("lua hook failed", "kind", kind, "event", event, "error", err)
 			}
+			if !remove {
+				if _, cancelled := r.cancelled[hook.id]; !cancelled {
+					remaining = append(remaining, hook)
+				}
+			}
 			continue
 		}
 		if r.state.Top() != 0 {
 			result = append(result, luaValue(r.state, -1))
 		}
+		if !remove {
+			if _, cancelled := r.cancelled[hook.id]; !cancelled {
+				remaining = append(remaining, hook)
+			}
+		}
 	}
+	for _, hook := range r.hooks {
+		if _, existed := initialIDs[hook.id]; existed {
+			continue
+		}
+		if _, cancelled := r.cancelled[hook.id]; !cancelled {
+			remaining = append(remaining, hook)
+		}
+	}
+	r.hooks = remaining
 	_ = ctx
 	return result, nil
 }
@@ -274,10 +311,38 @@ func (r *Runtime) initializeLocked() {
 		r.state.SetGlobal(name)
 	}
 	r.state.Register("RegisterPlayerEvent", r.registerPlayerEvent)
+	r.state.Register("RegisterGuildEvent", r.registerGuildEvent)
+	r.state.Register("RegisterGroupEvent", r.registerGroupEvent)
+	r.state.Register("RegisterCreatureEvent", r.registerCreatureEvent)
+	r.state.Register("RegisterUniqueCreatureEvent", r.registerUniqueCreatureEvent)
 	r.state.Register("RegisterCreatureGossipEvent", r.registerCreatureGossipEvent)
+	r.state.Register("RegisterGameObjectEvent", r.registerGameObjectEvent)
+	r.state.Register("RegisterGameObjectGossipEvent", r.registerGameObjectGossipEvent)
+	r.state.Register("RegisterItemEvent", r.registerItemEvent)
+	r.state.Register("RegisterItemGossipEvent", r.registerItemGossipEvent)
 	r.state.Register("RegisterPlayerGossipEvent", r.registerPlayerGossipEvent)
+	r.state.Register("RegisterBGEvent", r.registerBGEvent)
+	r.state.Register("RegisterPacketEvent", r.registerPacketEvent)
+	r.state.Register("RegisterMapEvent", r.registerMapEvent)
+	r.state.Register("RegisterInstanceEvent", r.registerInstanceEvent)
 	r.state.Register("RegisterServerEvent", r.registerServerEvent)
 	r.state.Register("RegisterGlobalEvent", r.registerServerEvent)
+	r.state.Register("ClearBattleGroundEvents", r.clearBattleGroundEvents)
+	r.state.Register("ClearCreatureEvents", r.clearCreatureEvents)
+	r.state.Register("ClearUniqueCreatureEvents", r.clearUniqueCreatureEvents)
+	r.state.Register("ClearCreatureGossipEvents", r.clearCreatureGossipEvents)
+	r.state.Register("ClearGameObjectEvents", r.clearGameObjectEvents)
+	r.state.Register("ClearGameObjectGossipEvents", r.clearGameObjectGossipEvents)
+	r.state.Register("ClearGroupEvents", r.clearGroupEvents)
+	r.state.Register("ClearGuildEvents", r.clearGuildEvents)
+	r.state.Register("ClearItemEvents", r.clearItemEvents)
+	r.state.Register("ClearItemGossipEvents", r.clearItemGossipEvents)
+	r.state.Register("ClearPacketEvents", r.clearPacketEvents)
+	r.state.Register("ClearPlayerEvents", r.clearPlayerEvents)
+	r.state.Register("ClearPlayerGossipEvents", r.clearPlayerGossipEvents)
+	r.state.Register("ClearServerEvents", r.clearServerEvents)
+	r.state.Register("ClearMapEvents", r.clearMapEvents)
+	r.state.Register("ClearInstanceEvents", r.clearInstanceEvents)
 	r.state.Register("GetCoreExpansion", r.getCoreExpansion)
 	r.state.Register("GetLuaEngine", r.getLuaEngine)
 	r.state.Register("GetCoreName", r.getCoreName)
@@ -400,41 +465,203 @@ func setPackagePath(state *lua.State, scriptPath string) {
 }
 
 func (r *Runtime) registerPlayerEvent(state *lua.State) int {
-	r.registerHook(state, "player", lua.CheckInteger(state, 1), 2)
-	return 0
+	return r.registerHook(state, "player", lua.CheckInteger(state, 1), 2, 3)
 }
 
 func (r *Runtime) registerServerEvent(state *lua.State) int {
-	r.registerHook(state, "server", lua.CheckInteger(state, 1), 2)
-	return 0
+	return r.registerHook(state, "server", lua.CheckInteger(state, 1), 2, 3)
 }
 
 func (r *Runtime) registerCreatureGossipEvent(state *lua.State) int {
-	npcID := lua.CheckInteger(state, 1)
-	event := lua.CheckInteger(state, 2)
-	if !state.IsFunction(3) {
-		lua.ArgumentError(state, 3, "function expected")
-	}
-	r.registerHook(state, "creature_gossip:"+strconv.Itoa(npcID), event, 3)
-	return 0
+	return r.registerEntryHook(state, "creature_gossip", 1, 2, 3, 4)
 }
 
 func (r *Runtime) registerPlayerGossipEvent(state *lua.State) int {
-	npcID := lua.CheckInteger(state, 1)
-	event := lua.CheckInteger(state, 2)
-	if !state.IsFunction(3) {
-		lua.ArgumentError(state, 3, "function expected")
-	}
-	r.registerHook(state, "player_gossip:"+strconv.Itoa(npcID), event, 3)
-	return 0
+	return r.registerEntryHook(state, "player_gossip", 1, 2, 3, 4)
 }
 
-func (r *Runtime) registerHook(state *lua.State, kind string, event, functionIndex int) {
+func (r *Runtime) registerGuildEvent(state *lua.State) int {
+	return r.registerHook(state, "guild", lua.CheckInteger(state, 1), 2, 3)
+}
+
+func (r *Runtime) registerGroupEvent(state *lua.State) int {
+	return r.registerHook(state, "group", lua.CheckInteger(state, 1), 2, 3)
+}
+
+func (r *Runtime) registerBGEvent(state *lua.State) int {
+	return r.registerHook(state, "bg", lua.CheckInteger(state, 1), 2, 3)
+}
+
+func (r *Runtime) registerCreatureEvent(state *lua.State) int {
+	return r.registerEntryHook(state, "creature", 1, 2, 3, 4)
+}
+
+func (r *Runtime) registerUniqueCreatureEvent(state *lua.State) int {
+	guid := checkLuaUint64(state, 1)
+	instanceID := lua.CheckUnsigned(state, 2)
+	event := lua.CheckInteger(state, 3)
+	return r.registerHook(state, "creature_unique:"+strconv.FormatUint(guid, 10)+":"+strconv.FormatUint(uint64(instanceID), 10), event, 4, 5)
+}
+
+func (r *Runtime) registerGameObjectEvent(state *lua.State) int {
+	return r.registerEntryHook(state, "gameobject", 1, 2, 3, 4)
+}
+
+func (r *Runtime) registerGameObjectGossipEvent(state *lua.State) int {
+	return r.registerEntryHook(state, "gameobject_gossip", 1, 2, 3, 4)
+}
+
+func (r *Runtime) registerItemEvent(state *lua.State) int {
+	return r.registerEntryHook(state, "item", 1, 2, 3, 4)
+}
+
+func (r *Runtime) registerItemGossipEvent(state *lua.State) int {
+	return r.registerEntryHook(state, "item_gossip", 1, 2, 3, 4)
+}
+
+func (r *Runtime) registerPacketEvent(state *lua.State) int {
+	return r.registerEntryHook(state, "packet", 1, 2, 3, 4)
+}
+
+func (r *Runtime) registerMapEvent(state *lua.State) int {
+	return r.registerEntryHook(state, "map", 1, 2, 3, 4)
+}
+
+func (r *Runtime) registerInstanceEvent(state *lua.State) int {
+	return r.registerEntryHook(state, "instance", 1, 2, 3, 4)
+}
+
+func (r *Runtime) registerEntryHook(state *lua.State, kind string, entryIndex, eventIndex, functionIndex, shotsIndex int) int {
+	entry := lua.CheckUnsigned(state, entryIndex)
+	event := lua.CheckInteger(state, eventIndex)
+	return r.registerHook(state, kind+":"+strconv.FormatUint(uint64(entry), 10), event, functionIndex, shotsIndex)
+}
+
+func (r *Runtime) registerHook(state *lua.State, kind string, event, functionIndex, shotsIndex int) int {
 	if !state.IsFunction(functionIndex) {
 		lua.ArgumentError(state, functionIndex, "function expected")
 	}
+	shots := 0
+	if state.Top() >= shotsIndex && !state.IsNil(shotsIndex) {
+		shots = lua.CheckInteger(state, shotsIndex)
+		if shots < 0 {
+			lua.ArgumentError(state, shotsIndex, "non-negative shots expected")
+		}
+	}
 	ref := r.storeFunction(state, functionIndex)
-	r.hooks = append(r.hooks, registeredHook{Hook: Hook{Kind: kind, Event: event}, ref: ref})
+	id := r.nextHook
+	r.nextHook++
+	r.hooks = append(r.hooks, registeredHook{Hook: Hook{Kind: kind, Event: event}, id: id, ref: ref, shots: shots})
+	state.PushGoFunction(func(_ *lua.State) int {
+		r.cancelHook(id)
+		return 0
+	})
+	return 1
+}
+
+func (r *Runtime) clearBattleGroundEvents(state *lua.State) int {
+	return r.clearGlobalEvents(state, "bg")
+}
+func (r *Runtime) clearGroupEvents(state *lua.State) int { return r.clearGlobalEvents(state, "group") }
+func (r *Runtime) clearGuildEvents(state *lua.State) int { return r.clearGlobalEvents(state, "guild") }
+func (r *Runtime) clearPlayerEvents(state *lua.State) int {
+	return r.clearGlobalEvents(state, "player")
+}
+func (r *Runtime) clearServerEvents(state *lua.State) int {
+	return r.clearGlobalEvents(state, "server")
+}
+
+func (r *Runtime) clearCreatureEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "creature")
+}
+
+func (r *Runtime) clearCreatureGossipEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "creature_gossip")
+}
+
+func (r *Runtime) clearGameObjectEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "gameobject")
+}
+
+func (r *Runtime) clearGameObjectGossipEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "gameobject_gossip")
+}
+
+func (r *Runtime) clearItemEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "item")
+}
+
+func (r *Runtime) clearItemGossipEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "item_gossip")
+}
+
+func (r *Runtime) clearPacketEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "packet")
+}
+
+func (r *Runtime) clearPlayerGossipEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "player_gossip")
+}
+
+func (r *Runtime) clearMapEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "map")
+}
+
+func (r *Runtime) clearInstanceEvents(state *lua.State) int {
+	return r.clearEntryEvents(state, "instance")
+}
+
+func (r *Runtime) clearUniqueCreatureEvents(state *lua.State) int {
+	guid := checkLuaUint64(state, 1)
+	instanceID := lua.CheckUnsigned(state, 2)
+	prefix := "creature_unique:" + strconv.FormatUint(guid, 10) + ":" + strconv.FormatUint(uint64(instanceID), 10)
+	event := optionalEvent(state, 3)
+	r.clearHooks(func(hook registeredHook) bool { return hook.Kind == prefix && (event < 0 || hook.Event == event) })
+	return 0
+}
+
+func (r *Runtime) clearGlobalEvents(state *lua.State, kind string) int {
+	event := optionalEvent(state, 1)
+	r.clearHooks(func(hook registeredHook) bool { return hook.Kind == kind && (event < 0 || hook.Event == event) })
+	return 0
+}
+
+func (r *Runtime) clearEntryEvents(state *lua.State, kind string) int {
+	entry := lua.CheckUnsigned(state, 1)
+	prefix := kind + ":" + strconv.FormatUint(uint64(entry), 10)
+	event := optionalEvent(state, 2)
+	r.clearHooks(func(hook registeredHook) bool { return hook.Kind == prefix && (event < 0 || hook.Event == event) })
+	return 0
+}
+
+func optionalEvent(state *lua.State, index int) int {
+	if state.Top() < index || state.IsNil(index) {
+		return -1
+	}
+	return lua.CheckInteger(state, index)
+}
+
+func (r *Runtime) clearHooks(predicate func(registeredHook) bool) {
+	remaining := r.hooks[:0]
+	for _, hook := range r.hooks {
+		if predicate(hook) {
+			r.cancelled[hook.id] = struct{}{}
+			continue
+		}
+		remaining = append(remaining, hook)
+	}
+	r.hooks = remaining
+}
+
+func (r *Runtime) cancelHook(id int) {
+	r.cancelled[id] = struct{}{}
+	remaining := r.hooks[:0]
+	for _, hook := range r.hooks {
+		if hook.id != id {
+			remaining = append(remaining, hook)
+		}
+	}
+	r.hooks = remaining
 }
 
 func (r *Runtime) storeFunction(state *lua.State, index int) int {
