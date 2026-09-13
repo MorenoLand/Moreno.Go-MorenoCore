@@ -319,6 +319,10 @@ func luaUint64(value any) (uint64, error) {
 	switch value := value.(type) {
 	case scripting.UInt64:
 		return uint64(value), nil
+	case scripting.Int64:
+		if value >= 0 {
+			return uint64(value), nil
+		}
 	case uint8:
 		return uint64(value), nil
 	case uint16:

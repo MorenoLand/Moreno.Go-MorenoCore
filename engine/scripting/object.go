@@ -298,6 +298,8 @@ func numericValue(value any) (float64, bool) {
 		return float64(value), true
 	case UInt64:
 		return float64(uint64(value)), true
+	case Int64:
+		return float64(int64(value)), true
 	case int:
 		return float64(value), true
 	case int8:

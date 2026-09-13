@@ -361,6 +361,8 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("GetGUIDEntry", r.getGUIDEntry)
 	r.state.Register("GetCurrTime", r.getCurrTime)
 	r.state.Register("GetTimeDiff", r.getTimeDiff)
+	r.state.Register("CreateInt64", r.createInt64)
+	r.state.Register("CreateUint64", r.createUint64)
 	r.state.Register("bit_and", luaBitAnd)
 	r.state.Register("bit_or", luaBitOr)
 	r.state.Register("bit_lshift", luaBitLShift)

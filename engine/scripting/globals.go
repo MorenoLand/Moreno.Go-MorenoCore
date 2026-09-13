@@ -29,8 +29,10 @@ const (
 )
 
 const uint64MetaTable = "MorenoCore.UInt64"
+const int64MetaTable = "MorenoCore.Int64"
 
 type UInt64 uint64
+type Int64 int64
 
 func (r *Runtime) getLuaEngine(state *lua.State) int {
 	state.PushString("ElunaEngine")
@@ -145,6 +147,40 @@ func (r *Runtime) getTimeDiff(state *lua.State) int {
 	return 1
 }
 
+func (r *Runtime) createInt64(state *lua.State) int {
+	value := int64(0)
+	if state.Top() > 0 && !state.IsNil(1) {
+		if state.IsString(1) {
+			parsed, err := strconv.ParseInt(lua.CheckString(state, 1), 10, 64)
+			if err != nil {
+				lua.ArgumentError(state, 1, "int64 value expected")
+			}
+			value = parsed
+		} else {
+			value = checkLuaInt64(state, 1)
+		}
+	}
+	pushInt64(state, value)
+	return 1
+}
+
+func (r *Runtime) createUint64(state *lua.State) int {
+	value := uint64(0)
+	if state.Top() > 0 && !state.IsNil(1) {
+		if state.IsString(1) {
+			parsed, err := strconv.ParseUint(lua.CheckString(state, 1), 10, 64)
+			if err != nil {
+				lua.ArgumentError(state, 1, "uint64 value expected")
+			}
+			value = parsed
+		} else {
+			value = checkLuaUint64(state, 1)
+		}
+	}
+	pushUInt64(state, value)
+	return 1
+}
+
 func (r *Runtime) printInfo(state *lua.State) int {
 	r.printLua(state, "info")
 	return 0
@@ -182,6 +218,20 @@ func installUInt64MetaTable(state *lua.State) {
 		{Name: "__sub", Function: uint64Sub},
 	}, 0)
 	state.Pop(1)
+	installInt64MetaTable(state)
+}
+
+func installInt64MetaTable(state *lua.State) {
+	lua.NewMetaTable(state, int64MetaTable)
+	lua.SetFunctions(state, []lua.RegistryFunction{
+		{Name: "__tostring", Function: int64String},
+		{Name: "__eq", Function: int64Equal},
+		{Name: "__lt", Function: int64Less},
+		{Name: "__le", Function: int64LessEqual},
+		{Name: "__add", Function: int64Add},
+		{Name: "__sub", Function: int64Sub},
+	}, 0)
+	state.Pop(1)
 }
 
 func pushUInt64(state *lua.State, value uint64) {
@@ -189,11 +239,32 @@ func pushUInt64(state *lua.State, value uint64) {
 	lua.SetMetaTableNamed(state, uint64MetaTable)
 }
 
+func pushInt64(state *lua.State, value int64) {
+	state.PushUserData(Int64(value))
+	lua.SetMetaTableNamed(state, int64MetaTable)
+}
+
 func checkLuaUint64(state *lua.State, index int) uint64 {
 	if value, ok := luaUint64Value(state, index); ok {
 		return value
 	}
 	lua.ArgumentError(state, index, "unsigned integer expected")
+	return 0
+}
+
+func checkLuaInt64(state *lua.State, index int) int64 {
+	if value := state.ToUserData(index); value != nil {
+		switch value := value.(type) {
+		case Int64:
+			return int64(value)
+		case *Int64:
+			return int64(*value)
+		}
+	}
+	if number, ok := state.ToNumber(index); ok && number >= math.MinInt64 && number <= math.MaxInt64 && number == math.Trunc(number) {
+		return int64(number)
+	}
+	lua.ArgumentError(state, index, "signed integer expected")
 	return 0
 }
 
@@ -244,6 +315,38 @@ func uint64Sub(state *lua.State) int {
 	return 1
 }
 
+func int64String(state *lua.State) int {
+	state.PushString(strconv.FormatInt(checkLuaInt64(state, 1), 10))
+	return 1
+}
+
+func int64Value(state *lua.State, index int) int64 { return checkLuaInt64(state, index) }
+
+func int64Equal(state *lua.State) int {
+	state.PushBoolean(int64Value(state, 1) == int64Value(state, 2))
+	return 1
+}
+
+func int64Less(state *lua.State) int {
+	state.PushBoolean(int64Value(state, 1) < int64Value(state, 2))
+	return 1
+}
+
+func int64LessEqual(state *lua.State) int {
+	state.PushBoolean(int64Value(state, 1) <= int64Value(state, 2))
+	return 1
+}
+
+func int64Add(state *lua.State) int {
+	pushInt64(state, int64Value(state, 1)+int64Value(state, 2))
+	return 1
+}
+
+func int64Sub(state *lua.State) int {
+	pushInt64(state, int64Value(state, 1)-int64Value(state, 2))
+	return 1
+}
+
 func luaBitAnd(state *lua.State) int {
 	state.PushUnsigned(uint(lua.CheckUnsigned(state, 1) & lua.CheckUnsigned(state, 2)))
 	return 1
@@ -280,6 +383,10 @@ func objectUint64(object *Object, field string) (uint64, bool) {
 	switch value := value.(type) {
 	case UInt64:
 		return uint64(value), true
+	case Int64:
+		if value >= 0 {
+			return uint64(value), true
+		}
 	case uint64:
 		return value, true
 	case uint32:

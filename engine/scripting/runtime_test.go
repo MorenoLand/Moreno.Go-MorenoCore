@@ -262,3 +262,18 @@ func TestElunaGenericObjectMethods(t *testing.T) {
 		t.Fatalf("values=%v err=%v logs=%s", values, err, logs.String())
 	}
 }
+
+func TestElunaInt64Constructors(t *testing.T) {
+	runtime := NewRuntime(Config{Enabled: true})
+	if err := runtime.LoadString(`
+		signed = CreateInt64("-9223372036854775808")
+		assert(tostring(signed) == "-9223372036854775808")
+		assert(tostring(signed + CreateInt64(2)) == "-9223372036854775806")
+		unsigned = CreateUint64("18446744073709551615")
+		assert(tostring(unsigned) == "18446744073709551615")
+		assert(tostring(unsigned + CreateUint64(1)) == "0")
+		assert(CreateUint64("7") == CreateUint64(7))
+	`); err != nil {
+		t.Fatal(err)
+	}
+}
