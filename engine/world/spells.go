@@ -34,6 +34,10 @@ const (
 
 	itemSubclassArmorBuckler = 5
 	itemSubclassArmorShield  = 6
+
+	spellEffectEnergize      = 30
+	spellEffectTriggerSpell  = 64
+	spellEffectHealMaxHealth = 67
 )
 
 // isSelfCastOnly checks if all active spell effects target the caster unit.
@@ -661,6 +665,21 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					s.executeSpellHeal(effCtx, effectTarget, spellID, heal)
 				}
+			case spellEffectEnergize:
+				amount := eff.BasePoints + 1
+				for _, effectTarget := range hitTargets {
+					s.applySpellEnergize(effCtx, effectTarget, eff.MiscValue, amount)
+				}
+			case spellEffectTriggerSpell:
+				for _, effectTarget := range hitTargets {
+					if eff.TriggerSpell != 0 && eff.TriggerSpell != spellID {
+						s.castSpellDirect(effCtx, eff.TriggerSpell, effectTarget)
+					}
+				}
+			case spellEffectHealMaxHealth:
+				for _, effectTarget := range hitTargets {
+					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID)
+				}
 			case 6, 27, 35: // Apply Aura
 				durationMs := uint32(0)
 				if spell.DurationIndex > 0 && s.server != nil && s.server.Data != nil {
@@ -1171,18 +1190,89 @@ func (s *session) castSpellDirect(ctx context.Context, spellID uint32, targetGUI
 				schoolMask = 1
 			}
 			s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, eff.AuraPeriod, amount, schoolMask)
-		} else if eff.Effect == 10 || eff.Effect == 67 { // SPELL_EFFECT_HEAL
+		} else if eff.Effect == 10 { // SPELL_EFFECT_HEAL
 			healAmount := uint32(eff.BasePoints + 1)
 			if healAmount == 0 && spellID == ProcSpellCrusader {
 				healAmount = 100
 			}
 			s.executeSpellHeal(ctx, targetGUID, spellID, healAmount)
+		} else if eff.Effect == spellEffectEnergize {
+			s.applySpellEnergize(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1)
+		} else if eff.Effect == spellEffectTriggerSpell {
+			if eff.TriggerSpell != 0 && eff.TriggerSpell != spellID {
+				s.castSpellDirect(ctx, eff.TriggerSpell, targetGUID)
+			}
+		} else if eff.Effect == spellEffectHealMaxHealth {
+			s.executeSpellMaxHealthHeal(ctx, targetGUID, spellID)
 		}
 	}
 
 	if !hasExplicitEffects {
 		eff := wotlk.SpellEffect{Effect: 6, Aura: 4}
 		s.applyAuraToTarget(ctx, targetGUID, spell, eff, durationMs, 0, 0, 1)
+	}
+}
+
+func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, powerType int32, amount int32) {
+	if s == nil || s.player == nil || powerType < 0 || powerType >= 7 || amount <= 0 {
+		return
+	}
+	target := s
+	if targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
+		if other := s.server.findSessionByGUID(targetGUID); other != nil {
+			target = other
+		}
+	}
+	if target.player == nil || target.player.Health == 0 {
+		return
+	}
+	index := uint32(powerType)
+	maximum := target.player.MaxPowers[index]
+	if maximum == 0 {
+		return
+	}
+	old := target.player.Powers[index]
+	newPower := old + uint32(amount)
+	if newPower < old || newPower > maximum {
+		newPower = maximum
+	}
+	target.player.Powers[index] = newPower
+	packet := protocol.NewBuffer(13)
+	packet.WritePackedGUID(target.playerGUID)
+	packet.WriteU8(uint8(powerType))
+	packet.WriteU32(newPower)
+	_ = target.write(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), true)
+	if target.server != nil {
+		target.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_POWER_UPDATE), packet.Bytes(), target)
+		if target.server.CharactersStore != nil && target.server.CharactersStore.DB != nil {
+			col := fmt.Sprintf("power%d", index+1)
+			_, _ = target.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), newPower, target.playerGUID)
+		}
+	}
+}
+
+func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint64, spellID uint32) {
+	if s == nil || s.player == nil {
+		return
+	}
+	if targetGUID == 0 || targetGUID == s.playerGUID {
+		if s.player.Health == 0 {
+			return
+		}
+		s.player.Health = s.player.MaxHealth
+		s.sendPlayerUpdate()
+		return
+	}
+	if s.server == nil {
+		return
+	}
+	if target := s.server.findSessionByGUID(targetGUID); target != nil && target.player != nil && target.player.Health > 0 {
+		target.player.Health = target.player.MaxHealth
+		target.sendPlayerUpdate()
+		return
+	}
+	if creature, ok := s.getCombatTarget(ctx, targetGUID); ok && creature.Health > 0 {
+		s.executeSpellHeal(ctx, targetGUID, spellID, creature.MaxHealth)
 	}
 }
 
