@@ -39,6 +39,29 @@ func TestSpellHaste_CastTimeReduction(t *testing.T) {
 	}
 }
 
+func TestStopSpellLifecycleCancelsCastAndChannelTimers(t *testing.T) {
+	sess := &session{}
+	castFired := make(chan struct{}, 1)
+	channelFired := make(chan struct{}, 1)
+	sess.activeCast = &activeCastState{Timer: time.AfterFunc(25*time.Millisecond, func() { castFired <- struct{}{} })}
+	sess.activeChannel = &activeChannelState{Timer: time.AfterFunc(25*time.Millisecond, func() { channelFired <- struct{}{} }), TickTimer: time.AfterFunc(25*time.Millisecond, func() { channelFired <- struct{}{} })}
+	sess.stopSpellLifecycle()
+	if sess.activeCast != nil || sess.activeChannel != nil {
+		t.Fatal("expected spell lifecycle state to be cleared")
+	}
+	time.Sleep(60 * time.Millisecond)
+	select {
+	case <-castFired:
+		t.Fatal("cancelled cast timer fired")
+	default:
+	}
+	select {
+	case <-channelFired:
+		t.Fatal("cancelled channel timer fired")
+	default:
+	}
+}
+
 func TestSpellCrit_IntellectAndRatingScaling(t *testing.T) {
 	sess := &session{
 		player: &playerState{

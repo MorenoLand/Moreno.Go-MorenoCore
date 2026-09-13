@@ -1757,6 +1757,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 	if !s.playerLoaded {
 		return nil
 	}
+	s.stopSpellLifecycle()
 	s.triggerLogout(ctx)
 	s.releaseActiveLoot()
 	if s.trade != nil {

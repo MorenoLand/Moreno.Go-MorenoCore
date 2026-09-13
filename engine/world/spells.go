@@ -1352,6 +1352,32 @@ func (s *session) interruptCurrentCast() {
 	s.castMu.Unlock()
 }
 
+func (s *session) stopSpellLifecycle() {
+	if s == nil {
+		return
+	}
+	s.castMu.Lock()
+	if s.activeCast != nil {
+		if s.activeCast.Timer != nil {
+			s.activeCast.Timer.Stop()
+		}
+		s.activeCast.Cancelled = true
+		s.activeCast = nil
+	}
+	channel := s.activeChannel
+	if channel != nil {
+		if channel.Timer != nil {
+			channel.Timer.Stop()
+		}
+		if channel.TickTimer != nil {
+			channel.TickTimer.Stop()
+		}
+		channel.Stopped = true
+		s.activeChannel = nil
+	}
+	s.castMu.Unlock()
+}
+
 func (s *session) handleCancelCast(payload []byte) bool {
 	reader := protocol.NewReader(payload)
 	castID, _ := reader.ReadU8()
