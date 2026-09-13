@@ -250,7 +250,7 @@ func TestBinderActivateParity(t *testing.T) {
 		},
 	}
 
-	binderGUID := uint64(55555) | (uint64(0xF130) << 48)
+	binderGUID := creatureWorldGUID(55555, 123)
 	bindBuf := protocol.NewBuffer(8)
 	bindBuf.WriteU64(binderGUID)
 

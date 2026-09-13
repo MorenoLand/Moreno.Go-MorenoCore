@@ -47,7 +47,7 @@ func TestSlice13Handlers(t *testing.T) {
 
 	// 1. CMSG_BINDER_ACTIVATE
 	bindBuf := protocol.NewBuffer(8)
-	bindBuf.WriteU64(999)
+	bindBuf.WriteU64(creatureWorldGUID(1, 123))
 	if !sess.handleBinderActivate(ctx, bindBuf.Bytes()) {
 		t.Fatal("handleBinderActivate failed")
 	}

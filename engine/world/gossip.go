@@ -592,6 +592,9 @@ func (s *session) handleBinderActivate(ctx context.Context, payload []byte) bool
 	if err != nil {
 		return false
 	}
+	if !s.canInteractWithNPC(ctx, npcGUID, 0x00000004) {
+		return true
+	}
 
 	// Update player homebind location
 	s.player.HomebindMap = s.player.Map
