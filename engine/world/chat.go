@@ -47,6 +47,7 @@ func (s *session) handleSetSelection(payload []byte) bool {
 
 func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
+		s.debug("chat ignored", "account", s.accountName, "reason", "player not loaded")
 		return true
 	}
 	b := protocol.NewReader(payload)
@@ -87,11 +88,13 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "malformed message", "error", err)
 		return true
 	}
+	s.debug("chat request parsed", "account", s.accountName, "type", typeID, "language", language, "size", len(payload))
 	if len(message) > 255 || strings.ContainsAny(message, "\r\n") || strings.IndexFunc(message, func(r rune) bool { return r < 32 && r != '\t' }) >= 0 {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid characters")
 		return true
 	}
 	if s.warden != nil && s.warden.processLuaCheckResponse(message) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "warden check response")
 		return true
 	}
 	if strings.HasPrefix(message, ".") || strings.HasPrefix(message, "!") {
@@ -131,6 +134,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		language = languageUniversal
 	}
 	if (typeID == chatGuild || typeID == chatOfficer) && !s.guildChatSpeakAllowed(typeID == chatOfficer) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "guild rights", "type", typeID)
 		return true
 	}
 	if s.server.Features != nil && s.server.Features.Scripts != nil {
@@ -139,6 +143,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			s.debug("lua chat hook failed", "account", s.accountName, "error", hookErr)
 		}
 		if luaCancelled(values) {
+			s.debug("chat rejected", "account", s.accountName, "reason", "lua hook cancelled", "type", typeID)
 			return true
 		}
 	}
@@ -146,13 +151,16 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if typeID == chatWhisper {
 		receiver = s.server.findSessionByName(targetName)
 		if receiver == nil {
+			s.debug("chat rejected", "account", s.accountName, "reason", "whisper target missing")
 			return true
 		}
 	}
 	if typeID == chatChannel && !s.server.isChannelMember(s, channel) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "channel membership", "channel", channel)
 		return s.sendChannelNotify(channelNotMemberNotice, channel, nil) == nil
 	}
 	if typeID == chatChannel && s.server.isChannelMuted(s, channel) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "channel muted", "channel", channel)
 		// Reference Channel::Say: muted members receive CHAT_MUTED_NOTICE and
 		// the message is not delivered.
 		return s.sendChannelNotify(channelMutedNotice, channel, nil) == nil
