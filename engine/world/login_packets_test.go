@@ -28,3 +28,10 @@ func TestBuildAccountDataTimesUsesRequestedMask(t *testing.T) {
 		t.Fatalf("mask=%x", packet[5:9])
 	}
 }
+
+func TestBuildAccountDataTimesIncludesSavedTimestamps(t *testing.T) {
+	packet := buildAccountDataTimesWithTimestamps(time.Unix(123, 0), globalAccountDataMask, []uint32{11, 22, 33, 44, 55, 66, 77, 88})
+	if binary.LittleEndian.Uint32(packet[9:13]) != 11 || binary.LittleEndian.Uint32(packet[13:17]) != 33 || binary.LittleEndian.Uint32(packet[17:21]) != 55 {
+		t.Fatalf("timestamps=%x", packet)
+	}
+}

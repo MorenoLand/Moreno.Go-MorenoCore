@@ -404,7 +404,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_VERIFY_WORLD), buildLoginVerifyWorld(state), true); err != nil {
 		return false
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_ACCOUNT_DATA_TIMES), buildAccountDataTimes(time.Now(), characterAccountDataMask), true); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_ACCOUNT_DATA_TIMES), buildAccountDataTimesWithTimestamps(time.Now(), characterAccountDataMask, s.loadAccountDataTimes(ctx, guid, characterAccountDataMask)), true); err != nil {
 		return false
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_FEATURE_SYSTEM_STATUS), buildFeatureSystemStatus(), true); err != nil {
@@ -1857,16 +1857,47 @@ func buildLoginVerifyWorld(state playerState) []byte {
 }
 
 func buildAccountDataTimes(now time.Time, mask uint32) []byte {
+	return buildAccountDataTimesWithTimestamps(now, mask, nil)
+}
+
+func buildAccountDataTimesWithTimestamps(now time.Time, mask uint32, timestamps []uint32) []byte {
 	packet := protocol.NewBuffer(29)
 	packet.WriteU32(uint32(now.Unix()))
 	packet.WriteU8(1)
 	packet.WriteU32(mask)
 	for index := uint32(0); index < 8; index++ {
 		if mask&(1<<index) != 0 {
-			packet.WriteU32(0)
+			var timestamp uint32
+			if int(index) < len(timestamps) {
+				timestamp = timestamps[index]
+			}
+			packet.WriteU32(timestamp)
 		}
 	}
 	return packet.Bytes()
+}
+
+func (s *session) loadAccountDataTimes(ctx context.Context, guid uint64, mask uint32) []uint32 {
+	timestamps := make([]uint32, 8)
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return timestamps
+	}
+	for index := uint32(0); index < 8; index++ {
+		if mask&(1<<index) == 0 {
+			continue
+		}
+		var timestamp int64
+		var err error
+		if globalAccountDataMask&(1<<index) != 0 {
+			err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT time FROM account_data WHERE accountId = ? AND type = ?", s.accountID, index).Scan(&timestamp)
+		} else {
+			err = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT time FROM character_account_data WHERE guid = ? AND type = ?", guid, index).Scan(&timestamp)
+		}
+		if err == nil && timestamp > 0 {
+			timestamps[index] = uint32(timestamp)
+		}
+	}
+	return timestamps
 }
 
 func buildRealmSplit(payload []byte) ([]byte, error) {

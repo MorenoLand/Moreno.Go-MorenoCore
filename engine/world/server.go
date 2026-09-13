@@ -2593,7 +2593,7 @@ func opcodeName(opcode uint32) string {
 }
 
 func (s *session) handleReadyForAccountDataTimes() bool {
-	if err := s.write(uint16(protocol.OpcodeSMSG_ACCOUNT_DATA_TIMES), buildAccountDataTimes(time.Now(), globalAccountDataMask), true); err != nil {
+	if err := s.write(uint16(protocol.OpcodeSMSG_ACCOUNT_DATA_TIMES), buildAccountDataTimesWithTimestamps(time.Now(), globalAccountDataMask, s.loadAccountDataTimes(context.Background(), 0, globalAccountDataMask)), true); err != nil {
 		s.debug("global account data times failed", "account", s.accountName, "error", err)
 		return false
 	}
