@@ -27,12 +27,18 @@ func (s *Server) luaPlayers() []*scripting.Object {
 }
 
 func (s *session) triggerPlayerEvent(ctx context.Context, event int, args ...any) {
+	_, _ = s.triggerPlayerEventValues(ctx, event, args...)
+}
+
+func (s *session) triggerPlayerEventValues(ctx context.Context, event int, args ...any) ([]any, error) {
 	if s.server == nil || s.server.Features == nil || s.server.Features.Scripts == nil {
-		return
+		return nil, nil
 	}
-	if _, err := s.server.Features.Scripts.TriggerPlayerEvent(ctx, event, append([]any{event}, args...)...); err != nil {
+	values, err := s.server.Features.Scripts.TriggerPlayerEvent(ctx, event, append([]any{event}, args...)...)
+	if err != nil {
 		s.debug("lua player event failed", "account", s.accountName, "event", event, "error", err)
 	}
+	return values, err
 }
 
 func (s *Server) findPlayer(guid uint64) *scripting.Object {

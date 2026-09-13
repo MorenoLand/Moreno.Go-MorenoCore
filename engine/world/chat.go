@@ -126,7 +126,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			return true
 		}
 		if s.server.Features != nil && s.server.Features.Scripts != nil {
-			values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, 42, scripting.PlayerEventCommand, s.luaPlayer(), command)
+			values, hookErr := s.triggerPlayerEventValues(ctx, scripting.PlayerEventCommand, s.luaPlayer(), command)
 			if hookErr != nil {
 				s.debug("lua command hook failed", "account", s.accountName, "error", hookErr)
 			}
@@ -158,7 +158,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if s.server.Features != nil && s.server.Features.Scripts != nil {
-		values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, scripting.PlayerEventChat, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
+		values, hookErr := s.triggerPlayerEventValues(ctx, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
 		if hookErr != nil {
 			s.debug("lua chat hook failed", "account", s.accountName, "error", hookErr)
 		}
