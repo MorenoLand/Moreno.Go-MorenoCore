@@ -22,3 +22,24 @@ func TestGeneratedStatementRegistry(t *testing.T) {
 		t.Fatalf("SQLite statement: %q %v", query, err)
 	}
 }
+
+func TestSQLiteDialectOverridesAvoidMySQLOnlySyntax(t *testing.T) {
+	ids := []StatementID{
+		"LOGIN_DEL_EXPIRED_IP_BANS", "LOGIN_UPD_EXPIRED_ACCOUNT_BANS", "LOGIN_SEL_IP_BANNED_BY_IP",
+		"LOGIN_SEL_ACCOUNT_BANNED_BY_FILTER", "LOGIN_INS_ACCOUNT", "CHAR_SEL_CHAR_CREATE_INFO",
+		"CHAR_DEL_CHARACTER_BAN", "CHAR_SEL_GUID_BY_NAME_FILTER", "CHAR_SEL_CHARACTER_SPELLCOOLDOWNS",
+		"CHAR_INS_AUCTION_BIDDERS", "CHAR_INS_CHAR_QUESTSTATUS_REWARDED", "CHAR_SEL_PET_SPELL_COOLDOWN",
+	}
+	for _, id := range ids {
+		query, err := StatementSQL(id, BackendSQLite)
+		if err != nil {
+			t.Fatal(err)
+		}
+		upper := strings.ToUpper(query)
+		for _, forbidden := range []string{"UNIX_TIMESTAMP", "CONCAT(", "INSERT IGNORE", "LIMIT 0,"} {
+			if strings.Contains(upper, forbidden) {
+				t.Fatalf("%s retained MySQL syntax %q: %s", id, forbidden, query)
+			}
+		}
+	}
+}
