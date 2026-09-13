@@ -133,6 +133,8 @@ type session struct {
 	security              uint8
 	accountExpansion      uint8
 	muteTime              int64
+	speakTime             int64
+	speakCount            uint32
 	gmChat                bool
 	twoSideChat           bool
 	legitimate            map[uint64]struct{}

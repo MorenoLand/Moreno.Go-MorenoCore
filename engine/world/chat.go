@@ -91,6 +91,9 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			return true
 		}
 	}
+	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
+		s.updateSpeakTime()
+	}
 	var targetName, channel, message string
 	switch uint8(typeID) {
 	case chatWhisper:
@@ -245,6 +248,31 @@ func (s *session) hasLanguageSkill(skill uint16) bool {
 		}
 	}
 	return false
+}
+
+func (s *session) skipChatFlood() bool {
+	return s.security > 0 || (s.player != nil && (s.player.ExtraFlags&playerExtraGMOn != 0 || s.player.PlayerFlags&playerFlagGM != 0))
+}
+
+func (s *session) updateSpeakTime() {
+	if s.skipChatFlood() || s.server == nil || s.server.Config.ChatFloodMessageCount == 0 {
+		return
+	}
+	now := time.Now().Unix()
+	if s.speakTime > now {
+		s.speakCount++
+		if s.speakCount >= s.server.Config.ChatFloodMessageCount {
+			newMute := now + int64(s.server.Config.ChatFloodMuteTime)
+			if s.muteTime < newMute {
+				s.muteTime = newMute
+			}
+			s.speakCount = 0
+			s.debug("chat flood mute applied", "account", s.accountName, "mute_until", s.muteTime)
+		}
+	} else {
+		s.speakCount = 1
+	}
+	s.speakTime = now + int64(s.server.Config.ChatFloodMessageDelay)
 }
 
 func (s *session) guildChatSpeakAllowed(officer bool) bool {

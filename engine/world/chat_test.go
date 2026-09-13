@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -165,6 +166,23 @@ func TestMutedAccountChatIsConsumed(t *testing.T) {
 	payload.WriteCString("blocked")
 	if !state.handleMessageChat(context.Background(), payload.Bytes()) {
 		t.Fatal("muted chat closed the session")
+	}
+}
+
+func TestChatFloodMuteMatchesReferenceCounter(t *testing.T) {
+	server := &Server{Config: config.Config{ChatFloodMessageCount: 2, ChatFloodMessageDelay: 1, ChatFloodMuteTime: 30}, sessions: make(map[*session]struct{})}
+	state := &session{server: server, playerLoaded: true, player: &playerState{GUID: 1, Name: "Tester", Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	for i := 0; i < 2; i++ {
+		payload := protocol.NewBuffer(16)
+		payload.WriteU32(chatSay)
+		payload.WriteU32(7)
+		payload.WriteCString("hello")
+		if !state.handleMessageChat(context.Background(), payload.Bytes()) {
+			t.Fatal("chat flood packet closed the session")
+		}
+	}
+	if state.muteTime <= time.Now().Unix() || state.speakCount != 0 {
+		t.Fatalf("flood mute state mute=%d count=%d", state.muteTime, state.speakCount)
 	}
 }
 
