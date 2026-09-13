@@ -211,7 +211,7 @@ func TestQuestItemConsumptionAndRewardInEquippedBags(t *testing.T) {
 
 	// Turn in quest: choose reward 0
 	choosePayload := protocol.NewBuffer(16)
-	choosePayload.WritePackedGUID(giverGUID)
+	choosePayload.WriteU64(giverGUID)
 	choosePayload.WriteU32(55)
 	choosePayload.WriteU32(0)
 

@@ -168,7 +168,7 @@ func TestQuestgiverAcceptQuestItemStarterAndGuidZero(t *testing.T) {
 	// 1. Accept quest via item GUID (highguid 0x4000)
 	itemGUID := uint64(9001) | (uint64(0x4000) << 48)
 	acceptPayload := protocol.NewBuffer(12)
-	acceptPayload.WritePackedGUID(itemGUID)
+	acceptPayload.WriteU64(itemGUID)
 	acceptPayload.WriteU32(301)
 	if !state.handleQuestgiverAcceptQuest(ctx, acceptPayload.Bytes()) {
 		t.Fatal("handleQuestgiverAcceptQuest failed for item quest starter")
@@ -184,7 +184,7 @@ func TestQuestgiverAcceptQuestItemStarterAndGuidZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	acceptZeroPayload := protocol.NewBuffer(12)
-	acceptZeroPayload.WritePackedGUID(0)
+	acceptZeroPayload.WriteU64(0)
 	acceptZeroPayload.WriteU32(302)
 	if !state.handleQuestgiverAcceptQuest(ctx, acceptZeroPayload.Bytes()) {
 		t.Fatal("handleQuestgiverAcceptQuest failed for guid 0")

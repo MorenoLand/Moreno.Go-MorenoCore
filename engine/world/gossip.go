@@ -43,7 +43,7 @@ type gossipQuestItem struct {
 
 func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	guid, err := reader.ReadPackedGUID()
+	guid, err := reader.ReadU64()
 	if err != nil {
 		s.debug("gossip hello rejected", "account", s.accountName, "error", err)
 		return true
@@ -114,7 +114,7 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		if defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 1 {
 			q := defaultMenu.Quests[0]
 			queryPayload := protocol.NewBuffer(12)
-			queryPayload.WritePackedGUID(guid)
+			queryPayload.WriteU64(guid)
 			queryPayload.WriteU32(q.ID)
 			status, _ := s.characterQuestStatus(ctx, q.ID)
 			if status == questStatusComplete || status == questStatusIncomplete {
@@ -134,7 +134,7 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 
 func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	guid, err := reader.ReadPackedGUID()
+	guid, err := reader.ReadU64()
 	if err != nil {
 		return false
 	}

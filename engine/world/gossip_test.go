@@ -43,7 +43,7 @@ func TestCreatureGossipLuaHookWritesClientMenu(t *testing.T) {
 	guid := uint64(321) | uint64(68)<<24 | uint64(0xF130)<<48
 	state := &session{server: server, conn: serverConn, accountName: "TEST", playerLoaded: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Map: 0}, auras: make(map[uint32]struct{})}
 	hello := protocol.NewBuffer(8)
-	hello.WritePackedGUID(guid)
+	hello.WriteU64(guid)
 	done := make(chan bool, 1)
 	go func() { done <- state.handleGossipHello(context.Background(), hello.Bytes()) }()
 	opcode, payload, err := readServerFrame(clientConn, nil)
@@ -90,7 +90,7 @@ func TestCreatureGossipLuaHookWritesClientMenu(t *testing.T) {
 		t.Fatalf("gossip hello failed")
 	}
 	selectPayload := protocol.NewBuffer(16)
-	selectPayload.WritePackedGUID(guid)
+	selectPayload.WriteU64(guid)
 	selectPayload.WriteU32(0)
 	selectPayload.WriteU32(0)
 	selectDone := make(chan bool, 1)
@@ -169,7 +169,7 @@ func TestGossipSpecialOptionsAndServices(t *testing.T) {
 
 	// 1. Banker single-service auto opens bank
 	hBuf := protocol.NewBuffer(8)
-	hBuf.WritePackedGUID(guid)
+	hBuf.WriteU64(guid)
 	go func() {
 		sess.handleGossipHello(ctx, hBuf.Bytes())
 	}()
@@ -192,7 +192,7 @@ func TestGossipSpecialOptionsAndServices(t *testing.T) {
 		},
 	}
 	selBuf := protocol.NewBuffer(16)
-	selBuf.WritePackedGUID(guid)
+	selBuf.WriteU64(guid)
 	selBuf.WriteU32(1) // menu 1
 	selBuf.WriteU32(0) // list 0
 

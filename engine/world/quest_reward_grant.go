@@ -44,7 +44,7 @@ func (s *session) handleQuestgiverChooseReward(ctx context.Context, payload []by
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	giverGUID, err := reader.ReadPackedGUID()
+	giverGUID, err := reader.ReadU64()
 	if err != nil {
 		return true
 	}

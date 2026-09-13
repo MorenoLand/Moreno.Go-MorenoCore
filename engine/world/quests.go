@@ -24,7 +24,7 @@ func (s *session) handleQuestgiverHello(ctx context.Context, payload []byte) boo
 
 func (s *session) handleQuestgiverStatusQuery(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	guid, err := reader.ReadPackedGUID()
+	guid, err := reader.ReadU64()
 	if err != nil {
 		return false
 	}

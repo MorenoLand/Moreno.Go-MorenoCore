@@ -57,7 +57,7 @@ type questDetailData struct {
 
 func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	guid, err := reader.ReadPackedGUID()
+	guid, err := reader.ReadU64()
 	if err != nil {
 		return false
 	}
@@ -114,7 +114,7 @@ func (s *session) handleQuestgiverQueryQuest(ctx context.Context, payload []byte
 
 func (s *session) handleQuestgiverAcceptQuest(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	guid, err := reader.ReadPackedGUID()
+	guid, err := reader.ReadU64()
 	if err != nil {
 		return false
 	}
