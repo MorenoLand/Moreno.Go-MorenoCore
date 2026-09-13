@@ -67,6 +67,15 @@ var sqliteStatementOverrides = map[StatementID]string{
 	"CHAR_INS_AUCTION_BIDDERS":           "INSERT OR IGNORE INTO auctionbidders (id, bidderguid) VALUES (?, ?)",
 	"CHAR_INS_CHAR_QUESTSTATUS_REWARDED": "INSERT OR IGNORE INTO character_queststatus_rewarded (guid, quest, active) VALUES (?, ?, 1)",
 	"CHAR_SEL_PET_SPELL_COOLDOWN":        "SELECT spell, time, categoryId, categoryEnd FROM pet_spell_cooldown WHERE guid = ? AND time > unixepoch()",
+	"CHAR_INS_GUILD_BANK_RIGHT":          "INSERT INTO guild_bank_right (guildid, TabId, rid, gbright, SlotPerDay) VALUES (?, ?, ?, ?, ?) ON CONFLICT(guildid, TabId, rid) DO UPDATE SET gbright = excluded.gbright, SlotPerDay = excluded.SlotPerDay",
+	"CHAR_INS_GUILD_MEMBER_WITHDRAW":     "INSERT INTO guild_member_withdraw (guid, tab0, tab1, tab2, tab3, tab4, tab5, money) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(guid) DO UPDATE SET tab0 = excluded.tab0, tab1 = excluded.tab1, tab2 = excluded.tab2, tab3 = excluded.tab3, tab4 = excluded.tab4, tab5 = excluded.tab5, money = excluded.money",
+	"CHAR_UPD_CHANNEL":                   "INSERT INTO channels (name, team, announce, ownership, password, bannedList, lastUsed) VALUES (?, ?, ?, ?, ?, ?, unixepoch()) ON CONFLICT(name, team) DO UPDATE SET announce = excluded.announce, ownership = excluded.ownership, password = excluded.password, bannedList = excluded.bannedList, lastUsed = excluded.lastUsed",
+	"CHAR_UPD_CHANNEL_USAGE":             "UPDATE channels SET lastUsed = unixepoch() WHERE name = ? AND team = ?",
+	"CHAR_DEL_OLD_CHANNELS":              "DELETE FROM channels WHERE ownership = 1 AND lastUsed + ? < unixepoch()",
+	"CHAR_INS_GM_SURVEY":                 "INSERT INTO gm_survey (guid, surveyId, mainSurvey, comment, createTime) VALUES (?, ?, ?, ?, unixepoch())",
+	"CHAR_UPD_DELETE_INFO":               "UPDATE characters SET deleteInfos_Name = name, deleteInfos_Account = account, deleteDate = unixepoch(), name = '', account = 0 WHERE guid = ?",
+	"CHAR_SEL_CHAR_DEL_INFO_BY_NAME":     "SELECT guid, deleteInfos_Name, deleteInfos_Account, deleteDate FROM characters WHERE deleteDate IS NOT NULL AND deleteInfos_Name LIKE '%' || ? || '%'",
+	"CHAR_INS_DESERTER_TRACK":            "INSERT INTO battleground_deserters (guid, type, datetime) VALUES (?, ?, CURRENT_TIMESTAMP)",
 	"CHAR_SEL_CHECK_NAME":                "SELECT 1 FROM characters WHERE UPPER(name) = UPPER(?)",
 }
 
