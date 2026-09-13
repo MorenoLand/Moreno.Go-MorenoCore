@@ -103,12 +103,50 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	methods["IsAuctioneer"] = hasNPCFlag(0x00200000)
 	methods["IsServiceProvider"] = luaNoArgs(func() any { return state.NPCFlags&0x007FC0F2 != 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any {
-		motion := s.server.creatureMotion[state.GUID]
-		if motion == nil {
-			motion = s.server.creatureMotion[creatureWorldGUID(uint32(state.GUID&0x00FFFFFF), state.Entry)]
-		}
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
 		return motion != nil && motion.InCombat
 	})
+	methods["GetVictim"] = func(ctx context.Context, _ []any) ([]any, error) {
+		motion := s.luaCreatureMotion(state.GUID, state.Entry)
+		if motion == nil || motion.TargetGUID == 0 {
+			return []any{nil}, nil
+		}
+		if player := s.server.findPlayer(motion.TargetGUID); player != nil {
+			return []any{player}, nil
+		}
+		if creature := s.luaCreature(ctx, motion.TargetGUID); creature != nil {
+			return []any{creature}, nil
+		}
+		return []any{nil}, nil
+	}
+	methods["HasAura"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.server.objectsMu.RLock()
+		_, found := s.server.creatureAuras[state.GUID][spell]
+		if !found {
+			_, found = s.server.activeCreatureAuras[state.GUID][spell]
+		}
+		s.server.objectsMu.RUnlock()
+		return []any{found}, nil
+	}
+	methods["RemoveAura"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		s.server.objectsMu.Lock()
+		if auras := s.server.creatureAuras[state.GUID]; auras != nil {
+			delete(auras, spell)
+		}
+		if auras := s.server.activeCreatureAuras[state.GUID]; auras != nil {
+			delete(auras, spell)
+		}
+		s.server.objectsMu.Unlock()
+		return nil, nil
+	}
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
 	methods["AddAura"] = func(_ context.Context, args []any) ([]any, error) {
 		spell, err := luaUint32Arg(args, 0)
@@ -141,6 +179,14 @@ func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Objec
 	methods["SendBroadcastMessage"] = s.luaMessageMethod()
 	state.Level = uint32(maxLevel)
 	return &scripting.Object{Type: "Creature", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "GossipMenuID": state.GossipMenuID, "NPCFlags": state.NPCFlags, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "Health": state.Health, "MaxHealth": state.MaxHealth, "Level": state.Level, "InWorld": true}, Methods: methods}
+}
+
+func (s *session) luaCreatureMotion(guid uint64, entry uint32) *creatureMotion {
+	motion := s.server.creatureMotion[guid]
+	if motion == nil {
+		motion = s.server.creatureMotion[creatureWorldGUID(uint32(guid&0x00FFFFFF), entry)]
+	}
+	return motion
 }
 
 func (s *session) luaGameObject(ctx context.Context, guid uint64) *scripting.Object {

@@ -6,6 +6,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -50,7 +51,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		return nil
 	}
 	state := s.player
-	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender, "Team": teamForRace(state.Race), "IsGM": s.security > 0, "InWorld": true, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "Health": state.Health, "MaxHealth": state.MaxHealth, "Power": state.Powers[0], "MaxPower": state.MaxPowers[0], "PowerType": uint32(0), "InCombat": s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0}
+	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender, "Team": teamForRace(state.Race), "IsGM": s.security > 0, "InWorld": true, "X": state.X, "Y": state.Y, "Z": state.Z, "Orientation": state.Orientation, "Zone": state.Zone, "Health": state.Health, "MaxHealth": state.MaxHealth, "Power": state.Powers[0], "MaxPower": state.MaxPowers[0], "PowerType": classPowerType(state.Class), "InCombat": s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0}
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
@@ -104,6 +105,24 @@ func (s *session) luaPlayer() *scripting.Object {
 	methods["IsGM"] = luaNoArgs(func() any { return s.security > 0 })
 	methods["IsInCombat"] = luaNoArgs(func() any { return s.attackTarget != 0 || state.UnitFlags&unitFlagInCombat != 0 })
 	methods["IsAlive"] = luaNoArgs(func() any { return state.Health > 0 })
+	methods["IsDead"] = luaNoArgs(func() any { return state.Health == 0 })
+	methods["IsFullHealth"] = luaNoArgs(func() any { return state.MaxHealth > 0 && state.Health >= state.MaxHealth })
+	methods["IsMounted"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })
+	methods["GetMountId"] = luaNoArgs(func() any { return state.MountDisplayID })
+	methods["GetPetGUID"] = luaNoArgs(func() any { return state.PetGUID })
+	methods["HasSpellCooldown"] = func(_ context.Context, args []any) ([]any, error) {
+		spell, err := luaUint32Arg(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		now := time.Now().UnixMilli()
+		for _, cooldown := range state.Cooldowns {
+			if cooldown.Spell == spell && cooldown.End > now {
+				return []any{true}, nil
+			}
+		}
+		return []any{false}, nil
+	}
 	methods["IsInWater"] = luaNoArgs(func() any { return s.isSwimming })
 	methods["IsMoving"] = luaNoArgs(func() any { return s.isMoving })
 	methods["CanFly"] = luaNoArgs(func() any { return state.MountDisplayID != 0 })

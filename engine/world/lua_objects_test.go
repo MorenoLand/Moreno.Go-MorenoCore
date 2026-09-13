@@ -44,6 +44,18 @@ func TestLuaWorldObjectBindings(t *testing.T) {
 	if values, err := creature.Methods["IsGossip"](context.Background(), nil); err != nil || values[0] != true {
 		t.Fatalf("gossip=%v err=%v", values, err)
 	}
+	if _, err := creature.Methods["AddAura"](context.Background(), []any{float64(123)}); err != nil {
+		t.Fatal(err)
+	}
+	if values, err := creature.Methods["HasAura"](context.Background(), []any{float64(123)}); err != nil || values[0] != true {
+		t.Fatalf("aura values=%v err=%v", values, err)
+	}
+	if _, err := creature.Methods["RemoveAura"](context.Background(), []any{float64(123)}); err != nil {
+		t.Fatal(err)
+	}
+	if values, err := creature.Methods["HasAura"](context.Background(), []any{float64(123)}); err != nil || values[0] != false {
+		t.Fatalf("removed aura values=%v err=%v", values, err)
+	}
 	if _, err := creature.Methods["SetHealth"](context.Background(), []any{float64(50)}); err != nil {
 		t.Fatal(err)
 	}
