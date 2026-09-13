@@ -82,6 +82,21 @@ func TestDecompressCombinedZlibPKWare(t *testing.T) {
 	}
 }
 
+func TestDecompressHuffman(t *testing.T) {
+	for _, dataType := range []uint32{1, 2, 3} {
+		want := []byte("MPQ adaptive Huffman fixture")
+		encoded, err := Compress(want, dataType)
+		if err != nil {
+			t.Fatalf("data type %d encode: %v", dataType, err)
+		}
+		sector := append([]byte{0x01}, encoded...)
+		decoded, err := decompress(sector, uint32(len(want)), fileCompress)
+		if err != nil || !bytes.Equal(decoded, want) {
+			t.Fatalf("data type %d decoded=%q err=%v", dataType, decoded, err)
+		}
+	}
+}
+
 func TestNormalize(t *testing.T) {
 	cases := []struct {
 		input    string

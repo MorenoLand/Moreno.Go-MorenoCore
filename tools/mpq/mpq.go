@@ -300,10 +300,7 @@ func decompressCompressed(data []byte, mask byte, expected uint32) ([]byte, erro
 	if mask&^supported != 0 {
 		return nil, errors.New("unsupported MPQ compression method")
 	}
-	if mask&0x01 != 0 {
-		return nil, errors.New("unsupported MPQ Huffman compression method")
-	}
-	methods := []byte{0x02, 0x08, 0x10, 0x40, 0x80}
+	methods := []byte{0x01, 0x02, 0x08, 0x10, 0x40, 0x80}
 	decoded := data
 	used := false
 	for _, method := range methods {
@@ -333,6 +330,8 @@ func decompressMethod(data []byte, method byte, expected uint32) ([]byte, error)
 	var reader io.ReadCloser
 	var err error
 	switch method {
+	case 0x01:
+		return Decompress(data, int(expected))
 	case 0x02:
 		reader, err = zlib.NewReader(bytes.NewReader(data))
 	case 0x08:
