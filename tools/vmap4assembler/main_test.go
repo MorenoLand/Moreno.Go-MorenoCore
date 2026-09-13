@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,6 +60,104 @@ func TestMapTreeAndTileAssemblyWritesReferenceFiles(t *testing.T) {
 	}
 	if len(tile) < 12 || string(tile[:8]) != vMapMagic || binary.LittleEndian.Uint32(tile[8:12]) != 1 {
 		t.Fatalf("unexpected vmtile header: %x", tile[:min(len(tile), 20)])
+	}
+}
+
+func TestAssembleMapTreesCalculatesM2BoundsFromRawModel(t *testing.T) {
+	src, dest := t.TempDir(), t.TempDir()
+	var raw bytes.Buffer
+	raw.Write(append([]byte(rawVMapMagic), 0))
+	for _, value := range []uint32{0, 1, 42} {
+		if err := binary.Write(&raw, binary.LittleEndian, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []uint32{0, 0} {
+		if err := binary.Write(&raw, binary.LittleEndian, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []float32{0, 0, 0, 1, 1, 1} {
+		if err := binary.Write(&raw, binary.LittleEndian, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := binary.Write(&raw, binary.LittleEndian, uint32(0)); err != nil {
+		t.Fatal(err)
+	}
+	raw.WriteString("GRP ")
+	if err := binary.Write(&raw, binary.LittleEndian, uint32(8)); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []uint32{0} {
+		if err := binary.Write(&raw, binary.LittleEndian, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw.WriteString("INDX")
+	if err := binary.Write(&raw, binary.LittleEndian, uint32(10)); err != nil {
+		t.Fatal(err)
+	}
+	if err := binary.Write(&raw, binary.LittleEndian, uint32(3)); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []uint16{0, 1, 2} {
+		if err := binary.Write(&raw, binary.LittleEndian, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	raw.WriteString("VERT")
+	if err := binary.Write(&raw, binary.LittleEndian, uint32(40)); err != nil {
+		t.Fatal(err)
+	}
+	if err := binary.Write(&raw, binary.LittleEndian, uint32(3)); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []vector3{{0, 0, 0}, {2, 0, 0}, {0, 3, 0}} {
+		if err := binary.Write(&raw, binary.LittleEndian, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(src, "model.m2"), raw.Bytes(), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dirFile, err := os.Create(filepath.Join(src, "dir_bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []uint32{1, 2, 3} {
+		if err := binary.Write(dirFile, binary.LittleEndian, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writeModelSpawn(dirFile, mapSpawnRecord{Flags: modelFlagM2, ID: 7, Position: vector3{1, 2, 3}, Scale: 1, Name: "model.m2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := dirFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := assembleMapTrees(src, dest); err != nil {
+		t.Fatal(err)
+	}
+	tile, err := os.Open(filepath.Join(dest, "001_02_03.vmtile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tile.Close()
+	magic := make([]byte, 8)
+	if _, err := io.ReadFull(tile, magic); err != nil || string(magic) != vMapMagic {
+		t.Fatalf("tile magic=%q err=%v", magic, err)
+	}
+	var count uint32
+	if err := binary.Read(tile, binary.LittleEndian, &count); err != nil || count != 1 {
+		t.Fatalf("tile count=%d err=%v", count, err)
+	}
+	spawn, err := readModelSpawn(tile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spawn.Flags&modelFlagHasBound == 0 || spawn.BoundsLow != (vector3{1, 2, 3}) || spawn.BoundsHigh != (vector3{3, 5, 3}) {
+		t.Fatalf("unexpected calculated M2 bounds: %+v", spawn)
 	}
 }
 
