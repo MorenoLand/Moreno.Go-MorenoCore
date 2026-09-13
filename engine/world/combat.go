@@ -1064,7 +1064,6 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 			}
 		}
 	}
-
 	if stats.MinDamage < 1.0 {
 		stats.MinDamage = 1.0
 	}
@@ -1072,7 +1071,6 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		stats.MaxDamage = stats.MinDamage + 1.0
 	}
 
-	stats.CombatReach = 1.5
 	var modelCombatReach sql.NullFloat64
 	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT cmi.CombatReach FROM creature_template ct JOIN creature_model_info cmi ON ct.modelid1 = cmi.DisplayID WHERE ct.entry = ?", entry).Scan(&modelCombatReach)
 	if modelCombatReach.Valid && modelCombatReach.Float64 > 0 {
