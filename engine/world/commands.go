@@ -312,8 +312,53 @@ func (s *session) refreshNearbyObjects(ctx context.Context) {
 			}
 			rows.Close()
 		}
+		s.destroyHiddenGameObjectsInRange(ctx, *s.player)
 	}
 	s.streamNearbyObjects(ctx)
+}
+
+func (s *session) destroyHiddenGameObjectsInRange(ctx context.Context, state playerState) {
+	if s == nil || s.server == nil {
+		return
+	}
+	distance := float64(s.server.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 150.0
+	}
+	hidden := make(map[uint64]struct{})
+	s.server.objectsMu.RLock()
+	for guid := range s.server.hiddenGameObjects {
+		hidden[guid] = struct{}{}
+	}
+	for guid, dyn := range s.server.dynamicGameObjects {
+		if dyn != nil && dyn.Map == state.Map && math.Hypot(float64(dyn.X-state.X), float64(dyn.Y-state.Y)) <= distance {
+			if _, ok := hidden[guid]; ok {
+				s.sendDestroyObject(guid, false)
+				delete(hidden, guid)
+			}
+		}
+	}
+	s.server.objectsMu.RUnlock()
+	if len(hidden) == 0 || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT guid, id, position_x, position_y FROM gameobject WHERE map = ? AND position_x BETWEEN ? AND ? AND position_y BETWEEN ? AND ?`, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var low, entry int64
+		var x, y float64
+		if rows.Scan(&low, &entry, &x, &y) != nil {
+			continue
+		}
+		guid := gameObjectGUID(uint32(low), uint32(entry))
+		if _, ok := hidden[guid]; ok {
+			s.sendDestroyObject(guid, false)
+			delete(hidden, guid)
+		}
+	}
 }
 
 func (s *session) streamNearbyObjects(ctx context.Context) {
