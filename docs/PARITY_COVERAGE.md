@@ -4,7 +4,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 310 / 117421 | — |
+| Server source files / lines | 1410 / 710273 | 310 / 117427 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
 | Client opcode registrations | 727 | 727 | 0 |
 | Client behavioral opcode bindings (reference, non-NULL) | 430 | — | — |
@@ -25,7 +25,7 @@ No missing symbols detected.
 
 - `handleChannelModerate (channels.go:966)`
 - `handleKeepAlive (server.go:3060)`
-- `handlePlayerLogout (characters.go:1752)`
+- `handlePlayerLogout (characters.go:1758)`
 
 ## Go registered opcodes without static test references
 
