@@ -36,6 +36,7 @@ const (
 	itemSubclassArmorShield  = 6
 
 	spellEffectEnergize      = 30
+	spellEffectPowerBurn     = 62
 	spellEffectThreat        = 63
 	spellEffectTriggerSpell  = 64
 	spellEffectHealMaxHealth = 67
@@ -671,6 +672,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 				for _, effectTarget := range hitTargets {
 					s.applySpellEnergize(effCtx, effectTarget, eff.MiscValue, amount)
 				}
+			case spellEffectPowerBurn:
+				amount := eff.BasePoints + 1
+				for _, effectTarget := range hitTargets {
+					if burned := s.applySpellPowerBurn(effCtx, effectTarget, eff.MiscValue, amount, spellID); burned > 0 {
+						s.executeSpellDamage(effCtx, effectTarget, spellID, burned)
+					}
+				}
 			case spellEffectTriggerSpell:
 				for _, effectTarget := range hitTargets {
 					if eff.TriggerSpell != 0 && eff.TriggerSpell != spellID {
@@ -1210,6 +1218,10 @@ func (s *session) castSpellDirect(ctx context.Context, spellID uint32, targetGUI
 			s.executeSpellHeal(ctx, targetGUID, spellID, healAmount)
 		} else if eff.Effect == spellEffectEnergize {
 			s.applySpellEnergize(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1)
+		} else if eff.Effect == spellEffectPowerBurn {
+			if burned := s.applySpellPowerBurn(ctx, targetGUID, eff.MiscValue, eff.BasePoints+1, spellID); burned > 0 {
+				s.executeSpellDamage(ctx, targetGUID, spellID, burned)
+			}
 		} else if eff.Effect == spellEffectTriggerSpell {
 			if eff.TriggerSpell != 0 && eff.TriggerSpell != spellID {
 				s.castSpellDirect(ctx, eff.TriggerSpell, targetGUID)
@@ -1228,16 +1240,59 @@ func (s *session) castSpellDirect(ctx context.Context, spellID uint32, targetGUI
 }
 
 func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, powerType int32, amount int32) {
+	s.adjustSpellPower(ctx, targetGUID, powerType, int64(amount))
+}
+
+func (s *session) applySpellPowerBurn(ctx context.Context, targetGUID uint64, powerType int32, amount int32, spellID uint32) uint32 {
 	if s == nil || s.player == nil || powerType < 0 || powerType >= 7 || amount <= 0 {
-		return
+		return 0
 	}
-	target := s
-	if targetGUID != 0 && targetGUID != s.playerGUID && s.server != nil {
-		if other := s.server.findSessionByGUID(targetGUID); other != nil {
-			target = other
+	target := s.spellPowerTarget(targetGUID)
+	if target == nil || target.player == nil || target.player.Health == 0 || classPowerType(target.player.Class) != uint8(powerType) {
+		return 0
+	}
+	maximum := target.player.MaxPowers[uint32(powerType)]
+	if maximum == 0 {
+		return 0
+	}
+	burn := int64(amount)
+	if spellID == 8129 {
+		burn = int64(maximum) * burn / 100
+		casterMax := s.player.MaxPowers[uint32(powerType)]
+		cap := int64(casterMax) * int64(amount) * 2 / 100
+		if burn > cap {
+			burn = cap
 		}
 	}
-	if target.player == nil || target.player.Health == 0 {
+	if burn <= 0 {
+		return 0
+	}
+	if burn > int64(target.player.Powers[uint32(powerType)]) {
+		burn = int64(target.player.Powers[uint32(powerType)])
+	}
+	if burn <= 0 {
+		return 0
+	}
+	target.adjustSpellPower(ctx, targetGUID, powerType, -burn)
+	return uint32(burn)
+}
+
+func (s *session) spellPowerTarget(targetGUID uint64) *session {
+	if s == nil || s.player == nil {
+		return nil
+	}
+	if targetGUID == 0 || targetGUID == s.playerGUID || s.server == nil {
+		return s
+	}
+	return s.server.findSessionByGUID(targetGUID)
+}
+
+func (s *session) adjustSpellPower(ctx context.Context, targetGUID uint64, powerType int32, delta int64) {
+	if s == nil || s.player == nil || powerType < 0 || powerType >= 7 || delta == 0 {
+		return
+	}
+	target := s.spellPowerTarget(targetGUID)
+	if target == nil || target.player == nil || target.player.Health == 0 {
 		return
 	}
 	index := uint32(powerType)
@@ -1246,9 +1301,22 @@ func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, pow
 		return
 	}
 	old := target.player.Powers[index]
-	newPower := old + uint32(amount)
-	if newPower < old || newPower > maximum {
-		newPower = maximum
+	var newPower uint32
+	if delta < 0 {
+		drain := uint64(-delta)
+		if drain >= uint64(old) {
+			newPower = 0
+		} else {
+			newPower = old - uint32(drain)
+		}
+	} else {
+		newPower = old + uint32(delta)
+		if newPower < old || newPower > maximum {
+			newPower = maximum
+		}
+	}
+	if newPower == old {
+		return
 	}
 	target.player.Powers[index] = newPower
 	packet := protocol.NewBuffer(13)

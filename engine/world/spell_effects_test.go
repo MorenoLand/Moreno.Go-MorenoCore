@@ -13,6 +13,16 @@ func TestSpellEnergizeClampsToMaximumPower(t *testing.T) {
 	}
 }
 
+func TestSpellPowerBurnDrainsMatchingPower(t *testing.T) {
+	sess := &session{playerGUID: 1, player: &playerState{GUID: 1, Class: 8, Health: 100, Powers: [7]uint32{100}, MaxPowers: [7]uint32{100}}}
+	if burned := sess.applySpellPowerBurn(context.Background(), 1, 0, 25, 1000); burned != 25 {
+		t.Fatalf("expected 25 burned, got %d", burned)
+	}
+	if sess.player.Powers[0] != 75 {
+		t.Fatalf("expected 75 mana remaining, got %d", sess.player.Powers[0])
+	}
+}
+
 func TestSpellMaxHealthHealRestoresLivingPlayer(t *testing.T) {
 	sess := &session{playerGUID: 1, player: &playerState{GUID: 1, Health: 25, MaxHealth: 100}}
 	sess.executeSpellMaxHealthHeal(context.Background(), 1, 1000)
