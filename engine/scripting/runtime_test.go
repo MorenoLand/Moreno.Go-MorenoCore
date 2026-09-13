@@ -65,3 +65,20 @@ func TestMultipleHookEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRuntimeServerEventAndLuaTimer(t *testing.T) {
+	runtime := NewRuntime(Config{Enabled: true})
+	if err := runtime.LoadString(`count = 0; CreateLuaEvent(function() count = count + 1 end, 10, 1); RegisterServerEvent(13, function(event, diff) count = count + diff; return count end)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Tick(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	values, err := runtime.TriggerServerEvent(context.Background(), 13, uint32(100))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(values) != 1 || values[0] != float64(101) {
+		t.Fatalf("server event values=%v", values)
+	}
+}

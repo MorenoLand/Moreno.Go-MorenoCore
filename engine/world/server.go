@@ -289,6 +289,9 @@ func (s *Server) Initialize(ctx context.Context) error {
 	if err := s.Features.Initialize(ctx); err != nil {
 		return err
 	}
+	if s.Features != nil && s.Features.Scripts != nil {
+		_, _ = s.Features.Scripts.TriggerServerEvent(ctx, 14)
+	}
 	if s.Config.WardenEnabled {
 		s.loadWardenChecks(ctx)
 	}
@@ -304,6 +307,9 @@ func (s *Server) Stop() {
 		return
 	}
 	s.stopOnce.Do(func() {
+		if s.Features != nil && s.Features.Scripts != nil {
+			_, _ = s.Features.Scripts.TriggerServerEvent(context.Background(), 15)
+		}
 		s.sessionsMu.RLock()
 		var sessions []*session
 		for sess := range s.sessions {
@@ -498,6 +504,10 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			return
 		case <-ticker.C:
 			now := time.Now()
+			if s.Features != nil && s.Features.Scripts != nil {
+				_ = s.Features.Scripts.Tick(ctx, 100)
+				_, _ = s.Features.Scripts.TriggerServerEvent(ctx, 13, uint32(100))
+			}
 			s.updateContinentTransports(now)
 			s.updateMailDeliveries(ctx, now.Unix())
 			s.updateActiveCreatures(ctx)
