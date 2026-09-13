@@ -92,7 +92,7 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 	packet := protocol.NewBuffer(1 + 128)
 	packet.WriteU8(0)
 	s.legitimate = make(map[uint64]struct{})
-	count := uint8(0)
+	characters := make([]enumCharacter, 0)
 	for rows.Next() {
 		character, err := scanEnumCharacter(rows)
 		if err != nil {
@@ -102,6 +102,16 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 		if character.Race == 0 || character.Class == 0 || character.Gender > 2 {
 			continue
 		}
+		characters = append(characters, character)
+	}
+	if err := rows.Err(); err != nil {
+		s.debug("character enumeration rows failed", "account", s.accountName, "error", err)
+		return false
+	}
+	rows.Close()
+	count := uint8(0)
+	for _, character := range characters {
+		s.loadEnumEquipment(ctx, &character)
 		s.buildEnumCharacter(ctx, packet, character)
 		if !character.Banned {
 			s.legitimate[character.GUID] = struct{}{}
@@ -109,10 +119,6 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 		if count < 255 {
 			count++
 		}
-	}
-	if err := rows.Err(); err != nil {
-		s.debug("character enumeration rows failed", "account", s.accountName, "error", err)
-		return false
 	}
 	if err := packet.Put(0, []byte{count}); err != nil {
 		return false
@@ -123,6 +129,39 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 	}
 	s.debug("character enumeration sent", "account", s.accountName, "count", count)
 	return true
+}
+
+func (s *session) loadEnumEquipment(ctx context.Context, character *enumCharacter) {
+	if character == nil || s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	fields := strings.Fields(character.Equipment)
+	for index := 0; index < len(fields); index += 2 {
+		if fields[index] != "0" {
+			return
+		}
+	}
+	parts := make([]string, int(equipSlotEnd)*2)
+	for i := range parts {
+		parts[i] = "0"
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, ii.itemEntry
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ? ORDER BY ci.slot`, character.GUID, equipSlotEnd)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slot, itemEntry int64
+		if rows.Scan(&slot, &itemEntry) != nil || slot < 0 || slot >= int64(equipSlotEnd) || itemEntry <= 0 {
+			continue
+		}
+		parts[slot*2] = strconv.FormatInt(itemEntry, 10)
+	}
+	if err := rows.Err(); err == nil {
+		character.Equipment = strings.Join(parts, " ")
+	}
 }
 
 func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {
