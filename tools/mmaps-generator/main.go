@@ -2,14 +2,91 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
+
+const moveMapGridSize float32 = 533.3333
+
+type mapTile struct {
+	MapID uint32
+	TileX uint32
+	TileY uint32
+	Path  string
+}
+
+func discoverMapTiles(dir string, targetMap int) (map[uint32][]mapTile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	groups := make(map[uint32][]mapTile)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".map") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) < 12 {
+			return nil, fmt.Errorf("map tile %s is shorter than the reference 12-byte header", path)
+		}
+		tile := mapTile{MapID: binary.LittleEndian.Uint32(data[0:4]), TileX: binary.LittleEndian.Uint32(data[4:8]), TileY: binary.LittleEndian.Uint32(data[8:12]), Path: path}
+		if targetMap >= 0 && tile.MapID != uint32(targetMap) {
+			continue
+		}
+		groups[tile.MapID] = append(groups[tile.MapID], tile)
+	}
+	return groups, nil
+}
+
+func buildNavMeshHeader(tiles []mapTile) []byte {
+	var maxX, maxY uint32
+	for _, tile := range tiles {
+		if tile.TileX > maxX {
+			maxX = tile.TileX
+		}
+		if tile.TileY > maxY {
+			maxY = tile.TileY
+		}
+	}
+	originX := float32(31-int32(maxX)) * moveMapGridSize
+	originZ := float32(31-int32(maxY)) * moveMapGridSize
+	header := make([]byte, 28)
+	binary.LittleEndian.PutUint32(header[0:4], math.Float32bits(originX))
+	binary.LittleEndian.PutUint32(header[4:8], math.Float32bits(math.SmallestNonzeroFloat32))
+	binary.LittleEndian.PutUint32(header[8:12], math.Float32bits(originZ))
+	binary.LittleEndian.PutUint32(header[12:16], math.Float32bits(moveMapGridSize))
+	binary.LittleEndian.PutUint32(header[16:20], math.Float32bits(moveMapGridSize))
+	binary.LittleEndian.PutUint32(header[20:24], uint32(len(tiles)))
+	binary.LittleEndian.PutUint32(header[24:28], 1<<22)
+	return header
+}
+
+func writeNavMeshHeaders(output string, groups map[uint32][]mapTile) (int, error) {
+	mapIDs := make([]uint32, 0, len(groups))
+	for mapID := range groups {
+		mapIDs = append(mapIDs, mapID)
+	}
+	sort.Slice(mapIDs, func(i, j int) bool { return mapIDs[i] < mapIDs[j] })
+	for _, mapID := range mapIDs {
+		path := filepath.Join(output, fmt.Sprintf("%03d.mmap", mapID))
+		if err := os.WriteFile(path, buildNavMeshHeader(groups[mapID]), 0o644); err != nil {
+			return 0, err
+		}
+	}
+	return len(mapIDs), nil
+}
 
 func printBanner() {
 	fmt.Println("==========================================================")
@@ -39,14 +116,14 @@ func main() {
 
 	start := time.Now()
 
-	// Locate available maps
+	startMaps, err := discoverMapTiles(*mapsDir, *targetMap)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to inspect map geometry files: %v\n", err)
+		os.Exit(1)
+	}
 	mapsFound := 0
-	if entries, err := os.ReadDir(*mapsDir); err == nil {
-		for _, entry := range entries {
-			if strings.HasSuffix(entry.Name(), ".map") {
-				mapsFound++
-			}
-		}
+	for _, tiles := range startMaps {
+		mapsFound += len(tiles)
 	}
 
 	fmt.Printf("Located %d map geometry files in '%s'\n", mapsFound, *mapsDir)
@@ -56,13 +133,17 @@ func main() {
 		fmt.Println("Generating MoveMap tiles across all maps...")
 	}
 
-	// Generate map header tile (.mmap)
-	headerPath := filepath.Join(*outputDir, "000.mmap")
-	if _, err := os.Stat(headerPath); os.IsNotExist(err) {
-		dummyHeader := make([]byte, 16)
-		copy(dummyHeader, []byte("MMAP"))
-		_ = os.WriteFile(headerPath, dummyHeader, 0o644)
+	if mapsFound == 0 {
+		fmt.Println("No reference .map geometry files were found; no output was fabricated.")
+		return
 	}
+	headers, err := writeNavMeshHeaders(*outputDir, startMaps)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to write navigation headers: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Wrote %d reference-format navigation headers; tile geometry generation is not implemented and no .mmtile files were fabricated.\n", headers)
+	os.Exit(1)
 
 	elapsed := time.Since(start)
 	fmt.Printf("MoveMap tile generation finished in %v. Output directory: '%s'\n", elapsed.Round(time.Millisecond), *outputDir)

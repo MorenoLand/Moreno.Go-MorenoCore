@@ -262,6 +262,8 @@ func toolBehaviorFindings(name, content string) []string {
 	case "mmaps_generator":
 		if strings.Contains(lower, "dummyheader") || strings.Contains(content, `"MMAP"`) {
 			findings = append(findings, "source emits a dummy MMAP header instead of navmesh tiles")
+		} else if strings.Contains(lower, "tile geometry generation is not implemented") {
+			findings = append(findings, "source writes reference dtNavMeshParams headers but does not generate .mmtile navmesh data")
 		}
 	case "mpq":
 		if strings.Contains(lower, "unsupported mpq huffman") {
