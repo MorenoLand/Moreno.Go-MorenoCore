@@ -341,6 +341,9 @@ func (s *session) handleGuildAccept(ctx context.Context) bool {
 	s.guildInvitedID = 0
 	s.guildInviterGUID = 0
 	_, _ = cdb.ExecContext(ctx, "REPLACE INTO guild_member (guildid, guid, rank, pnote, offnote) VALUES (?, ?, 4, '', '')", guildID, s.playerGUID)
+	s.player.GuildID = guildID
+	s.player.GuildRank = 4
+	s.sendPlayerUpdate()
 
 	// Broadcast join event
 	eventBuf := protocol.NewBuffer(64)
@@ -378,6 +381,9 @@ func (s *session) handleGuildLeave(ctx context.Context) bool {
 		return true
 	}
 	_, _ = cdb.ExecContext(ctx, "DELETE FROM guild_member WHERE guid = ?", s.playerGUID)
+	s.player.GuildID = 0
+	s.player.GuildRank = 0
+	s.sendPlayerUpdate()
 	eventBuf := protocol.NewBuffer(64)
 	eventBuf.WriteU8(4) // GE_LEFT
 	eventBuf.WriteU8(1)
