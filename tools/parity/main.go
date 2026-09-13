@@ -218,8 +218,10 @@ func toolBehaviorFindings(name, content string) []string {
 			findings = append(findings, "source emits a dummy MMAP header instead of navmesh tiles")
 		}
 	case "mpq":
-		if strings.Contains(lower, "unsupported mpq compression") {
-			findings = append(findings, "source rejects required MPQ compression methods")
+		if strings.Contains(lower, "unsupported mpq huffman") {
+			findings = append(findings, "source rejects MPQ Huffman compression")
+		} else if strings.Contains(lower, "unsupported mpq compression") {
+			findings = append(findings, "source rejects unknown or remaining unsupported MPQ compression methods")
 		}
 	}
 	return findings
