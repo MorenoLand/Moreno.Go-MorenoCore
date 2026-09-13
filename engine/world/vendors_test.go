@@ -51,7 +51,7 @@ func TestVendorBuyingAndSelling(t *testing.T) {
 		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
 		"INSERT INTO characters VALUES (1, 1000, '')",
 		"INSERT INTO item_template VALUES (5001, 100, 50, 10, 100, 1, 0, -1, 0, 0, 0)",
-		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 0)",
+		"INSERT INTO npc_vendor VALUES (101, 0, 5001, 0, 0, 0)",
 	} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -222,7 +222,7 @@ func TestVendorListEncodesUnlimitedStockAsZero(t *testing.T) {
 	for _, statement := range []string{
 		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
 		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER, AllowableClass INTEGER, Bonding INTEGER, RequiredReputationFaction INTEGER, RequiredReputationRank INTEGER)",
-		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 0)",
+		"INSERT INTO npc_vendor VALUES (101, 0, 5001, 0, 0, 0)",
 		"INSERT INTO item_template VALUES (5001, 100, 50, 100, 1, 0, -1, 0, 0, 0)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
@@ -249,7 +249,10 @@ func TestVendorListEncodesUnlimitedStockAsZero(t *testing.T) {
 	if count, err := reader.ReadU8(); err != nil || count != 1 {
 		t.Fatalf("count=%d err=%v", count, err)
 	}
-	for i := 0; i < 3; i++ {
+	if slot, err := reader.ReadU32(); err != nil || slot != 1 {
+		t.Fatalf("wire vendor slot=%d err=%v", slot, err)
+	}
+	for i := 0; i < 2; i++ {
 		if _, err := reader.ReadU32(); err != nil {
 			t.Fatal(err)
 		}

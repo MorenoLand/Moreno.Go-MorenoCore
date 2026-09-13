@@ -167,10 +167,7 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		if buyPrice > 0 {
 			buyPrice = int64(math.Floor(float64(buyPrice) * s.vendorReputationPriceDiscount(ctx, creatureEntry)))
 		}
-		itemSlot := uint32(slot)
-		if itemSlot == 0 {
-			itemSlot = fallbackSlot
-		}
+		itemSlot := fallbackSlot
 		fallbackSlot++
 		if buyCount <= 0 {
 			buyCount = 1
@@ -262,8 +259,14 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		return true
 	}
 	vendorEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
-	var maxCount, incrTime, extCost, buyPrice, buyCount, flagsExtra, allowableClass, bonding, requiredReputationFaction, requiredReputationRank int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT v.maxcount, v.incrtime, v.ExtendedCost, t.BuyPrice, t.BuyCount, COALESCE(t.FlagsExtra, 0), COALESCE(t.AllowableClass, -1), COALESCE(t.Bonding, 0), COALESCE(t.RequiredReputationFaction, 0), COALESCE(t.RequiredReputationRank, 0) FROM npc_vendor AS v JOIN item_template AS t ON t.entry = v.item WHERE v.entry = ? AND v.item = ? AND v.slot = ? LIMIT 1", vendorEntry, itemEntry, slot).Scan(&maxCount, &incrTime, &extCost, &buyPrice, &buyCount, &flagsExtra, &allowableClass, &bonding, &requiredReputationFaction, &requiredReputationRank); err != nil {
+	var dbItemEntry, maxCount, incrTime, extCost, buyPrice, buyCount, flagsExtra, allowableClass, bonding, requiredReputationFaction, requiredReputationRank int64
+	var queryErr error
+	if slot == 0 || slot > 150 {
+		queryErr = sql.ErrNoRows
+	} else {
+		queryErr = s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT v.item, v.maxcount, v.incrtime, v.ExtendedCost, t.BuyPrice, t.BuyCount, COALESCE(t.FlagsExtra, 0), COALESCE(t.AllowableClass, -1), COALESCE(t.Bonding, 0), COALESCE(t.RequiredReputationFaction, 0), COALESCE(t.RequiredReputationRank, 0) FROM npc_vendor AS v JOIN item_template AS t ON t.entry = v.item WHERE v.entry = ? ORDER BY v.slot, v.item LIMIT 1 OFFSET ?", vendorEntry, slot-1).Scan(&dbItemEntry, &maxCount, &incrTime, &extCost, &buyPrice, &buyCount, &flagsExtra, &allowableClass, &bonding, &requiredReputationFaction, &requiredReputationRank)
+	}
+	if queryErr != nil || uint32(dbItemEntry) != itemEntry {
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
 		return true
 	}
