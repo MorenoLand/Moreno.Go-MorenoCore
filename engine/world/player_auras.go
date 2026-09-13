@@ -71,6 +71,7 @@ func (s *session) loadPlayerAuras(ctx context.Context, state *playerState) error
 						continue
 					}
 					aura.AuraType = effect.Aura
+					aura.MiscValue = effect.MiscValue
 					if effect.AuraPeriod > 0 {
 						aura.PeriodMs = effect.AuraPeriod
 					}

@@ -86,7 +86,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			s.debug("chat rejected", "account", s.accountName, "reason", "unknown language", "language", language)
 			return true
 		}
-		if skill != 0 && !s.hasLanguageSkill(skill) {
+		if skill != 0 && !s.hasLanguageSkill(skill) && !s.hasLanguageAura(language) {
 			s.debug("chat rejected", "account", s.accountName, "reason", "language not learned", "language", language, "skill", skill)
 			return true
 		}
@@ -184,6 +184,13 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			} else {
 				language = 1 // Orcish
 			}
+		}
+	}
+	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
+		if modifiedLanguage, ok := s.chatLanguageModifier(); ok {
+			language = modifiedLanguage
+		} else if s.twoSideChat {
+			language = languageUniversal
 		}
 	}
 	if language != languageAddon && isGM && (s.gmChat || s.player.ExtraFlags&playerExtraGMChat != 0) {
@@ -286,6 +293,73 @@ func (s *session) hasLanguageSkill(skill uint16) bool {
 		}
 	}
 	return false
+}
+
+func (s *session) hasLanguageAura(language uint32) bool {
+	if s == nil {
+		return false
+	}
+	s.castMu.Lock()
+	spellIDs := make([]uint32, 0, len(s.auras))
+	for spellID := range s.auras {
+		spellIDs = append(spellIDs, spellID)
+	}
+	for _, aura := range s.activeAuras {
+		if aura != nil && aura.AuraType == 244 && uint32(aura.MiscValue) == language {
+			s.castMu.Unlock()
+			return true
+		}
+	}
+	s.castMu.Unlock()
+	if s.server == nil || s.server.Data == nil {
+		return false
+	}
+	for _, spellID := range spellIDs {
+		spell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		for _, effect := range spell.Effects {
+			if effect.Aura == 244 && uint32(effect.MiscValue) == language {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *session) chatLanguageModifier() (uint32, bool) {
+	if s == nil {
+		return 0, false
+	}
+	s.castMu.Lock()
+	spellIDs := make([]uint32, 0, len(s.auras))
+	for spellID := range s.auras {
+		spellIDs = append(spellIDs, spellID)
+	}
+	for _, aura := range s.activeAuras {
+		if aura != nil && aura.AuraType == 75 {
+			language := uint32(aura.MiscValue)
+			s.castMu.Unlock()
+			return language, true
+		}
+	}
+	s.castMu.Unlock()
+	if s.server == nil || s.server.Data == nil {
+		return 0, false
+	}
+	for _, spellID := range spellIDs {
+		spell, found, err := s.server.Data.Spell(spellID)
+		if err != nil || !found {
+			continue
+		}
+		for _, effect := range spell.Effects {
+			if effect.Aura == 75 {
+				return uint32(effect.MiscValue), true
+			}
+		}
+	}
+	return 0, false
 }
 
 func (s *session) skipChatFlood() bool {

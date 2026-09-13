@@ -1646,6 +1646,7 @@ type activeAura struct {
 	CasterGUID         uint64
 	TargetGUID         uint64
 	SchoolMask         uint32
+	MiscValue          int32
 	Amount             uint32
 	DurationMs         uint32
 	PeriodMs           uint32
@@ -2018,6 +2019,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	var auraType uint32
 	var dispelType uint32
 	var mechanic uint32
+	var miscValue int32
 	if s.server != nil && s.server.Data != nil {
 		if sp, found, _ := s.server.Data.Spell(spellID); found {
 			auraInterruptFlags = sp.AuraInterruptFlags
@@ -2025,6 +2027,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 			mechanic = sp.Mechanic
 			if len(sp.Effects) > 0 {
 				auraType = sp.Effects[0].Aura
+				miscValue = sp.Effects[0].MiscValue
 			}
 		}
 	}
@@ -2039,6 +2042,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		AuraType:           auraType,
 		CasterGUID:         s.playerGUID,
 		TargetGUID:         s.playerGUID,
+		MiscValue:          miscValue,
 		DurationMs:         durationMs,
 		RemainingMs:        durationMs,
 		Slot:               slot,
@@ -2191,6 +2195,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 			CasterGUID:         s.playerGUID,
 			TargetGUID:         targetGUID,
 			SchoolMask:         schoolMask,
+			MiscValue:          eff.MiscValue,
 			Amount:             amount,
 			DurationMs:         durationMs,
 			PeriodMs:           periodMs,
@@ -2267,6 +2272,7 @@ func (s *session) applyAuraToTarget(ctx context.Context, targetGUID uint64, spel
 		CasterGUID:   s.playerGUID,
 		TargetGUID:   targetGUID,
 		SchoolMask:   schoolMask,
+		MiscValue:    eff.MiscValue,
 		Amount:       amount,
 		DurationMs:   durationMs,
 		PeriodMs:     periodMs,

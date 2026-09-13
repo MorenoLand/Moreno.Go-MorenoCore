@@ -160,6 +160,57 @@ func TestChatLanguageSkillMappingMatchesReference(t *testing.T) {
 	}
 }
 
+func TestChatComprehendLanguageAuraAllowsUnlearnedLanguage(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Map: 0, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}, activeAuras: map[uint32]*activeAura{90001: {SpellID: 90001, AuraType: 244, MiscValue: 1}}}
+	server.sessions[state] = struct{}{}
+	payload := protocol.NewBuffer(16)
+	payload.WriteU32(chatSay)
+	payload.WriteU32(1)
+	payload.WriteCString("hello")
+	done := make(chan bool, 1)
+	go func() { done <- state.handleMessageChat(context.Background(), payload.Bytes()) }()
+	if _, _, err := readServerFrame(clientConn, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !<-done {
+		t.Fatal("comprehend-language aura rejected a valid language")
+	}
+}
+
+func TestChatLanguageModifierAndTwoSidePermission(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 99, twoSideChat: true, player: &playerState{GUID: 99, Name: "Tester", Map: 0, Health: 100, MaxHealth: 100, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}, activeAuras: map[uint32]*activeAura{90002: {SpellID: 90002, AuraType: 75, MiscValue: 109}}}
+	server.sessions[state] = struct{}{}
+	payload := protocol.NewBuffer(16)
+	payload.WriteU32(chatSay)
+	payload.WriteU32(7)
+	payload.WriteCString("hello")
+	done := make(chan bool, 1)
+	go func() { done <- state.handleMessageChat(context.Background(), payload.Bytes()) }()
+	_, response, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := protocol.NewReader(response)
+	if _, err := reader.ReadU8(); err != nil {
+		t.Fatal(err)
+	}
+	language, err := reader.ReadU32()
+	if err != nil || language != 109 {
+		t.Fatalf("language=%d err=%v", language, err)
+	}
+	if !<-done {
+		t.Fatal("language modifier rejected a valid say packet")
+	}
+}
+
 func TestMutedAccountChatIsConsumed(t *testing.T) {
 	state := &session{playerLoaded: true, muteTime: time.Now().Add(time.Minute).Unix(), player: &playerState{GUID: 1, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
 	payload := protocol.NewBuffer(16)
