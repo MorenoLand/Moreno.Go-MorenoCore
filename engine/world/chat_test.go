@@ -186,6 +186,18 @@ func TestChatFloodMuteMatchesReferenceCounter(t *testing.T) {
 	}
 }
 
+func TestGMSilenceAuraBlocksNonWhisperChat(t *testing.T) {
+	server := &Server{sessions: make(map[*session]struct{})}
+	state := &session{server: server, playerLoaded: true, auras: map[uint32]struct{}{1852: {}}, player: &playerState{GUID: 1, Name: "Silenced", Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	payload := protocol.NewBuffer(16)
+	payload.WriteU32(chatSay)
+	payload.WriteU32(7)
+	payload.WriteCString("blocked")
+	if !state.handleMessageChat(context.Background(), payload.Bytes()) {
+		t.Fatal("silenced chat closed the session")
+	}
+}
+
 func TestMalformedChatDoesNotCloseSession(t *testing.T) {
 	server := &Server{sessions: make(map[*session]struct{})}
 	state := &session{server: server, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Name: "Tester"}}

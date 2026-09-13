@@ -122,6 +122,10 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "warden check response")
 		return true
 	}
+	if typeID != chatWhisper && s.hasAura(1852) {
+		s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852)
+		return true
+	}
 	if strings.HasPrefix(message, ".") || strings.HasPrefix(message, "!") {
 		command := strings.TrimSpace(message[1:])
 		if command == "" {
