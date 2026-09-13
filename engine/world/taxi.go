@@ -97,6 +97,9 @@ func (s *session) nearestCreatureTaxiNode(ctx context.Context, guid uint64) (uin
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return 0, false
 	}
+	if !s.canInteractWithNPC(ctx, guid, uint64(unitNPCFlagFlightmaster)) {
+		return 0, false
+	}
 	creature := s.luaCreature(ctx, guid)
 	if creature == nil {
 		return 0, false
