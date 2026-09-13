@@ -87,6 +87,9 @@ func (s *session) loadLearnedSpells(ctx context.Context, guid uint64, race, clas
 	}
 	starterIDs := s.loadStarterSpellIDs(ctx, race, class)
 	for _, id := range starterIDs {
+		if !s.spellAvailableAtLevel(id, level) {
+			continue
+		}
 		found := false
 		for _, sp := range result {
 			if sp.ID == id {

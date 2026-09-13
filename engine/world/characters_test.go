@@ -404,6 +404,54 @@ func TestLearnedSpellsHideFutureSpellLevels(t *testing.T) {
 	t.Fatal("all-spells mode did not preserve future spell")
 }
 
+func TestStarterSpellsHideFutureSpellLevels(t *testing.T) {
+	cdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cdb.Close()
+	wdb, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wdb.Close()
+	if _, err := cdb.Exec("CREATE TABLE character_spell (guid INTEGER, spell INTEGER, active INTEGER, disabled INTEGER, PRIMARY KEY (guid, spell))"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wdb.Exec("CREATE TABLE playercreateinfo_cast_spell (raceMask INTEGER, classMask INTEGER, spell INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wdb.Exec("INSERT INTO playercreateinfo_cast_spell VALUES (1, 1, 5003)"); err != nil {
+		t.Fatal(err)
+	}
+	dbcDir := t.TempDir()
+	const fieldCount = 234
+	record := make([]byte, fieldCount*4)
+	binary.LittleEndian.PutUint32(record[0:], 5003)
+	binary.LittleEndian.PutUint32(record[39*4:], 70)
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "Spell.dbc"), append(header, append(record, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	characters := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: cdb}
+	world := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: wdb}
+	sess := &session{server: &Server{CharactersStore: characters, WorldStore: world, Data: wotlk.NewStore(dbcDir)}, playerGUID: 1}
+	spells, err := sess.loadLearnedSpells(context.Background(), 1, 1, 1, 21)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spell := range spells {
+		if spell.ID == 5003 {
+			t.Fatal("future starter spell was exposed below its required level")
+		}
+	}
+}
+
 func TestCompleteLogoutCleansStateBeforeCompletionPacket(t *testing.T) {
 	root, err := packageRoot()
 	if err != nil {
