@@ -3069,6 +3069,20 @@ func (s *session) decrypt(data []byte) error {
 }
 
 func (s *session) write(opcode uint16, payload []byte, encrypt bool) error {
+	if s != nil && s.authed && s.server != nil && s.server.Features != nil && s.server.Features.Scripts != nil {
+		packet := &scripting.Packet{Opcode: uint32(opcode), Data: append([]byte(nil), payload...)}
+		values, hookErr := s.server.Features.Scripts.TriggerPacketEvent(context.Background(), int(opcode), 7, packet, s.luaPlayer())
+		if hookErr != nil {
+			s.debug("lua packet send hook failed", "account", s.accountName, "opcode", opcode, "error", hookErr)
+		}
+		for _, value := range values {
+			if allowed, ok := value.(bool); ok && !allowed {
+				return nil
+			}
+		}
+		opcode = uint16(packet.Opcode)
+		payload = packet.Data
+	}
 	if s != nil && s.server != nil && s.server.TraceRecorder != nil {
 		s.server.TraceRecorder.Record(protocoltrace.ServerToClient, uint32(opcode), payload, opcodeName(uint32(opcode)))
 	}
