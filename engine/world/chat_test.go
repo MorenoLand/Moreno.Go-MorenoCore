@@ -22,6 +22,7 @@ func TestGuildChatUsesReferenceRankRights(t *testing.T) {
 	for _, statement := range []string{
 		"CREATE TABLE guild_member (guildid INTEGER, guid INTEGER, rank INTEGER)",
 		"CREATE TABLE guild_rank (guildid INTEGER, rid INTEGER, rights INTEGER)",
+		"CREATE TABLE character_social (guid INTEGER, friend INTEGER, flags INTEGER)",
 		"INSERT INTO guild_member VALUES (4, 10, 1), (4, 11, 2)",
 		"INSERT INTO guild_rank VALUES (4, 1, 66), (4, 2, 65)",
 	} {
@@ -37,6 +38,12 @@ func TestGuildChatUsesReferenceRankRights(t *testing.T) {
 	target := &session{server: server, playerGUID: 11, player: &playerState{GuildID: 4}}
 	if !server.guildChatListenAllowed(target, false) || server.guildChatListenAllowed(target, true) {
 		t.Fatal("rank 2 guild/officer listening rights were not enforced")
+	}
+	if _, err := db.Exec("INSERT INTO character_social VALUES (11, 10, 2)"); err != nil {
+		t.Fatal(err)
+	}
+	if !server.chatIgnoredBy(11, 10) {
+		t.Fatal("guild recipient ignore state was not enforced")
 	}
 }
 

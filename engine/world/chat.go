@@ -185,6 +185,17 @@ func (s *Server) guildChatListenAllowed(target *session, officer bool) bool {
 	return rights&required == required
 }
 
+func (s *Server) chatIgnoredBy(targetGUID, sourceGUID uint64) bool {
+	if s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return false
+	}
+	var flags int64
+	if err := s.CharactersStore.DB.QueryRowContext(context.Background(), "SELECT flags FROM character_social WHERE guid = ? AND friend = ? LIMIT 1", targetGUID, sourceGUID).Scan(&flags); err != nil {
+		return false
+	}
+	return uint64(flags)&uint64(socialFlagIgnored) != 0
+}
+
 func luaCancelled(values []any) bool {
 	for _, value := range values {
 		if cancelled, ok := value.(bool); ok && !cancelled {
@@ -244,6 +255,9 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 				continue
 			}
 			if !s.guildChatListenAllowed(value, chatType == chatOfficer) {
+				continue
+			}
+			if s.chatIgnoredBy(value.playerGUID, source.playerGUID) {
 				continue
 			}
 		} else if value.player.Map != source.player.Map {
