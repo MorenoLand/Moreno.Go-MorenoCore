@@ -144,15 +144,26 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 	if err != nil {
 		return true
 	}
-	defer rows.Close()
+	type vendorRow struct {
+		slot, item, maxCount, incrTime, extCost, display, buyPrice, maxDur, buyCount, flagsExtra int64
+	}
+	rowsData := make([]vendorRow, 0, 150)
+	for rows.Next() {
+		var row vendorRow
+		if err := rows.Scan(&row.slot, &row.item, &row.maxCount, &row.incrTime, &row.extCost, &row.display, &row.buyPrice, &row.maxDur, &row.buyCount, &row.flagsExtra); err == nil {
+			rowsData = append(rowsData, row)
+		}
+	}
+	rowsErr := rows.Err()
+	_ = rows.Close()
+	if rowsErr != nil {
+		return true
+	}
 	var items []vendorItemRecord
 	var fallbackSlot uint32 = 1
 	isGM := s.player != nil && (s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0)
-	for rows.Next() {
-		var slot, item, maxCount, incrTime, extCost, display, buyPrice, maxDur, buyCount, flagsExtra int64
-		if err := rows.Scan(&slot, &item, &maxCount, &incrTime, &extCost, &display, &buyPrice, &maxDur, &buyCount, &flagsExtra); err != nil {
-			continue
-		}
+	for _, row := range rowsData {
+		item, maxCount, incrTime, extCost, display, buyPrice, maxDur, buyCount, flagsExtra := row.item, row.maxCount, row.incrTime, row.extCost, row.display, row.buyPrice, row.maxDur, row.buyCount, row.flagsExtra
 		if extCost != 0 {
 			if s.server.Data == nil {
 				continue
@@ -163,6 +174,9 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 			if flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) == 0 {
 				buyPrice = 0
 			}
+		}
+		if meets, err := s.meetVendorItemConditions(ctx, creatureEntry, uint32(item)); err != nil || !meets {
+			continue
 		}
 		if buyPrice > 0 {
 			buyPrice = int64(math.Floor(float64(buyPrice) * s.vendorReputationPriceDiscount(ctx, creatureEntry)))
@@ -259,6 +273,10 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		return true
 	}
 	vendorEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
+	if meets, err := s.meetVendorItemConditions(ctx, vendorEntry, itemEntry); err != nil || !meets {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
+		return true
+	}
 	var dbItemEntry, maxCount, incrTime, extCost, buyPrice, buyCount, flagsExtra, allowableClass, bonding, requiredReputationFaction, requiredReputationRank int64
 	var queryErr error
 	if slot == 0 || slot > 150 {

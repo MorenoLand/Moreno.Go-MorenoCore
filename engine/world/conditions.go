@@ -245,6 +245,58 @@ func (s *session) meetGossipOptionConditions(ctx context.Context, menuID, option
 	return false, nil
 }
 
+func (s *session) meetVendorItemConditions(ctx context.Context, creatureEntry, itemEntry uint32) (bool, error) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true, nil
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT ElseGroup, ConditionTypeOrReference, ConditionTarget, ConditionValue1, ConditionValue2, ConditionValue3, NegativeCondition FROM conditions WHERE SourceTypeOrReferenceId = 23 AND SourceGroup = ? AND SourceEntry = ? ORDER BY ElseGroup", creatureEntry, itemEntry)
+	if err != nil {
+		if missingTable(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	defer rows.Close()
+	conditions := make([]conditionRow, 0, 4)
+	for rows.Next() {
+		var row conditionRow
+		if err := rows.Scan(&row.ElseGroup, &row.ConditionType, &row.ConditionTarget, &row.Value1, &row.Value2, &row.Value3, &row.Negative); err != nil {
+			return false, err
+		}
+		conditions = append(conditions, row)
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if len(conditions) == 0 {
+		return true, nil
+	}
+	groups := make(map[int64][]conditionRow)
+	for _, row := range conditions {
+		groups[row.ElseGroup] = append(groups[row.ElseGroup], row)
+	}
+	for _, group := range groups {
+		met := true
+		for _, row := range group {
+			ok, err := s.evalCondition(ctx, row, creatureEntry)
+			if err != nil {
+				return false, err
+			}
+			if row.Negative {
+				ok = !ok
+			}
+			if !ok {
+				met = false
+				break
+			}
+		}
+		if met {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // evalCondition mirrors Condition::Meets for the types the gossip option
 // data actually uses; unimplemented types report not-met so hidden options
 // stay hidden, matching conservative TC behavior.

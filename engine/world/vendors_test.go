@@ -213,6 +213,30 @@ func TestVendorItemAccessRequirements(t *testing.T) {
 	}
 }
 
+func TestVendorConditionsGateListAndPurchase(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE conditions (SourceTypeOrReferenceId INTEGER, SourceGroup INTEGER, SourceEntry INTEGER, ElseGroup INTEGER, ConditionTypeOrReference INTEGER, ConditionTarget INTEGER, ConditionValue1 INTEGER, ConditionValue2 INTEGER, ConditionValue3 INTEGER, NegativeCondition INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	sess := &session{server: &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}, CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}}, player: &playerState{Class: 8}}
+	if _, err := db.Exec("INSERT INTO conditions VALUES (23, 101, 5001, 0, 15, 0, 1, 0, 0, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := sess.meetVendorItemConditions(context.Background(), 101, 5001); err != nil || allowed {
+		t.Fatalf("class-gated vendor item allowed=%v err=%v", allowed, err)
+	}
+	if _, err := db.Exec("UPDATE conditions SET ConditionValue1 = ? WHERE SourceTypeOrReferenceId = 23", 1<<(8-1)); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := sess.meetVendorItemConditions(context.Background(), 101, 5001); err != nil || !allowed {
+		t.Fatalf("matching vendor condition allowed=%v err=%v", allowed, err)
+	}
+}
+
 func TestVendorReputationRankUsesAbsoluteStanding(t *testing.T) {
 	sess := &session{player: &playerState{Reputations: []playerReputation{{FactionID: 72, Base: 500, Standing: 2999}}}}
 	if got := sess.vendorReputationRank(context.Background(), 72); got != reputationRank(2999) {
