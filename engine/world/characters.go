@@ -1693,15 +1693,23 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 	}
 	s.releaseActiveLoot()
 	inCombat := s.attackTarget != 0 || (s.player != nil && s.player.UnitFlags&unitFlagInCombat != 0)
-	inCombat = inCombat && (s.player == nil || s.player.PlayerFlags&playerFlagResting == 0)
-	if inCombat && s.security == 0 {
+	resting := s.player != nil && s.player.PlayerFlags&playerFlagResting != 0
+	reason := uint32(0)
+	if inCombat && !resting && s.security == 0 {
+		reason = 1 // ERR_LOGOUT_IN_COMBAT
+	} else if s.isFalling {
+		reason = 3 // ERR_LOGOUT_FAILED_FALLING
+	} else if s.duelPartner != 0 || s.hasAura(9454) {
+		reason = 2 // ERR_LOGOUT_FAILED_DUEL
+	}
+	if reason != 0 {
 		response := protocol.NewBuffer(5)
-		response.WriteU32(1) // reason 1 = InCombat (ERR_LOGOUT_IN_COMBAT)
+		response.WriteU32(reason)
 		response.WriteU8(0)
 		_ = s.write(uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE), response.Bytes(), true)
 		return true
 	}
-	instant := (s.player != nil && s.player.PlayerFlags&playerFlagResting != 0) || s.security > 0 || s.inFlight
+	instant := (resting && !inCombat) || s.security > 0 || s.inFlight
 	response := protocol.NewBuffer(5)
 	response.WriteU32(0) // reason 0 = OK
 	if instant {

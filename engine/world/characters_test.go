@@ -581,6 +581,46 @@ func TestLogoutRejectsPlayerCombatFlag(t *testing.T) {
 	}
 }
 
+func TestLogoutRejectsFallingAndDuelStates(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		falling bool
+		duel    uint64
+		reason  uint32
+	}{
+		{name: "falling", falling: true, reason: 3},
+		{name: "duel", duel: 77, reason: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			serverConn, clientConn := net.Pipe()
+			defer serverConn.Close()
+			defer clientConn.Close()
+			sess := &session{conn: serverConn, playerLoaded: true, isFalling: test.falling, duelPartner: test.duel, player: &playerState{GUID: 9}}
+			done := make(chan bool, 1)
+			go func() { done <- sess.handleLogoutRequest(context.Background()) }()
+			opcode, payload, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if opcode != uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE) || len(payload) != 5 {
+				t.Fatalf("opcode=%x payload=%x", opcode, payload)
+			}
+			reader := protocol.NewReader(payload)
+			reason, err := reader.ReadU32()
+			if err != nil || reason != test.reason {
+				t.Fatalf("reason=%d err=%v", reason, err)
+			}
+			instant, err := reader.ReadU8()
+			if err != nil || instant != 0 {
+				t.Fatalf("instant=%d err=%v", instant, err)
+			}
+			if !<-done || !sess.logoutAt.IsZero() {
+				t.Fatal("invalid logout rejection state")
+			}
+		})
+	}
+}
+
 func makeMemoryStores(t *testing.T, root string) *database.Set {
 	t.Helper()
 	open := func(name string) *database.Store {

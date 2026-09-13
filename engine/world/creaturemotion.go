@@ -980,9 +980,13 @@ func (s *Server) isHostileFaction(creatureFaction uint32, player playerPos) bool
 					return false
 				}
 			}
+			if creatureTemplate.EnemyGroup&playerTemplate.FactionGroup != 0 {
+				return true
+			}
 			if creatureTemplate.FriendGroup&playerTemplate.FactionGroup != 0 || creatureTemplate.FactionGroup&playerTemplate.FriendGroup != 0 {
 				return false
 			}
+			return creatureTemplate.Flags&0x00002000 != 0
 		}
 	}
 	return isHostileFactionFallback(creatureFaction, player.Race)

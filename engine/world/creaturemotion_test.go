@@ -152,6 +152,9 @@ func TestFactionHostilityHonorsSavedTownReputation(t *testing.T) {
 	if server.isHostileFaction(57, player) {
 		t.Fatal("Ironforge guard was hostile at friendly saved Ironforge reputation")
 	}
+	if server.isHostileFaction(188, player) {
+		t.Fatal("Wild Turkey faction was hostile despite a neutral DBC relation")
+	}
 }
 
 func TestDeadGhostIsNotTargetedAndPassiveCreaturesDoNotAggro(t *testing.T) {
