@@ -131,6 +131,7 @@ func (s *session) teleportTo(mapID uint32, x, y, z, orientation float32) {
 		packet.WriteF32(orientation)
 		packet.WriteU32(0) // fall time
 		_ = s.write(uint16(protocol.OpcodeMSG_MOVE_TELEPORT_ACK), packet.Bytes(), true)
+		s.refreshNearbyObjects(context.Background())
 	} else {
 		packet := protocol.NewBuffer(20)
 		packet.WriteU32(mapID)
