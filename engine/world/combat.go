@@ -1150,11 +1150,7 @@ func (s *session) loadCombatTarget(ctx context.Context, guid uint64) (combatTarg
 	if motion := s.server.creatureMotion[target.GUID]; motion != nil {
 		target.X, target.Y, target.Z, target.Orientation = motion.X, motion.Y, motion.Z, motion.Orientation
 		target.UnitFlags, target.FlagsExtra = motion.UnitFlags, motion.FlagsExtra
-		if motion.Health > 0 {
-			target.Health = motion.Health
-		} else {
-			motion.Health = target.Health
-		}
+		target.Health = motion.Health
 		if motion.Armor > 0 {
 			target.Armor = motion.Armor
 		}

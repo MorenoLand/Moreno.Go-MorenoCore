@@ -87,6 +87,32 @@ func TestLootingMoneyAndItems(t *testing.T) {
 	}
 }
 
+func TestDeadMotionStateRemainsLootableAgainstStaleDatabaseHealth(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER, map INTEGER, position_x REAL, position_y REAL, position_z REAL, curhealth INTEGER); CREATE TABLE creature_template (entry INTEGER PRIMARY KEY)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO creature VALUES (1, 303, 0, 10, 20, 30, 100); INSERT INTO creature_template VALUES (303)"); err != nil {
+		t.Fatal(err)
+	}
+	targetGUID := creatureWorldGUID(1, 303)
+	server := &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}, creatureMotion: map[uint64]*creatureMotion{
+		targetGUID: {GUID: targetGUID, Entry: 303, Map: 0, X: 10, Y: 20, Z: 30, Health: 0, MaxHealth: 100},
+	}}
+	sess := &session{server: server, player: &playerState{Map: 0, X: 10, Y: 20, Z: 30}}
+	target, ok := sess.getCombatTarget(context.Background(), targetGUID)
+	if !ok {
+		t.Fatal("dead creature target was not loaded")
+	}
+	if target.Health != 0 {
+		t.Fatalf("stale database health resurrected motion target: %d", target.Health)
+	}
+}
+
 func TestLogoutReleasesActiveLootState(t *testing.T) {
 	server := &Server{creatureLoot: make(map[uint64]*activeLootState)}
 	targetGUID := creatureWorldGUID(4, 303)
