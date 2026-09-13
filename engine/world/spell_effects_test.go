@@ -28,3 +28,19 @@ func TestSpellMaxHealthHealDoesNotResurrect(t *testing.T) {
 		t.Fatalf("expected max-health heal to leave dead player at 0 health, got %d", sess.player.Health)
 	}
 }
+
+func TestSpellThreatEffectAddsCreatureThreat(t *testing.T) {
+	creatureGUID := creatureWorldGUID(7, 123)
+	server := &Server{sessions: make(map[*session]struct{}), creatureMotion: map[uint64]*creatureMotion{creatureGUID: {GUID: creatureGUID, Map: 0, Health: 100, MaxHealth: 100, X: 4, Y: 0, Z: 0}}}
+	sess := &session{server: server, playerGUID: 1, player: &playerState{GUID: 1, Health: 100, MaxHealth: 100, Map: 0, X: 0, Y: 0, Z: 0}}
+	server.sessions[sess] = struct{}{}
+	sess.applySpellThreat(context.Background(), creatureGUID, 25)
+	server.motionMu.Lock()
+	motion := server.creatureMotion[creatureGUID]
+	threat := motion.ThreatMgr.GetThreat(sess.playerGUID)
+	inCombat, target := motion.InCombat, motion.TargetGUID
+	server.motionMu.Unlock()
+	if threat != 25 || !inCombat || target != sess.playerGUID {
+		t.Fatalf("threat=%v inCombat=%v target=%d", threat, inCombat, target)
+	}
+}

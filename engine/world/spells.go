@@ -36,6 +36,7 @@ const (
 	itemSubclassArmorShield  = 6
 
 	spellEffectEnergize      = 30
+	spellEffectThreat        = 63
 	spellEffectTriggerSpell  = 64
 	spellEffectHealMaxHealth = 67
 )
@@ -676,6 +677,11 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 						s.castSpellDirect(effCtx, eff.TriggerSpell, effectTarget)
 					}
 				}
+			case spellEffectThreat:
+				amount := eff.BasePoints + 1
+				for _, effectTarget := range hitTargets {
+					s.applySpellThreat(effCtx, effectTarget, amount)
+				}
 			case spellEffectHealMaxHealth:
 				for _, effectTarget := range hitTargets {
 					s.executeSpellMaxHealthHeal(effCtx, effectTarget, spellID)
@@ -1208,6 +1214,8 @@ func (s *session) castSpellDirect(ctx context.Context, spellID uint32, targetGUI
 			if eff.TriggerSpell != 0 && eff.TriggerSpell != spellID {
 				s.castSpellDirect(ctx, eff.TriggerSpell, targetGUID)
 			}
+		} else if eff.Effect == spellEffectThreat {
+			s.applySpellThreat(ctx, targetGUID, eff.BasePoints+1)
 		} else if eff.Effect == spellEffectHealMaxHealth {
 			s.executeSpellMaxHealthHeal(ctx, targetGUID, spellID)
 		}
@@ -1255,6 +1263,46 @@ func (s *session) applySpellEnergize(ctx context.Context, targetGUID uint64, pow
 			_, _ = target.server.CharactersStore.DB.ExecContext(ctx, fmt.Sprintf("UPDATE characters SET %s = ? WHERE guid = ?", col), newPower, target.playerGUID)
 		}
 	}
+}
+
+func (s *session) applySpellThreat(ctx context.Context, targetGUID uint64, amount int32) {
+	if s == nil || s.player == nil || s.server == nil || targetGUID == 0 || amount <= 0 {
+		return
+	}
+	s.server.motionMu.Lock()
+	motion := s.server.creatureMotion[targetGUID]
+	if motion == nil {
+		low := uint32(targetGUID & 0x00FFFFFF)
+		entry := uint32((targetGUID >> 24) & 0x00FFFFFF)
+		motion = s.server.creatureMotion[creatureWorldGUID(low, entry)]
+	}
+	if motion == nil || motion.Health == 0 || isCreaturePassive(motion) {
+		s.server.motionMu.Unlock()
+		return
+	}
+	if motion.ThreatMgr == nil {
+		motion.ThreatMgr = NewThreatManager(motion.GUID)
+	}
+	wasInCombat := motion.InCombat
+	inMelee := distance3D(s.player.X, s.player.Y, s.player.Z, motion.X, motion.Y, motion.Z) <= meleeAttackRange
+	switched, victim := motion.ThreatMgr.AddThreat(s.playerGUID, float32(amount), inMelee)
+	motion.TargetGUID = victim
+	motion.InCombat = true
+	motion.Moving = false
+	mapID := motion.Map
+	entries := motion.ThreatMgr.SortedEntries()
+	guid := motion.GUID
+	s.server.motionMu.Unlock()
+	if switched {
+		s.server.broadcastHighestThreatUpdate(mapID, guid, victim, entries)
+	}
+	if !wasInCombat {
+		s.server.broadcastAIReaction(mapID, guid, 2)
+		startPkt := buildAttackStart(guid, s.playerGUID)
+		_ = s.write(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, true)
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_ATTACK_START), startPkt, s)
+	}
+	_ = ctx
 }
 
 func (s *session) executeSpellMaxHealthHeal(ctx context.Context, targetGUID uint64, spellID uint32) {
