@@ -4,7 +4,7 @@ import "testing"
 
 func TestFeatureConfigurationDefaultsAndOverrides(t *testing.T) {
 	c := Default()
-	if !c.SoloLFGEnable || !c.SoloLFGAnnounce || !c.NPCBots.Enable || c.CharactersPerAccount != 50 || c.CharactersPerRealm != 10 || c.ChatFloodMessageCount != 10 || c.ChatFloodMessageDelay != 1 || c.ChatFloodMuteTime != 10 {
+	if !c.SoloLFGEnable || !c.SoloLFGAnnounce || !c.NPCBots.Enable || c.CharactersPerAccount != 50 || c.CharactersPerRealm != 10 || c.ChatFloodMessageCount != 10 || c.ChatFloodMessageDelay != 1 || c.ChatFloodMuteTime != 10 || c.ChatChannelLevelReq != 1 || c.ChatWhisperLevelReq != 1 || c.ChatEmoteLevelReq != 1 || c.ChatSayLevelReq != 1 || c.ChatYellLevelReq != 1 {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
 	if err := c.Set("CharacterCreating.Disabled.RaceMask", "1024"); err != nil {
@@ -26,12 +26,12 @@ func TestFeatureConfigurationDefaultsAndOverrides(t *testing.T) {
 
 func TestChatFloodConfigurationOverrides(t *testing.T) {
 	c := Default()
-	for _, setting := range []struct{ key, value string }{{"ChatFlood.MessageCount", "4"}, {"ChatFlood.MessageDelay", "2"}, {"ChatFlood.MuteTime", "30"}} {
+	for _, setting := range []struct{ key, value string }{{"ChatFlood.MessageCount", "4"}, {"ChatFlood.MessageDelay", "2"}, {"ChatFlood.MuteTime", "30"}, {"ChatLevelReq.Channel", "3"}, {"ChatLevelReq.Whisper", "4"}, {"ChatLevelReq.Emote", "5"}, {"ChatLevelReq.Say", "6"}, {"ChatLevelReq.Yell", "7"}} {
 		if err := c.Set(setting.key, setting.value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if c.ChatFloodMessageCount != 4 || c.ChatFloodMessageDelay != 2 || c.ChatFloodMuteTime != 30 {
+	if c.ChatFloodMessageCount != 4 || c.ChatFloodMessageDelay != 2 || c.ChatFloodMuteTime != 30 || c.ChatChannelLevelReq != 3 || c.ChatWhisperLevelReq != 4 || c.ChatEmoteLevelReq != 5 || c.ChatSayLevelReq != 6 || c.ChatYellLevelReq != 7 {
 		t.Fatalf("unexpected chat flood settings: %+v", c)
 	}
 }

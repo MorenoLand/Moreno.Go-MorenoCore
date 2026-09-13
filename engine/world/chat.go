@@ -143,6 +143,36 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		}
 		return true
 	}
+	if s.player != nil && s.server != nil {
+		required := uint32(0)
+		skipLevelRequirement := false
+		switch uint8(typeID) {
+		case chatSay:
+			required = s.server.Config.ChatSayLevelReq
+		case chatEmote:
+			required = s.server.Config.ChatEmoteLevelReq
+		case chatYell:
+			required = s.server.Config.ChatYellLevelReq
+		case chatChannel:
+			required = s.server.Config.ChatChannelLevelReq
+			if required > 0 && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+				var permissionErr error
+				skipLevelRequirement, permissionErr = accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionSkipCheckChatChannelReq)
+				if permissionErr != nil {
+					s.debug("chat channel level permission lookup failed", "account", s.accountName, "error", permissionErr)
+					skipLevelRequirement = false
+				}
+			}
+		}
+		if (typeID == chatSay || typeID == chatEmote || typeID == chatYell) && s.isDeadOrGhost() {
+			s.debug("chat rejected", "account", s.accountName, "reason", "player dead", "type", typeID)
+			return true
+		}
+		if required > 0 && uint32(s.player.Level) < required && !skipLevelRequirement {
+			s.debug("chat rejected", "account", s.accountName, "reason", "level requirement", "type", typeID, "required", required, "level", s.player.Level)
+			return true
+		}
+	}
 	if message == "" && typeID != chatAFK && typeID != chatDND {
 		return true
 	}
@@ -181,6 +211,10 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		receiver = s.server.findSessionByName(targetName)
 		if receiver == nil {
 			s.debug("chat rejected", "account", s.accountName, "reason", "whisper target missing")
+			return true
+		}
+		if s.security == 0 && s.player != nil && uint32(s.player.Level) < s.server.Config.ChatWhisperLevelReq {
+			s.debug("chat rejected", "account", s.accountName, "reason", "whisper level requirement", "required", s.server.Config.ChatWhisperLevelReq, "level", s.player.Level)
 			return true
 		}
 	}

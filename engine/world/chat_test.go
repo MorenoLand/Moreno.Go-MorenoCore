@@ -1,11 +1,13 @@
 package world
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -195,6 +197,40 @@ func TestGMSilenceAuraBlocksNonWhisperChat(t *testing.T) {
 	payload.WriteCString("blocked")
 	if !state.handleMessageChat(context.Background(), payload.Bytes()) {
 		t.Fatal("silenced chat closed the session")
+	}
+}
+
+func TestChatLevelRequirementRejectsLowLevelSay(t *testing.T) {
+	var logs bytes.Buffer
+	server := &Server{Config: config.Config{ChatSayLevelReq: 10}, Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})), sessions: make(map[*session]struct{})}
+	state := &session{server: server, playerLoaded: true, player: &playerState{GUID: 1, Name: "Low", Level: 1, Health: 100, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	payload := protocol.NewBuffer(16)
+	payload.WriteU32(chatSay)
+	payload.WriteU32(7)
+	payload.WriteCString("blocked")
+	if !state.handleMessageChat(context.Background(), payload.Bytes()) || !strings.Contains(logs.String(), "level requirement") {
+		t.Fatalf("unexpected low-level chat result logs=%q", logs.String())
+	}
+}
+
+func TestChatWithUnsetHealthMetadataStillBroadcasts(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Map: 0, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	server.sessions[state] = struct{}{}
+	payload := protocol.NewBuffer(16)
+	payload.WriteU32(chatSay)
+	payload.WriteU32(7)
+	payload.WriteCString("hello")
+	done := make(chan bool, 1)
+	go func() { done <- state.handleMessageChat(context.Background(), payload.Bytes()) }()
+	if _, _, err := readServerFrame(clientConn, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !<-done {
+		t.Fatal("chat handler rejected a valid say packet with unset health metadata")
 	}
 }
 
