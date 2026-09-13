@@ -638,20 +638,15 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		if len(missStatus) > 0 && !isReflected {
 			return
 		}
-		if s.server != nil && isHarmfulSpell(spell) {
-			for _, effectTarget := range hitTargets {
-				if effectTarget != 0 && effectTarget != s.playerGUID {
-					s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID)
-				}
-			}
-		}
 		interruptHandled := false
+		damageEffectSeen := false
 		for _, eff := range spell.Effects {
 			if eff.Effect == 0 {
 				continue
 			}
 			switch eff.Effect {
 			case 2, 17, 31, 58, 87: // Damage effects (School damage, Weapon damage, etc.)
+				damageEffectSeen = true
 				damage := uint32(eff.BasePoints + 1)
 				for _, effectTarget := range hitTargets {
 					if effectTarget != 0 && (effectTarget != s.playerGUID || isReflected) {
@@ -774,6 +769,13 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 			case spellEffectInterruptCast: // 68: SPELL_EFFECT_INTERRUPT_CAST
 				s.handleEffectInterruptCast(effCtx, targetGUID, spell, eff)
 				interruptHandled = true
+			}
+		}
+		if s.server != nil && isHarmfulSpell(spell) && !damageEffectSeen {
+			for _, effectTarget := range hitTargets {
+				if effectTarget != 0 && effectTarget != s.playerGUID {
+					s.server.triggerCreatureAggro(effCtx, effectTarget, s.playerGUID)
+				}
 			}
 		}
 		if isTauntSpell(spellID) {
