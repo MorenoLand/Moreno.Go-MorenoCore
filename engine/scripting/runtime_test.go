@@ -324,3 +324,14 @@ func TestElunaPacketMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestElunaPacketEventDispatch(t *testing.T) {
+	runtime := NewRuntime(Config{Enabled: true})
+	if err := runtime.LoadString(`RegisterPacketEvent(0x123, 5, function(event, packet, player) assert(event == 5 and packet:GetOpcode() == 0x123 and player == nil); return false end)`); err != nil {
+		t.Fatal(err)
+	}
+	values, err := runtime.TriggerPacketEvent(context.Background(), 0x123, 5, &Packet{Opcode: 0x123}, nil)
+	if err != nil || len(values) != 1 || values[0] != false {
+		t.Fatalf("values=%v err=%v", values, err)
+	}
+}

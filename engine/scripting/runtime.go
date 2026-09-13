@@ -259,6 +259,10 @@ func (r *Runtime) TriggerServerEvent(ctx context.Context, event int, args ...any
 	return r.Trigger(ctx, "server", event, append([]any{event}, args...)...)
 }
 
+func (r *Runtime) TriggerPacketEvent(ctx context.Context, opcode, event int, args ...any) ([]any, error) {
+	return r.Trigger(ctx, "packet:"+strconv.Itoa(opcode), event, append([]any{event}, args...)...)
+}
+
 func (r *Runtime) Tick(ctx context.Context, elapsed int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

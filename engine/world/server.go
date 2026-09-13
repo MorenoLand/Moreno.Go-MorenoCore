@@ -816,6 +816,23 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 			return
 		}
+		if state.authed && state.server.Features != nil && state.server.Features.Scripts != nil {
+			packet := &scripting.Packet{Opcode: header.Opcode, Data: append([]byte(nil), payload...)}
+			values, hookErr := state.server.Features.Scripts.TriggerPacketEvent(ctx, int(header.Opcode), 5, packet, state.luaPlayer())
+			if hookErr != nil {
+				state.debug("lua packet hook failed", "account", state.accountName, "opcode", header.Opcode, "error", hookErr)
+			}
+			blocked := false
+			for _, value := range values {
+				if allowed, ok := value.(bool); ok && !allowed {
+					blocked = true
+					break
+				}
+			}
+			if blocked {
+				continue
+			}
+		}
 		switch header.Opcode {
 		case opcodeAuthSession:
 			if state.authed || !state.handleAuthSession(ctx, payload) {
