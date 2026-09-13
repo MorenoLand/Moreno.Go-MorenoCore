@@ -1,6 +1,8 @@
 package database
 
 import (
+	"context"
+	"database/sql"
 	"strings"
 	"testing"
 )
@@ -45,5 +47,57 @@ func TestSQLiteDialectOverridesAvoidMySQLOnlySyntax(t *testing.T) {
 				t.Fatalf("%s retained MySQL syntax %q: %s", id, forbidden, query)
 			}
 		}
+	}
+}
+
+func TestSQLiteDialectOverridesExecuteGuildAndChannelUpserts(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := &Store{Name: "characters", Backend: BackendSQLite, DB: db}
+	for _, statement := range []string{
+		"CREATE TABLE guild_bank_right (guildid INTEGER, TabId INTEGER, rid INTEGER, gbright INTEGER, SlotPerDay INTEGER, PRIMARY KEY (guildid, TabId, rid))",
+		"CREATE TABLE guild_member_withdraw (guid INTEGER PRIMARY KEY, tab0 INTEGER, tab1 INTEGER, tab2 INTEGER, tab3 INTEGER, tab4 INTEGER, tab5 INTEGER, money INTEGER)",
+		"CREATE TABLE channels (name TEXT, team INTEGER, announce INTEGER, ownership INTEGER, password TEXT, bannedList TEXT, lastUsed INTEGER, PRIMARY KEY (name, team))",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	if _, err := store.ExecStatement(ctx, "CHAR_INS_GUILD_BANK_RIGHT", 1, 2, 3, 4, 5); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_INS_GUILD_BANK_RIGHT", 1, 2, 3, 8, 9); err != nil {
+		t.Fatal(err)
+	}
+	var right, slots int
+	if err := db.QueryRow("SELECT gbright, SlotPerDay FROM guild_bank_right WHERE guildid = 1 AND TabId = 2 AND rid = 3").Scan(&right, &slots); err != nil || right != 8 || slots != 9 {
+		t.Fatalf("guild bank right=%d slots=%d err=%v", right, slots, err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_INS_GUILD_MEMBER_WITHDRAW", 4, 1, 2, 3, 4, 5, 6, 7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_INS_GUILD_MEMBER_WITHDRAW", 4, 8, 9, 10, 11, 12, 13, 14); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT tab0, tab5, money FROM guild_member_withdraw WHERE guid = 4").Scan(&right, &slots, &slots); err != nil || right != 8 || slots != 14 {
+		t.Fatalf("guild withdraw tab0=%d money=%d err=%v", right, slots, err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_UPD_CHANNEL", "General", 1, 1, 1, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_UPD_CHANNEL", "General", 1, 0, 0, "secret", "7"); err != nil {
+		t.Fatal(err)
+	}
+	var announce, ownership int
+	var password string
+	if err := db.QueryRow("SELECT announce, ownership, password FROM channels WHERE name = 'General' AND team = 1").Scan(&announce, &ownership, &password); err != nil {
+		t.Fatal(err)
+	}
+	if announce != 0 || ownership != 0 || password != "secret" {
+		t.Fatalf("channel announce=%d ownership=%d password=%q", announce, ownership, password)
 	}
 }
