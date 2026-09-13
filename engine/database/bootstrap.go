@@ -89,6 +89,9 @@ func ensureSchema(ctx context.Context, c config.Config, store *Store) error {
 	if version > 0 {
 		return nil
 	}
+	if !c.UpdatesAutoSetup {
+		return nil
+	}
 	dialect := "mysql"
 	if store.Backend == BackendSQLite {
 		dialect = "sqlite"

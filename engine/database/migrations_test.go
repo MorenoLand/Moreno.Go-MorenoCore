@@ -139,3 +139,29 @@ func TestConfiguredMigrationsApplyFromSchemaUpdatesDirectory(t *testing.T) {
 		t.Fatalf("applied table count=%d err=%v", count, err)
 	}
 }
+
+func TestEnsureSchemaHonorsUpdatesAutoSetup(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sqlite"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sqlite", "auth.sql"), []byte("CREATE TABLE should_not_exist (id INTEGER)"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	c := config.Default()
+	c.SchemaDir = root
+	c.UpdatesAutoSetup = false
+	store := &Store{Name: "auth", Backend: BackendSQLite, DB: db}
+	if err := ensureSchema(context.Background(), c, store); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'should_not_exist'").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("auto-setup-disabled table count=%d err=%v", count, err)
+	}
+}
