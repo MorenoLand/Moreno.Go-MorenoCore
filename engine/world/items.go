@@ -2323,6 +2323,13 @@ func (s *session) sendEquipmentSetList(ctx context.Context) {
 		}
 		sets = append(sets, entry)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return
+	}
+	if err := rows.Close(); err != nil {
+		return
+	}
 
 	buf := protocol.NewBuffer(4 + len(sets)*128)
 	buf.WriteU32(uint32(len(sets)))

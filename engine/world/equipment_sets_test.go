@@ -204,6 +204,9 @@ func TestEquipmentSetListLoginAndSavedNotification(t *testing.T) {
 	if op2 != uint16(protocol.OpcodeSMSG_EQUIPMENT_SET_LIST) {
 		t.Fatalf("expected SMSG_EQUIPMENT_SET_LIST (0x4BC), got 0x%x", op2)
 	}
+	if _, err := db.Exec("UPDATE character_equipmentsets SET name = name WHERE guid = ?", sess.playerGUID); err != nil {
+		t.Fatalf("equipment-set result set remained open after send: %v", err)
+	}
 	r2 := protocol.NewReader(data2)
 	count, err := r2.ReadU32()
 	if err != nil || count != 1 {
