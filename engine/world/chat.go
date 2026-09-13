@@ -52,11 +52,13 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	b := protocol.NewReader(payload)
 	typeID, err := b.ReadU32()
 	if err != nil {
-		return false
+		s.debug("chat rejected", "account", s.accountName, "reason", "malformed type", "error", err)
+		return true
 	}
 	language, err := b.ReadU32()
 	if err != nil {
-		return false
+		s.debug("chat rejected", "account", s.accountName, "reason", "malformed language", "error", err)
+		return true
 	}
 	if typeID >= maxChatMessageType {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid message type", "type", typeID)
@@ -79,7 +81,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	}
 	if err != nil {
 		s.debug("chat rejected", "account", s.accountName, "reason", "malformed message", "error", err)
-		return false
+		return true
 	}
 	if len(message) > 255 || strings.ContainsAny(message, "\r\n") || strings.IndexFunc(message, func(r rune) bool { return r < 32 && r != '\t' }) >= 0 {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid characters")

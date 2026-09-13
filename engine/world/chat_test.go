@@ -83,6 +83,16 @@ func TestChatWithoutScriptingRuntimeDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestMalformedChatDoesNotCloseSession(t *testing.T) {
+	server := &Server{sessions: make(map[*session]struct{})}
+	state := &session{server: server, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Name: "Tester"}}
+	for _, payload := range [][]byte{{}, {1, 0, 0, 0}, {chatWhisper, 0, 0, 0, 0, 0, 0, 0, 'T'}} {
+		if !state.handleMessageChat(context.Background(), payload) {
+			t.Fatalf("malformed payload closed session: %x", payload)
+		}
+	}
+}
+
 func TestBroadcastSayUsesSenderReceiverGUID(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
