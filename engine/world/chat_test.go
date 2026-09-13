@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -153,6 +154,17 @@ func TestChatLanguageSkillMappingMatchesReference(t *testing.T) {
 	state := &session{player: &playerState{Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
 	if !state.hasLanguageSkill(98) || state.hasLanguageSkill(109) {
 		t.Fatal("language skill ownership did not follow the loaded player skills")
+	}
+}
+
+func TestMutedAccountChatIsConsumed(t *testing.T) {
+	state := &session{playerLoaded: true, muteTime: time.Now().Add(time.Minute).Unix(), player: &playerState{GUID: 1, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	payload := protocol.NewBuffer(16)
+	payload.WriteU32(chatSay)
+	payload.WriteU32(7)
+	payload.WriteCString("blocked")
+	if !state.handleMessageChat(context.Background(), payload.Bytes()) {
+		t.Fatal("muted chat closed the session")
 	}
 }
 

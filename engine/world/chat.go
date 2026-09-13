@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -48,6 +49,10 @@ func (s *session) handleSetSelection(payload []byte) bool {
 func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil {
 		s.debug("chat ignored", "account", s.accountName, "reason", "player not loaded")
+		return true
+	}
+	if s.muteTime > time.Now().Unix() {
+		s.debug("chat rejected", "account", s.accountName, "reason", "account muted", "mute_until", s.muteTime)
 		return true
 	}
 	b := protocol.NewReader(payload)

@@ -334,6 +334,7 @@ func (s *session) luaPlayer() *scripting.Object {
 			return nil, err
 		}
 		_, err = s.server.AuthStore.DB.Exec("UPDATE account SET mutetime = ? WHERE id = ?", seconds, s.accountID)
+		s.muteTime = int64(seconds)
 		return nil, err
 	}
 	methods["GetSelection"] = func(ctx context.Context, _ []any) ([]any, error) {

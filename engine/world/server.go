@@ -132,6 +132,7 @@ type session struct {
 	accountName           string
 	security              uint8
 	accountExpansion      uint8
+	muteTime              int64
 	gmChat                bool
 	twoSideChat           bool
 	legitimate            map[uint64]struct{}
@@ -268,6 +269,7 @@ type account struct {
 	Locked      bool
 	LockCountry string
 	OS          string
+	MuteTime    int64
 	Security    uint8
 	Expansion   uint8
 }
@@ -2914,6 +2916,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	s.accountID = account.ID
 	s.accountName = accountName
 	s.security = account.Security
+	s.muteTime = account.MuteTime
 	s.gmChat = false
 	if s.twoSideChat, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionTwoSideInteractionChat); err != nil {
 		s.twoSideChat = false
@@ -3137,11 +3140,12 @@ func loadAccount(ctx context.Context, store *database.Store, username string, re
 	var result account
 	var locked int64
 	var expansion sql.NullInt64
-	query := "SELECT id, session_key_auth, last_ip, locked, lock_country, os, expansion FROM account WHERE username = ? LIMIT 1"
+	query := "SELECT id, session_key_auth, last_ip, locked, lock_country, os, mutetime, expansion FROM account WHERE username = ? LIMIT 1"
 	if store.Backend == database.BackendSQLite {
-		query = "SELECT id, session_key_auth, last_ip, locked, lock_country, os, expansion FROM account WHERE UPPER(username) = UPPER(?) LIMIT 1"
+		query = "SELECT id, session_key_auth, last_ip, locked, lock_country, os, mutetime, expansion FROM account WHERE UPPER(username) = UPPER(?) LIMIT 1"
 	}
-	err := store.DB.QueryRowContext(ctx, query, username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS, &expansion)
+	var muteTime sql.NullInt64
+	err := store.DB.QueryRowContext(ctx, query, username).Scan(&result.ID, &result.SessionKey, &result.LastIP, &locked, &result.LockCountry, &result.OS, &muteTime, &expansion)
 	if err != nil {
 		fallbackQuery := "SELECT id, session_key_auth, last_ip, locked, lock_country, os FROM account WHERE username = ? LIMIT 1"
 		if store.Backend == database.BackendSQLite {
@@ -3154,6 +3158,10 @@ func loadAccount(ctx context.Context, store *database.Store, username string, re
 		if err != nil {
 			return nil, err
 		}
+		muteTime = sql.NullInt64{}
+	}
+	if muteTime.Valid {
+		result.MuteTime = muteTime.Int64
 	}
 	result.Locked = locked != 0
 	if expansion.Valid && expansion.Int64 > 0 {
