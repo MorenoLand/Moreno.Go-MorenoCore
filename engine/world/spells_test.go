@@ -646,7 +646,7 @@ func TestHarmfulSpellTriggersCreatureAggroWithoutDamageEffect(t *testing.T) {
 		server:       srv,
 		playerLoaded: true,
 		playerGUID:   1,
-		player:       &playerState{GUID: 1, Level: 80, Map: 0},
+		player:       &playerState{GUID: 1, Level: 80, Map: 0, CombatRatings: [25]uint32{CombatRatingHitSpell: 1000}},
 	}
 	srv.sessions[sess] = struct{}{}
 	spell := wotlk.Spell{ID: 99999, Effects: [3]wotlk.SpellEffect{{Effect: 1, ImplicitTargetA: 6}}}

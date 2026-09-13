@@ -3,12 +3,14 @@ package scripting
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/Shopify/go-lua"
+	_ "modernc.org/sqlite"
 )
 
 func TestPlayerEventRegistrationAndInvocation(t *testing.T) {
@@ -333,5 +335,27 @@ func TestElunaPacketEventDispatch(t *testing.T) {
 	values, err := runtime.TriggerPacketEvent(context.Background(), 0x123, 5, &Packet{Opcode: 0x123}, nil)
 	if err != nil || len(values) != 1 || values[0] != false {
 		t.Fatalf("values=%v err=%v", values, err)
+	}
+}
+
+func TestElunaQuestLookup(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE quest_template (ID INTEGER PRIMARY KEY, LogTitle TEXT, QuestLevel INTEGER, MinLevel INTEGER, Flags INTEGER, RewardNextQuest INTEGER, PrevQuestId INTEGER, Type INTEGER); INSERT INTO quest_template VALUES (42, 'A Test Quest', 10, 5, 4096, 43, 41, 1)"); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(Config{Enabled: true, WorldDatabase: db})
+	if err := runtime.LoadString(`
+		quest = GetQuest(42)
+		assert(quest:GetId() == 42 and quest:GetLevel() == 10 and quest:GetMinLevel() == 5)
+		assert(quest:GetFlags() == 4096 and quest:HasFlag(4096))
+		assert(quest:IsDaily() and quest:IsRepeatable())
+		assert(quest:GetNextQuestId() == 43 and quest:GetPrevQuestId() == 41 and quest:GetType() == 1)
+		assert(GetQuest(999) == nil)
+	`); err != nil {
+		t.Fatal(err)
 	}
 }

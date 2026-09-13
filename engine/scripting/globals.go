@@ -66,6 +66,54 @@ func (r *Runtime) getCoreVersion(state *lua.State) int {
 	return 1
 }
 
+func (r *Runtime) getQuest(state *lua.State) int {
+	questID := checkLuaUint64(state, 1)
+	if r.config.WorldDatabase == nil || questID > math.MaxUint32 {
+		state.PushNil()
+		return 1
+	}
+	var id, level, minLevel, flags, nextID, prevID, questType int64
+	var title string
+	err := r.config.WorldDatabase.QueryRow("SELECT ID, COALESCE(LogTitle, ''), COALESCE(QuestLevel, 0), COALESCE(MinLevel, 0), COALESCE(Flags, 0), COALESCE(RewardNextQuest, 0), COALESCE(PrevQuestId, 0), COALESCE(Type, 0) FROM quest_template WHERE ID = ?", uint32(questID)).Scan(&id, &title, &level, &minLevel, &flags, &nextID, &prevID, &questType)
+	if err != nil {
+		err = r.config.WorldDatabase.QueryRow("SELECT ID, COALESCE(QuestLevel, 0), COALESCE(MinLevel, 0), COALESCE(Flags, 0) FROM quest_template WHERE ID = ?", uint32(questID)).Scan(&id, &level, &minLevel, &flags)
+	}
+	if err != nil {
+		state.PushNil()
+		return 1
+	}
+	methods := map[string]ObjectMethod{}
+	methods["GetId"] = func(context.Context, []any) ([]any, error) { return []any{uint32(id)}, nil }
+	methods["GetLevel"] = func(context.Context, []any) ([]any, error) { return []any{uint32(level)}, nil }
+	methods["GetMinLevel"] = func(context.Context, []any) ([]any, error) { return []any{uint32(minLevel)}, nil }
+	methods["GetFlags"] = func(context.Context, []any) ([]any, error) { return []any{uint32(flags)}, nil }
+	methods["GetNextQuestId"] = func(context.Context, []any) ([]any, error) { return []any{int32(nextID)}, nil }
+	methods["GetPrevQuestId"] = func(context.Context, []any) ([]any, error) { return []any{int32(prevID)}, nil }
+	methods["GetType"] = func(context.Context, []any) ([]any, error) { return []any{uint32(questType)}, nil }
+	methods["HasFlag"] = func(_ context.Context, args []any) ([]any, error) {
+		flag, err := objectArgumentUint32(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return []any{uint32(flags)&flag != 0}, nil
+	}
+	methods["IsDaily"] = func(context.Context, []any) ([]any, error) { return []any{uint32(flags)&0x1000 != 0}, nil }
+	methods["IsRepeatable"] = func(context.Context, []any) ([]any, error) { return []any{uint32(flags)&0x9000 != 0}, nil }
+	PushObject(state, &Object{Type: "Quest", Fields: map[string]any{"ID": uint32(id), "Name": title, "Title": title, "Level": uint32(level), "MinLevel": uint32(minLevel), "Flags": uint32(flags)}, Methods: methods})
+	return 1
+}
+
+func objectArgumentUint32(args []any, index int) (uint32, error) {
+	if index >= len(args) {
+		return 0, fmt.Errorf("argument %d is required", index+1)
+	}
+	number, ok := numericValue(args[index])
+	if !ok || number < 0 || number > math.MaxUint32 || number != math.Trunc(number) {
+		return 0, fmt.Errorf("argument %d must be uint32", index+1)
+	}
+	return uint32(number), nil
+}
+
 func (r *Runtime) getPlayerByGUID(state *lua.State) int {
 	guid := checkLuaUint64(state, 1)
 	if r.config.PlayerProvider != nil {
