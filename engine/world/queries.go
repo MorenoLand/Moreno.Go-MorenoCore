@@ -229,7 +229,7 @@ func loadQuestItems(ctx context.Context, db *sql.DB, table, entryColumn, indexCo
 	items := make([]uint32, limit)
 	rows, err := db.QueryContext(ctx, "SELECT "+itemColumn+" FROM "+table+" WHERE "+entryColumn+" = ? ORDER BY "+indexColumn+" LIMIT ?", entry, limit)
 	if err != nil {
-		if missingTable(err) {
+		if missingTable(err) || isMissingColumn(err) {
 			return items, nil
 		}
 		return nil, err
