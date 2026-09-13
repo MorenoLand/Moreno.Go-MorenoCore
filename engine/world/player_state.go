@@ -1405,7 +1405,24 @@ func buildItemCreateBlockForLocation(fullGUID uint64, itemEntry, count uint32, o
 	return buildItemCreateBlockForLocationWithDurability(fullGUID, itemEntry, count, ownerGUID, containedGUID, containerSlots, contents, 0, 0)
 }
 
+type itemUpdateState struct {
+	Duration         uint32
+	SpellCharges     [5]uint32
+	Flags            uint32
+	Enchantments     [36]uint32
+	PropertySeed     uint32
+	RandomPropertyID uint32
+	Durability       uint32
+	MaxDurability    uint32
+	DurabilityLoaded bool
+	CreatePlayedTime uint32
+}
+
 func buildItemCreateBlockForLocationWithDurability(fullGUID uint64, itemEntry, count uint32, ownerGUID, containedGUID uint64, containerSlots uint32, contents map[uint32]uint64, curDurability, maxDurability uint32) []byte {
+	return buildItemCreateBlockForLocationWithState(fullGUID, itemEntry, count, ownerGUID, containedGUID, containerSlots, contents, itemUpdateState{Durability: curDurability, MaxDurability: maxDurability})
+}
+
+func buildItemCreateBlockForLocationWithState(fullGUID uint64, itemEntry, count uint32, ownerGUID, containedGUID uint64, containerSlots uint32, contents map[uint32]uint64, state itemUpdateState) []byte {
 	if containerSlots > 36 {
 		containerSlots = 36
 	}
@@ -1441,16 +1458,24 @@ func buildItemCreateBlockForLocationWithDurability(fullGUID uint64, itemEntry, c
 	values[8] = uint32(containedGUID)
 	values[9] = uint32(containedGUID >> 32)
 	values[14] = count
-	if maxDurability > 0 {
-		if curDurability == 0 {
-			curDurability = maxDurability
-		}
-		values[60] = curDurability // ITEM_FIELD_DURABILITY = 60
-		values[61] = maxDurability // ITEM_FIELD_MAXDURABILITY = 61
-	} else {
-		values[60] = 0
-		values[61] = 0
+	values[15] = state.Duration
+	for index, charge := range state.SpellCharges {
+		values[16+index] = charge
 	}
+	values[21] = state.Flags
+	copy(values[22:58], state.Enchantments[:])
+	values[58] = state.PropertySeed
+	values[59] = state.RandomPropertyID
+	if state.DurabilityLoaded {
+		values[60] = state.Durability
+	} else if state.MaxDurability > 0 {
+		if state.Durability == 0 {
+			state.Durability = state.MaxDurability
+		}
+		values[60] = state.Durability
+	}
+	values[61] = state.MaxDurability
+	values[62] = state.CreatePlayedTime
 
 	mask := protocol.NewUpdateMask(len(values))
 	for idx, val := range values {
@@ -1534,26 +1559,48 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 	if cdb == nil {
 		return nil
 	}
-	rows, err := cdb.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count
+	type inventoryItem struct {
+		bag, slot, itemGUID, itemEntry, count, duration, flags, randomPropertyID, playedTime, durability int64
+		charges, enchantments                                                                            string
+	}
+	fullState := true
+	rows, err := cdb.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count,
+		COALESCE(ii.duration, 0), COALESCE(ii.charges, ''), COALESCE(ii.flags, 0),
+		COALESCE(ii.enchantments, ''), COALESCE(ii.randomPropertyId, 0),
+		COALESCE(ii.playedTime, 0), COALESCE(ii.durability, 0)
 		FROM character_inventory AS ci
 		JOIN item_instance AS ii ON ii.guid = ci.item
 		WHERE ci.guid = ? ORDER BY ci.bag, ci.slot`, s.playerGUID)
 	if err != nil {
-		if missingTable(err) || isMissingColumn(err) {
+		if missingTable(err) {
 			return nil
 		}
-		return err
-	}
-	defer rows.Close()
-
-	type inventoryItem struct {
-		bag, slot, itemGUID, itemEntry, count int64
+		if !isMissingColumn(err) {
+			return err
+		}
+		fullState = false
+		rows, err = cdb.QueryContext(ctx, `SELECT ci.bag, ci.slot, ci.item, ii.itemEntry, ii.count
+			FROM character_inventory AS ci
+			JOIN item_instance AS ii ON ii.guid = ci.item
+			WHERE ci.guid = ? ORDER BY ci.bag, ci.slot`, s.playerGUID)
+		if err != nil {
+			if missingTable(err) || isMissingColumn(err) {
+				return nil
+			}
+			return err
+		}
 	}
 	items := make([]inventoryItem, 0)
 	bagItems := make(map[int64]uint64)
 	for rows.Next() {
 		var item inventoryItem
-		if err := rows.Scan(&item.bag, &item.slot, &item.itemGUID, &item.itemEntry, &item.count); err != nil {
+		var scanErr error
+		if fullState {
+			scanErr = rows.Scan(&item.bag, &item.slot, &item.itemGUID, &item.itemEntry, &item.count, &item.duration, &item.charges, &item.flags, &item.enchantments, &item.randomPropertyID, &item.playedTime, &item.durability)
+		} else {
+			scanErr = rows.Scan(&item.bag, &item.slot, &item.itemGUID, &item.itemEntry, &item.count)
+		}
+		if scanErr != nil {
 			continue
 		}
 		items = append(items, item)
@@ -1562,6 +1609,7 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			bagItems[item.slot] = uint64(item.itemGUID) | (uint64(0x4000) << 48)
 		}
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return err
 	}
@@ -1595,6 +1643,26 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 		_ = cdb.QueryRowContext(ctx, "SELECT COALESCE(durability, 0) FROM item_instance WHERE guid = ?", guid).Scan(&d)
 		return uint32(d)
 	}
+	toUint32 := func(value int64) uint32 {
+		if value <= 0 {
+			return 0
+		}
+		if value > int64(^uint32(0)) {
+			return ^uint32(0)
+		}
+		return uint32(value)
+	}
+	parseItemFields := func(raw string, values []uint32) {
+		for index, token := range strings.Fields(raw) {
+			if index >= len(values) {
+				break
+			}
+			value, parseErr := strconv.ParseInt(token, 10, 64)
+			if parseErr == nil {
+				values[index] = uint32(value)
+			}
+		}
+	}
 	updates := protocol.NewUpdateData()
 	fields := make(map[int]uint32)
 	slotItems := make(map[int]uint64)
@@ -1609,8 +1677,19 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			containedGUID = bagItems[bag]
 		}
 		cSlots, maxD := itemTemplateInfo(itemEntry)
-		curD := itemDurability(itemGUID)
-		block := buildItemCreateBlockForLocationWithDurability(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID, containedGUID, cSlots, contents[int64(fullGUID)], curD, maxD)
+		itemState := itemUpdateState{MaxDurability: maxD, DurabilityLoaded: fullState}
+		if fullState {
+			itemState.Duration = toUint32(item.duration)
+			itemState.Flags = toUint32(item.flags)
+			itemState.RandomPropertyID = uint32(int32(item.randomPropertyID))
+			itemState.CreatePlayedTime = toUint32(item.playedTime)
+			itemState.Durability = toUint32(item.durability)
+			parseItemFields(item.charges, itemState.SpellCharges[:])
+			parseItemFields(item.enchantments, itemState.Enchantments[:])
+		} else {
+			itemState.Durability = itemDurability(itemGUID)
+		}
+		block := buildItemCreateBlockForLocationWithState(fullGUID, uint32(itemEntry), uint32(count), s.playerGUID, containedGUID, cSlots, contents[int64(fullGUID)], itemState)
 		updates.AddUpdateBlock(block)
 
 		if cSlots > 0 {
