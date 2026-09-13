@@ -287,7 +287,7 @@ func TestCreatureSpellCastingInCombat(t *testing.T) {
 	defer clientConn.Close()
 
 	sess := &session{conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Map: 0, X: 15.0, Y: 0.0, Z: 0.0, Race: 1, Health: 100, MaxHealth: 100}}
-	server := &Server{WorldStore: store, sessions: make(map[*session]struct{}), creatureMotion: make(map[uint64]*creatureMotion)}
+	server := &Server{WorldStore: store, Data: wotlk.NewStore("../../data/dbc"), sessions: make(map[*session]struct{}), creatureMotion: make(map[uint64]*creatureMotion)}
 	server.sessions[sess] = struct{}{}
 	sess.server = server
 
@@ -368,5 +368,37 @@ func TestCreatureSpellCastingInCombat(t *testing.T) {
 	}
 	if sess.player.UnitFlags&unitFlagInCombat == 0 {
 		t.Fatal("expected player unitFlagInCombat to be set")
+	}
+}
+
+func TestCreatureShortRangeSpellWaitsForContact(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"CREATE TABLE creature_template_spell (CreatureID INTEGER NOT NULL, `Index` INTEGER NOT NULL DEFAULT 0, Spell INTEGER DEFAULT NULL, PRIMARY KEY (CreatureID, `Index`))",
+		"INSERT INTO creature_template_spell VALUES (68, 0, 78)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Map: 0, X: 15, Health: 100, MaxHealth: 100}}
+	server := &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}, Data: wotlk.NewStore("../../data/dbc"), sessions: map[*session]struct{}{sess: {}}, creatureMotion: make(map[uint64]*creatureMotion)}
+	sess.server = server
+	motion := &creatureMotion{GUID: creatureWorldGUID(100, 68), Entry: 68, Map: 0, X: 0, Health: 100, MaxHealth: 100, InCombat: true, TargetGUID: 1, RunSpeed: 7}
+	drainServerFrames(t, clientConn)
+	server.stepCreatureMotion(context.Background(), motion, []playerPos{{Map: 0, X: 15, GUID: 1, Sess: sess}}, time.Now())
+	if sess.player.Health != 100 {
+		t.Fatalf("short-range spell damaged distant player: health=%d", sess.player.Health)
+	}
+	if !motion.LastSpell.IsZero() {
+		t.Fatal("short-range spell was cast before contact")
 	}
 }

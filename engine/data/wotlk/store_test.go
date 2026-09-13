@@ -83,6 +83,35 @@ func TestSpellRadius(t *testing.T) {
 	}
 }
 
+func TestSpellRangeLoading(t *testing.T) {
+	dbcDir := t.TempDir()
+	const fieldCount = 6
+	record := make([]uint32, fieldCount)
+	record[0] = 4
+	record[1] = math.Float32bits(5)
+	record[2] = math.Float32bits(0)
+	record[3] = math.Float32bits(30)
+	record[4] = math.Float32bits(40)
+	record[5] = 7
+	recordBytes := make([]byte, fieldCount*4)
+	for i, value := range record {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:(i+1)*4], value)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "SpellRange.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entry, found, err := NewStore(dbcDir).SpellRange(4)
+	if err != nil || !found || entry.MinHostile != 5 || entry.MaxHostile != 30 || entry.MaxFriendly != 40 || entry.Flags != 7 {
+		t.Fatalf("entry=%+v found=%v err=%v", entry, found, err)
+	}
+}
+
 func TestAreaTableLoading(t *testing.T) {
 	dbcDir := t.TempDir()
 	const fieldCount = 36

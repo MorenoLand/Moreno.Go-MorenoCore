@@ -568,7 +568,25 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if len(motion.Spells) == 0 && s != nil && s.WorldStore != nil && s.WorldStore.DB != nil {
 			motion.Spells = s.loadCreatureSpells(ctx, motion.Entry)
 		}
-		if len(motion.Spells) > 0 && dist <= 30.0 && (motion.LastSpell.IsZero() || now.Sub(motion.LastSpell) >= 6*time.Second) {
+		victimReach := float32(1.5)
+		if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
+			victimReach = target.Sess.player.CombatReach
+		}
+		cReach := motion.CombatReach
+		if cReach <= 0 {
+			cReach = 1.5
+		}
+		contactDist := cReach + victimReach
+		spellMinDist, spellMaxDist := contactDist, contactDist
+		if len(motion.Spells) > 0 && s != nil && s.Data != nil {
+			if spellInfo, found, err := s.Data.Spell(motion.Spells[motion.NextSpellIdx%len(motion.Spells)]); err == nil && found {
+				if spellRange, rangeFound, rangeErr := s.Data.SpellRange(spellInfo.RangeIndex); rangeErr == nil && rangeFound {
+					spellMinDist += spellRange.MinHostile
+					spellMaxDist += spellRange.MaxHostile
+				}
+			}
+		}
+		if len(motion.Spells) > 0 && dist >= spellMinDist && dist <= spellMaxDist && (motion.LastSpell.IsZero() || now.Sub(motion.LastSpell) >= 6*time.Second) {
 			spellID := motion.Spells[motion.NextSpellIdx%len(motion.Spells)]
 			motion.NextSpellIdx++
 			castID := uint8(1)
@@ -634,29 +652,10 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				target.Sess.sendPlayerUpdate()
 			}
 			motion.LastSpell = now
-			victimReach := float32(1.5)
-			if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
-				victimReach = target.Sess.player.CombatReach
-			}
-			cReach := motion.CombatReach
-			if cReach <= 0 {
-				cReach = 1.5
-			}
-			contactDist := cReach + victimReach
 			if dist > contactDist {
 				return
 			}
 		}
-
-		victimReach := float32(1.5)
-		if target.Sess != nil && target.Sess.player != nil && target.Sess.player.CombatReach > 0 {
-			victimReach = target.Sess.player.CombatReach
-		}
-		cReach := motion.CombatReach
-		if cReach <= 0 {
-			cReach = 1.5
-		}
-		contactDist := cReach + victimReach
 
 		if dist > contactDist {
 			// Pursue player: move towards target at run speed

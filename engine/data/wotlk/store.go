@@ -106,6 +106,15 @@ type Spell struct {
 	Effects               [3]SpellEffect
 }
 
+type SpellRangeEntry struct {
+	ID          uint32
+	MinHostile  float32
+	MinFriendly float32
+	MaxHostile  float32
+	MaxFriendly float32
+	Flags       uint32
+}
+
 type LFGDungeon struct {
 	ID             uint32
 	MinLevel       uint32
@@ -547,6 +556,28 @@ func (s *Store) SpellCastTime(id uint32) (int32, bool, error) {
 		return 0, false, err
 	}
 	return base, true, nil
+}
+
+func (s *Store) SpellRange(id uint32) (SpellRangeEntry, bool, error) {
+	file, err := s.File("SpellRange")
+	if err != nil {
+		return SpellRangeEntry{}, false, err
+	}
+	record, ok := file.Find(id)
+	if !ok {
+		return SpellRangeEntry{}, false, nil
+	}
+	entry := SpellRangeEntry{ID: id}
+	values := []*float32{&entry.MinHostile, &entry.MinFriendly, &entry.MaxHostile, &entry.MaxFriendly}
+	for index, value := range values {
+		if *value, err = record.Float32(index + 1); err != nil {
+			return SpellRangeEntry{}, false, err
+		}
+	}
+	if entry.Flags, err = record.Uint32(5); err != nil {
+		return SpellRangeEntry{}, false, err
+	}
+	return entry, true, nil
 }
 
 func (s *Store) parseLFGDungeon(id uint32, record dbc.Record) (LFGDungeon, bool, error) {
