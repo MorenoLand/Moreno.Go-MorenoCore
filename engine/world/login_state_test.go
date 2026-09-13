@@ -75,6 +75,26 @@ func TestSendNewMailNotificationSkipsReadAndFutureMail(t *testing.T) {
 	}
 }
 
+func TestLoadMailStateTracksFutureDelivery(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE mail (receiver INTEGER, deliver_time INTEGER, expire_time INTEGER, checked INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	if _, err := db.Exec("INSERT INTO mail VALUES (9, ?, ?, 0)", now+120, now+7200); err != nil {
+		t.Fatal(err)
+	}
+	sess := &session{server: &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}}, playerGUID: 9}
+	sess.loadMailState(context.Background())
+	if sess.unreadMails != 0 || sess.nextMailDelivery < now+119 || sess.nextMailDelivery > now+121 {
+		t.Fatalf("mail state unread=%d next=%d now=%d", sess.unreadMails, sess.nextMailDelivery, now)
+	}
+}
+
 func TestLoadAndSendPersistentAura(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
