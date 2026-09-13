@@ -3,7 +3,7 @@
 This generated inventory compares the pinned reference script tree with the current Go scripting package. A listed reference file is not considered converted unless its behavior has a verified Go implementation or generated equivalent.
 
 - Reference script files: 707
-- Go scripting source files: 3
+- Go scripting source files: 4
 - Reference `AddSC_` registrations: 621
 - Go hook registrations: 4
 
@@ -723,6 +723,7 @@ This generated inventory compares the pinned reference script tree with the curr
 
 | Path | Lines | Hook registrations |
 | --- | ---: | --- |
+| `globals.go` | 348 | — |
 | `object.go` | 109 | — |
 | `query.go` | 297 | — |
-| `runtime.go` | 451 | CreateLuaEvent, RegisterGlobalEvent, RegisterPlayerEvent, RegisterServerEvent |
+| `runtime.go` | 538 | CreateLuaEvent, RegisterGlobalEvent, RegisterPlayerEvent, RegisterServerEvent |
