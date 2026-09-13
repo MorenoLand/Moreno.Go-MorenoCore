@@ -228,7 +228,6 @@ func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, clas
 		}
 		return result, err
 	}
-	defer rows.Close()
 	hasActions := false
 	for rows.Next() {
 		var button, action, kind int64
@@ -240,22 +239,35 @@ func (s *session) loadActionButtons(ctx context.Context, guid uint64, race, clas
 			hasActions = true
 		}
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return result, err
+	}
+	rows.Close()
 	if !hasActions && s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
 		arows, err := s.server.WorldStore.DB.QueryContext(ctx, "SELECT button, action, type FROM playercreateinfo_action WHERE race = ? AND class = ?", race, class)
 		if err == nil {
-			defer arows.Close()
+			var starterActions []struct{ button, action, kind int64 }
 			for arows.Next() {
 				var button, action, kind int64
 				if err := arows.Scan(&button, &action, &kind); err == nil {
 					if button >= 0 && button < int64(len(result)) && action >= 0 && action < 0x01000000 && kind >= 0 && kind <= 255 {
 						result[button] = uint32(action) | uint32(kind)<<24
-						_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_action (guid, spec, button, action, type) VALUES (?, 0, ?, ?, ?)", guid, button, action, kind)
+						starterActions = append(starterActions, struct{ button, action, kind int64 }{button, action, kind})
 					}
 				}
 			}
+			rowsErr := arows.Err()
+			arows.Close()
+			if rowsErr != nil {
+				return result, rowsErr
+			}
+			for _, action := range starterActions {
+				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_action (guid, spec, button, action, type) VALUES (?, 0, ?, ?, ?)", guid, action.button, action.action, action.kind)
+			}
 		}
 	}
-	return result, rows.Err()
+	return result, nil
 }
 
 func (s *session) loadSpellCooldowns(ctx context.Context, guid uint64) ([]spellCooldown, error) {

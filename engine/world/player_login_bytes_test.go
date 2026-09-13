@@ -78,3 +78,47 @@ func TestLoadPlayerSkillsNormalizesLanguageAndLevelRanges(t *testing.T) {
 		t.Fatalf("persisted max values=%d/%d", languageMax, levelMax)
 	}
 }
+
+func TestLoadActionButtonsStarterFallbackClosesCharacterRows(t *testing.T) {
+	charactersDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer charactersDB.Close()
+	charactersDB.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, activeTalentGroup INTEGER)",
+		"CREATE TABLE character_action (guid INTEGER, spec INTEGER, button INTEGER, action INTEGER, type INTEGER)",
+		"INSERT INTO characters VALUES (1, 0)",
+	} {
+		if _, err := charactersDB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	worldDB, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worldDB.Close()
+	if _, err := worldDB.Exec("CREATE TABLE playercreateinfo_action (race INTEGER, class INTEGER, button INTEGER, action INTEGER, type INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worldDB.Exec("INSERT INTO playercreateinfo_action VALUES (1, 1, 1, 1234, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	sess := &session{server: &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: charactersDB}, WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: worldDB}}}
+	actions, err := sess.loadActionButtons(context.Background(), 1, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if actions[1] != 1234 {
+		t.Fatalf("starter action=%x", actions[1])
+	}
+	var count int
+	if err := charactersDB.QueryRow("SELECT COUNT(*) FROM character_action WHERE guid = 1").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("persisted starter actions=%d", count)
+	}
+}
