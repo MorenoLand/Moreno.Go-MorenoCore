@@ -39,10 +39,12 @@ type statementAuditFailure struct {
 }
 
 type statementAuditDatabase struct {
-	name     string
-	total    int
-	prepared int
-	failures []statementAuditFailure
+	name               string
+	total              int
+	prepared           int
+	validated          int
+	failures           []statementAuditFailure
+	validationFailures []statementAuditFailure
 }
 
 func statementDatabase(id database.StatementID) (string, error) {
@@ -82,6 +84,54 @@ func auditStatementDefinitions(ctx context.Context, db *sql.DB, backend database
 	return prepared, failures
 }
 
+func statementBindCount(query string) int {
+	count := 0
+	quote := byte(0)
+	for index := 0; index < len(query); index++ {
+		value := query[index]
+		if quote != 0 {
+			if value == quote {
+				if index+1 < len(query) && query[index+1] == quote {
+					index++
+					continue
+				}
+				quote = 0
+			}
+			continue
+		}
+		if value == '\'' || value == '"' || value == '`' {
+			quote = value
+		} else if value == '?' {
+			count++
+		}
+	}
+	return count
+}
+
+func validateStatementDefinitions(ctx context.Context, db *sql.DB, backend database.Backend, definitions []database.StatementDefinition) (int, []statementAuditFailure) {
+	validated := 0
+	failures := make([]statementAuditFailure, 0)
+	for _, definition := range definitions {
+		query, err := database.StatementSQL(definition.ID, backend)
+		if err != nil {
+			failures = append(failures, statementAuditFailure{id: definition.ID, err: err})
+			continue
+		}
+		args := make([]any, statementBindCount(query))
+		rows, err := db.QueryContext(ctx, "EXPLAIN "+query, args...)
+		if err != nil {
+			failures = append(failures, statementAuditFailure{id: definition.ID, err: err})
+			continue
+		}
+		if err := rows.Close(); err != nil {
+			failures = append(failures, statementAuditFailure{id: definition.ID, err: err})
+			continue
+		}
+		validated++
+	}
+	return validated, failures
+}
+
 func auditStatements(ctx context.Context, inputDir string, backend database.Backend) ([]statementAuditDatabase, error) {
 	definitions := map[string][]database.StatementDefinition{"auth": {}, "characters": {}, "world": {}}
 	for _, definition := range database.AllStatements() {
@@ -113,11 +163,12 @@ func auditStatements(ctx context.Context, inputDir string, backend database.Back
 			return nil, fmt.Errorf("%s database %s: %w", name, path, err)
 		}
 		prepared, failures := auditStatementDefinitions(ctx, db, backend, definitions[name])
+		validated, validationFailures := validateStatementDefinitions(ctx, db, backend, definitions[name])
 		dbErr := db.Close()
 		if dbErr != nil {
 			return nil, fmt.Errorf("%s database %s close: %w", name, path, dbErr)
 		}
-		results = append(results, statementAuditDatabase{name: name, total: len(definitions[name]), prepared: prepared, failures: failures})
+		results = append(results, statementAuditDatabase{name: name, total: len(definitions[name]), prepared: prepared, validated: validated, failures: failures, validationFailures: validationFailures})
 	}
 	return results, nil
 }
@@ -140,17 +191,21 @@ func statementAudit(args []string) int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	total, prepared, failures := 0, 0, 0
+	total, prepared, validated, failures := 0, 0, 0, 0
 	for _, result := range results {
-		fmt.Printf("%s statements=%d prepared=%d failures=%d\n", result.name, result.total, result.prepared, len(result.failures))
+		fmt.Printf("%s statements=%d prepared=%d validated=%d failures=%d\n", result.name, result.total, result.prepared, result.validated, len(result.failures)+len(result.validationFailures))
 		total += result.total
 		prepared += result.prepared
-		failures += len(result.failures)
+		validated += result.validated
+		failures += len(result.failures) + len(result.validationFailures)
 		for _, failure := range result.failures {
 			fmt.Printf("  %s: %v\n", failure.id, failure.err)
 		}
+		for _, failure := range result.validationFailures {
+			fmt.Printf("  EXPLAIN %s: %v\n", failure.id, failure.err)
+		}
 	}
-	fmt.Printf("total statements=%d prepared=%d failures=%d backend=%s\n", total, prepared, failures, backend)
+	fmt.Printf("total statements=%d prepared=%d validated=%d failures=%d backend=%s\n", total, prepared, validated, failures, backend)
 	if failures != 0 {
 		return 1
 	}
