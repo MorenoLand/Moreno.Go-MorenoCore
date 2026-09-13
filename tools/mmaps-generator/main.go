@@ -10,11 +10,18 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const moveMapGridSize float32 = 533.3333
+
+const (
+	mapFileHeaderSize = 44
+	mapMagic          = "MAPS"
+	mapVersionMagic   = "v1.9"
+)
 
 type mapTile struct {
 	MapID uint32
@@ -38,10 +45,29 @@ func discoverMapTiles(dir string, targetMap int) (map[uint32][]mapTile, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(data) < 12 {
-			return nil, fmt.Errorf("map tile %s is shorter than the reference 12-byte header", path)
+		if len(data) < mapFileHeaderSize {
+			return nil, fmt.Errorf("map tile %s is shorter than the reference %d-byte header", path, mapFileHeaderSize)
 		}
-		tile := mapTile{MapID: binary.LittleEndian.Uint32(data[0:4]), TileX: binary.LittleEndian.Uint32(data[4:8]), TileY: binary.LittleEndian.Uint32(data[8:12]), Path: path}
+		if string(data[:4]) != mapMagic || string(data[4:8]) != mapVersionMagic {
+			return nil, fmt.Errorf("map tile %s has unsupported magic/version", path)
+		}
+		base := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		if len(base) != 7 {
+			return nil, fmt.Errorf("map tile %s does not match %03d%02d%02d.map naming", path, 0, 0, 0)
+		}
+		mapID, err := strconv.ParseUint(base[:3], 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("map tile %s has invalid map ID", path)
+		}
+		tileY, err := strconv.ParseUint(base[3:5], 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("map tile %s has invalid tile Y", path)
+		}
+		tileX, err := strconv.ParseUint(base[5:], 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("map tile %s has invalid tile X", path)
+		}
+		tile := mapTile{MapID: uint32(mapID), TileX: uint32(tileX), TileY: uint32(tileY), Path: path}
 		if targetMap >= 0 && tile.MapID != uint32(targetMap) {
 			continue
 		}
