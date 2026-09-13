@@ -147,6 +147,7 @@ type playerState struct {
 	HairColor            uint8
 	FacialStyle          uint8
 	BankBagSlots         uint8
+	RestState            uint8
 	Level                uint8
 	XP                   uint32
 	Money                uint32
@@ -776,6 +777,13 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		state.MaxPowers[i] = uint32(power)
 	}
 	state.Cinematic, state.KnownCurrency, state.WatchedFaction, state.AmmoID, state.ActionBars = uint32(cinematic), uint32(knownCurrency), uint32(watchedFaction), uint32(ammoID), uint32(actionBars)
+	var restState, drunk int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(restState, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&restState); err == nil && restState >= 0 {
+		state.RestState = uint8(restState)
+	}
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(drunk, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&drunk); err == nil && drunk >= 0 {
+		state.DrunkenState = uint16(drunk)
+	}
 	var bankSlots int64
 	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(bankSlots, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&bankSlots)
 	state.BankBagSlots = uint8(bankSlots)
@@ -1090,7 +1098,9 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		values[playerExploredZonesStart+i] = state.ExploredZones[i]
 	}
 	values[unitFieldPlayerBytes] = uint32(state.Skin) | uint32(state.Face)<<8 | uint32(state.HairStyle)<<16 | uint32(state.HairColor)<<24
-	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.SheathState)<<8 | uint32(state.BankBagSlots)<<16
+	values[unitFieldBytes2] = uint32(state.SheathState)
+	values[unitFieldPlayerBytes2] = uint32(state.FacialStyle) | uint32(state.BankBagSlots)<<16 | uint32(state.RestState)<<24
+	values[unitFieldPlayerBytes3] = uint32(state.Gender) | uint32(uint8(state.DrunkenState))<<8
 	values[unitFieldGuildID] = state.GuildID
 	values[unitFieldGuildRank] = uint32(state.GuildRank)
 	values[unitFieldXP] = state.XP

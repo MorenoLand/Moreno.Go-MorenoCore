@@ -108,7 +108,7 @@ func TestBuildBagCreateBlockIncludesContentsAndContainer(t *testing.T) {
 
 func TestBuildPlayerUpdateKeepsMovementAndUpdateMaskAligned(t *testing.T) {
 	server := &Server{}
-	packet, err := server.buildPlayerUpdate(playerState{GUID: 26, Level: 21, Map: 0, X: 1, Y: 2, Z: 3, Orientation: 4})
+	packet, err := server.buildPlayerUpdate(playerState{GUID: 26, Gender: 1, FacialStyle: 3, BankBagSlots: 4, RestState: 2, DrunkenState: 77, SheathState: 1, Level: 21, Map: 0, X: 1, Y: 2, Z: 3, Orientation: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +183,9 @@ func TestBuildPlayerUpdateKeepsMovementAndUpdateMaskAligned(t *testing.T) {
 	}
 	if values[0] != 26 || values[1] != 0 || values[2] != 0x19 {
 		t.Fatalf("object values=%x/%x/%x", values[0], values[1], values[2])
+	}
+	if values[unitFieldBytes2] != 1 || values[unitFieldPlayerBytes2] != 0x02040003 || values[unitFieldPlayerBytes3] != 0x4D01 {
+		t.Fatalf("player byte fields=%x/%x/%x", values[unitFieldBytes2], values[unitFieldPlayerBytes2], values[unitFieldPlayerBytes3])
 	}
 }
 
