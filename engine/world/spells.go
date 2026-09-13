@@ -79,7 +79,7 @@ func isAreaEnemySpell(spell wotlk.Spell) bool {
 
 func isAreaEnemyTargetType(target uint32) bool {
 	switch target {
-	case 2, 15, 16, 22, 24, 28, 54, 104:
+	case 2, 15, 16, 24, 28, 54, 104:
 		return true
 	default:
 		return false
