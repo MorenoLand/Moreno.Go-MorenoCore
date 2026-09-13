@@ -132,13 +132,20 @@ func (s *session) handleCharEnum(ctx context.Context) bool {
 }
 
 func (s *session) loadEnumEquipment(ctx context.Context, character *enumCharacter) {
-	if character == nil || s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+	if character == nil {
 		return
 	}
-	fields := strings.Fields(character.Equipment)
+	character.Equipment = s.loadEquipmentCache(ctx, character.GUID, character.Equipment)
+}
+
+func (s *session) loadEquipmentCache(ctx context.Context, guid uint64, cached string) string {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return cached
+	}
+	fields := strings.Fields(cached)
 	for index := 0; index < len(fields); index += 2 {
 		if fields[index] != "0" {
-			return
+			return cached
 		}
 	}
 	parts := make([]string, int(equipSlotEnd)*2)
@@ -147,9 +154,9 @@ func (s *session) loadEnumEquipment(ctx context.Context, character *enumCharacte
 	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, ii.itemEntry
 		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ? ORDER BY ci.slot`, character.GUID, equipSlotEnd)
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ? ORDER BY ci.slot`, guid, equipSlotEnd)
 	if err != nil {
-		return
+		return cached
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -160,8 +167,9 @@ func (s *session) loadEnumEquipment(ctx context.Context, character *enumCharacte
 		parts[slot*2] = strconv.FormatInt(itemEntry, 10)
 	}
 	if err := rows.Err(); err == nil {
-		character.Equipment = strings.Join(parts, " ")
+		return strings.Join(parts, " ")
 	}
+	return cached
 }
 
 func (s *session) handleCharCreate(ctx context.Context, payload []byte) bool {

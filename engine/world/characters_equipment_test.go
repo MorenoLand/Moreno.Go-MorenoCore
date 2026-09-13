@@ -34,3 +34,22 @@ func TestLoadEnumEquipmentFallsBackToInventory(t *testing.T) {
 		t.Fatalf("equipment=%q", character.Equipment)
 	}
 }
+
+func TestLoadEquipmentCachePreservesExistingValues(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	sess := &session{server: &Server{CharactersStore: store}}
+	fields := make([]string, int(equipSlotEnd)*2)
+	for i := range fields {
+		fields[i] = "0"
+	}
+	fields[0] = "1234"
+	cached := strings.Join(fields, " ")
+	if got := sess.loadEquipmentCache(context.Background(), 99, cached); got != cached {
+		t.Fatalf("equipment cache changed: got %q want %q", got, cached)
+	}
+}

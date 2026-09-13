@@ -265,6 +265,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	if equipment.Valid {
 		state.Equipment = equipment.String
 	}
+	state.Equipment = s.loadEquipmentCache(ctx, guid, state.Equipment)
 	// TrinityCore LoadFromDB/InitStatsForLevel cleans transient player flags
 	// (AFK/DND/GM/GHOST) before GM state is re-applied from extra_flags per
 	// GM.LoginState (0 off, 1 on, 2 saved state).
