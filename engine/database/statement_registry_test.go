@@ -102,3 +102,18 @@ func TestSQLiteDialectOverridesExecuteGuildAndChannelUpserts(t *testing.T) {
 		t.Fatalf("channel announce=%d ownership=%d password=%q", announce, ownership, password)
 	}
 }
+
+func TestAllGeneratedStatementsResolveForConfiguredDialects(t *testing.T) {
+	backends := []Backend{BackendSQLite, BackendMySQL, BackendMariaDB}
+	for _, definition := range AllStatements() {
+		for _, backend := range backends {
+			query, err := StatementSQL(definition.ID, backend)
+			if err != nil {
+				t.Fatalf("statement=%s backend=%s err=%v", definition.ID, backend, err)
+			}
+			if strings.TrimSpace(query) == "" {
+				t.Fatalf("statement=%s backend=%s returned empty SQL", definition.ID, backend)
+			}
+		}
+	}
+}
