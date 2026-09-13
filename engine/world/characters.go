@@ -1680,7 +1680,7 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE), response.Bytes(), true)
 		return true
 	}
-	instant := (s.player != nil && s.player.PlayerFlags&playerFlagResting != 0) || s.security > 0
+	instant := (s.player != nil && s.player.PlayerFlags&playerFlagResting != 0) || s.security > 0 || s.inFlight
 	response := protocol.NewBuffer(5)
 	response.WriteU32(0) // reason 0 = OK
 	if instant {
