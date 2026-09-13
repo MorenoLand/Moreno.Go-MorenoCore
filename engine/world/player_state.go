@@ -296,7 +296,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		state.ExtraFlags &= ^playerExtraGMOn
 		state.PlayerFlags &= ^playerFlagGM
 	}
-	if (state.ExtraFlags&playerExtraGMChat != 0) || (state.ExtraFlags&playerExtraGMOn != 0) || s.security > 0 {
+	if (state.ExtraFlags&playerExtraGMChat != 0) || (state.ExtraFlags&playerExtraGMOn != 0) {
 		s.gmChat = true
 		state.ExtraFlags |= playerExtraGMChat
 	}

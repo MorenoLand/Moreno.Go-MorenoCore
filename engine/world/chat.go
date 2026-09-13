@@ -306,7 +306,7 @@ func (s *session) chatTag() uint8 {
 	if s.player == nil {
 		return 0
 	}
-	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || (s.player.ExtraFlags&playerExtraGMChat != 0) || s.gmChat || s.security > 0
+	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0) || (s.player.ExtraFlags&playerExtraGMChat != 0) || s.gmChat
 	var tag uint8
 	if isGM {
 		tag |= 0x04
