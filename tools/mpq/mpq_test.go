@@ -2,6 +2,7 @@ package mpq
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -53,6 +54,31 @@ func TestDecompressWaveADPCM(t *testing.T) {
 	decoded, err = decompress(stereo, 8, fileCompress)
 	if err != nil || len(decoded) != 8 {
 		t.Fatalf("stereo decoded=%x err=%v", decoded, err)
+	}
+}
+
+func TestDecompressCombinedZlibPKWare(t *testing.T) {
+	want := []byte("combined MPQ compression")
+	var pkware bytes.Buffer
+	writer := blast.NewWriter(&pkware, blast.Binary, blast.DictionarySize1024)
+	if _, err := writer.Write(want); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var zlibData bytes.Buffer
+	zlibWriter := zlib.NewWriter(&zlibData)
+	if _, err := zlibWriter.Write(pkware.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := zlibWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	combined := append([]byte{0x0A}, zlibData.Bytes()...)
+	decoded, err := decompress(combined, uint32(len(want)), fileCompress)
+	if err != nil || !bytes.Equal(decoded, want) {
+		t.Fatalf("decoded=%q err=%v", decoded, err)
 	}
 }
 

@@ -292,45 +292,68 @@ func decompress(data []byte, expected, flags uint32) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty compressed MPQ sector")
 	}
+	return decompressCompressed(data[1:], data[0], expected)
+}
+
+func decompressCompressed(data []byte, mask byte, expected uint32) ([]byte, error) {
+	const supported = byte(0x01 | 0x02 | 0x08 | 0x10 | 0x40 | 0x80)
+	if mask&^supported != 0 {
+		return nil, errors.New("unsupported MPQ compression method")
+	}
+	if mask&0x01 != 0 {
+		return nil, errors.New("unsupported MPQ Huffman compression method")
+	}
+	methods := []byte{0x02, 0x08, 0x10, 0x40, 0x80}
+	decoded := data
+	used := false
+	for _, method := range methods {
+		if mask&method == 0 {
+			continue
+		}
+		var err error
+		decoded, err = decompressMethod(decoded, method, expected)
+		if err != nil {
+			return nil, err
+		}
+		used = true
+	}
+	if !used {
+		return nil, errors.New("unsupported MPQ compression method")
+	}
+	if uint32(len(decoded)) != expected {
+		return nil, fmt.Errorf("MPQ decompressed size mismatch: got %d, want %d", len(decoded), expected)
+	}
+	return decoded, nil
+}
+
+func decompressMethod(data []byte, method byte, expected uint32) ([]byte, error) {
+	if method == 0x40 || method == 0x80 {
+		return decompressWave(data, expected, map[byte]int{0x40: 1, 0x80: 2}[method])
+	}
 	var reader io.ReadCloser
 	var err error
-	switch {
-	case uint32(data[0])&filePKWare != 0:
-		reader, err = blast.NewReader(bytes.NewReader(data[1:]))
-	case data[0]&0x02 != 0:
-		reader, err = zlib.NewReader(bytes.NewReader(data[1:]))
-	case data[0]&0x10 != 0:
-		reader = io.NopCloser(bzip2.NewReader(bytes.NewReader(data[1:])))
-	case data[0]&0x40 != 0:
-		decoded, decodeErr := decompressWave(data[1:], expected, 1)
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		return decoded, nil
-	case data[0]&0x80 != 0:
-		decoded, decodeErr := decompressWave(data[1:], expected, 2)
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		return decoded, nil
+	switch method {
+	case 0x02:
+		reader, err = zlib.NewReader(bytes.NewReader(data))
+	case 0x08:
+		reader, err = blast.NewReader(bytes.NewReader(data))
+	case 0x10:
+		reader = io.NopCloser(bzip2.NewReader(bytes.NewReader(data)))
 	default:
 		return nil, errors.New("unsupported MPQ compression method")
 	}
 	if err != nil {
 		return nil, err
 	}
-	var output bytes.Buffer
-	if _, err := io.Copy(&output, reader); err != nil {
-		reader.Close()
-		return nil, err
+	decoded, readErr := io.ReadAll(reader)
+	closeErr := reader.Close()
+	if readErr != nil {
+		return nil, readErr
 	}
-	if err := reader.Close(); err != nil {
-		return nil, err
+	if closeErr != nil {
+		return nil, closeErr
 	}
-	if uint32(output.Len()) != expected {
-		return nil, fmt.Errorf("MPQ decompressed size mismatch: got %d, want %d", output.Len(), expected)
-	}
-	return output.Bytes(), nil
+	return decoded, nil
 }
 
 func decompressImplode(data []byte, expected uint32) ([]byte, error) {
