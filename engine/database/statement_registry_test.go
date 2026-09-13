@@ -156,3 +156,15 @@ func TestAllGeneratedStatementsResolveForConfiguredDialects(t *testing.T) {
 		}
 	}
 }
+
+func TestSQLiteOverridesCoverKnownMySQLSpecificStatements(t *testing.T) {
+	for _, definition := range AllStatements() {
+		upper := strings.ToUpper(definition.SQL)
+		needsOverride := strings.Contains(upper, "UNIX_TIMESTAMP") || strings.Contains(upper, "CONCAT(") || strings.Contains(upper, "ON DUPLICATE KEY") || strings.Contains(upper, "INSERT IGNORE") || strings.Contains(upper, "LIMIT 0,") || strings.Contains(upper, "DATEDIFF(") || strings.Contains(upper, "DELETE CB FROM")
+		if needsOverride {
+			if _, ok := sqliteStatementOverrides[definition.ID]; !ok {
+				t.Fatalf("statement %s contains dialect-specific SQL without explicit SQLite override", definition.ID)
+			}
+		}
+	}
+}
