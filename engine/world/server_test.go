@@ -325,6 +325,20 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if questStatusOpcode != uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE) || len(questStatusPayload) != 4 {
 		t.Fatalf("quest status opcode=%x payload=%d", questStatusOpcode, len(questStatusPayload))
 	}
+	chat := protocol.NewBuffer(16)
+	chat.WriteU32(chatSay)
+	chat.WriteU32(7)
+	chat.WriteCString("network hello")
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_MESSAGECHAT), chat.Bytes(), clientCrypt); err != nil {
+		t.Fatal(err)
+	}
+	chatOpcode, chatPayload, err = readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chatOpcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) || len(chatPayload) == 0 {
+		t.Fatalf("network chat opcode=%x payload=%d", chatOpcode, len(chatPayload))
+	}
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST), nil, clientCrypt); err != nil {
 		t.Fatal(err)
 	}
