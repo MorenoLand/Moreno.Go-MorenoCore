@@ -338,7 +338,7 @@ func writeVMO(writer io.Writer, model rawModel) error {
 			return err
 		}
 	}
-	return writeBIH(writer, groupBounds(model.Groups), len(model.Groups))
+	return writeGroupBIH(writer, groupBounds(model.Groups))
 }
 
 func writeGroupGeometry(writer io.Writer, group rawGroup) error {
@@ -378,37 +378,30 @@ func writeGroupGeometry(writer io.Writer, group rawGroup) error {
 }
 
 func writeBIHForGroup(writer io.Writer, group rawGroup) error {
-	return writeBIHChunk(writer, "MBIH", group.Low, group.High, len(group.Triangles))
-}
-
-func writeBIH(writer io.Writer, bounds [][2]vector3, count int) error {
-	low, high := vector3{}, vector3{}
-	if len(bounds) > 0 {
-		low, high = bounds[0][0], bounds[0][1]
-		for _, bound := range bounds[1:] {
-			low = minVector(low, bound[0])
-			high = maxVector(high, bound[1])
+	primitives := make([]bihPrimitive, len(group.Triangles))
+	for index, triangle := range group.Triangles {
+		if int(triangle[0]) >= len(group.Vertices) || int(triangle[1]) >= len(group.Vertices) || int(triangle[2]) >= len(group.Vertices) {
+			return errors.New("triangle index is out of range")
 		}
+		low := minVector(group.Vertices[triangle[0]], minVector(group.Vertices[triangle[1]], group.Vertices[triangle[2]]))
+		high := maxVector(group.Vertices[triangle[0]], maxVector(group.Vertices[triangle[1]], group.Vertices[triangle[2]]))
+		primitives[index] = bihPrimitive{Low: low, High: high, Index: uint32(index)}
 	}
-	return writeBIHChunk(writer, "GBIH", low, high, count)
-}
-
-func writeBIHChunk(writer io.Writer, name string, low, high vector3, count int) error {
-	if _, err := io.WriteString(writer, name); err != nil {
+	if _, err := io.WriteString(writer, "MBIH"); err != nil {
 		return err
 	}
-	if count == -1 {
-		count = 0
+	return writeBIH(writer, primitives)
+}
+
+func writeGroupBIH(writer io.Writer, bounds [][2]vector3) error {
+	primitives := make([]bihPrimitive, len(bounds))
+	for index, bound := range bounds {
+		primitives[index] = bihPrimitive{Low: bound[0], High: bound[1], Index: uint32(index)}
 	}
-	if err := binary.Write(writer, binary.LittleEndian, low); err != nil || binary.Write(writer, binary.LittleEndian, high) != nil || binary.Write(writer, binary.LittleEndian, uint32(3)) != nil || binary.Write(writer, binary.LittleEndian, uint32(3<<30)) != nil || binary.Write(writer, binary.LittleEndian, uint32(count)) != nil || binary.Write(writer, binary.LittleEndian, uint32(count)) != nil {
-		return errors.New("failed to write BIH")
+	if _, err := io.WriteString(writer, "GBIH"); err != nil {
+		return err
 	}
-	for i := 0; i < count; i++ {
-		if err := binary.Write(writer, binary.LittleEndian, uint32(i)); err != nil {
-			return err
-		}
-	}
-	return nil
+	return writeBIH(writer, primitives)
 }
 
 func groupBounds(groups []rawGroup) [][2]vector3 {

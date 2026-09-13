@@ -18,6 +18,25 @@ func TestMin(t *testing.T) {
 	}
 }
 
+func TestBIHBuildsSerializedInteriorNodes(t *testing.T) {
+	primitives := make([]bihPrimitive, 4)
+	for index := range primitives {
+		low := float32(index * 10)
+		primitives[index] = bihPrimitive{Low: vector3{low, 0, 0}, High: vector3{low + 1, 1, 1}, Index: uint32(index)}
+	}
+	low, high, tree, objects := buildBIH(primitives)
+	if low != (vector3{0, 0, 0}) || high != (vector3{31, 1, 1}) || len(tree) <= 3 || len(objects) != 4 {
+		t.Fatalf("unexpected BIH bounds/tree low=%v high=%v tree=%d objects=%d", low, high, len(tree), len(objects))
+	}
+	seen := make(map[uint32]bool, len(objects))
+	for _, index := range objects {
+		if index >= 4 || seen[index] {
+			t.Fatalf("invalid BIH object permutation: %v", objects)
+		}
+		seen[index] = true
+	}
+}
+
 func TestPrintBanner(t *testing.T) {
 	printBanner()
 }
