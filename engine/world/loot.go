@@ -278,6 +278,9 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	}
 	s.server.lootMu.Unlock()
 	if !newLoot {
+		if !s.server.creatureLootAllowed(targetGUID, stdKey, s.playerGUID, s.groupID) {
+			return s.sendLootError(targetGUID, 0) == nil
+		}
 		loot.addViewer(s)
 		s.activeLoot = loot
 		return s.sendLootResponse(loot) == nil
@@ -568,6 +571,11 @@ func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) b
 		target, validTarget := s.getCombatTarget(ctx, s.activeLoot.TargetGUID)
 		if !validTarget || target.Map != s.player.Map || target.Health != 0 || distance3D(s.player.X, s.player.Y, s.player.Z, target.X, target.Y, target.Z) > 5.0 {
 			return s.sendLootError(s.activeLoot.TargetGUID, 4) == nil
+		}
+		guid := uint32(s.activeLoot.TargetGUID & 0x00FFFFFF)
+		entry := uint32((s.activeLoot.TargetGUID >> 24) & 0x00FFFFFF)
+		if !s.server.creatureLootAllowed(s.activeLoot.TargetGUID, creatureWorldGUID(guid, entry), s.playerGUID, s.groupID) {
+			return s.sendLootError(s.activeLoot.TargetGUID, 0) == nil
 		}
 	}
 
