@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -14,7 +15,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dbtool schema|import-sql")
+		fmt.Fprintln(os.Stderr, "usage: dbtool schema|import-sql|verify|statement-audit")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -24,10 +25,136 @@ func main() {
 		os.Exit(importSQL(os.Args[2:]))
 	case "verify":
 		os.Exit(verify(os.Args[2:]))
+	case "statement-audit":
+		os.Exit(statementAudit(os.Args[2:]))
 	default:
 		fmt.Fprintf(os.Stderr, "unknown dbtool command %q\n", os.Args[1])
 		os.Exit(2)
 	}
+}
+
+type statementAuditFailure struct {
+	id  database.StatementID
+	err error
+}
+
+type statementAuditDatabase struct {
+	name     string
+	total    int
+	prepared int
+	failures []statementAuditFailure
+}
+
+func statementDatabase(id database.StatementID) (string, error) {
+	name := string(id)
+	switch {
+	case strings.HasPrefix(name, "LOGIN_"):
+		return "auth", nil
+	case strings.HasPrefix(name, "CHAR_"):
+		return "characters", nil
+	case strings.HasPrefix(name, "WORLD_"):
+		return "world", nil
+	default:
+		return "", fmt.Errorf("statement %s has no logical database mapping", id)
+	}
+}
+
+func auditStatementDefinitions(ctx context.Context, db *sql.DB, backend database.Backend, definitions []database.StatementDefinition) (int, []statementAuditFailure) {
+	prepared := 0
+	failures := make([]statementAuditFailure, 0)
+	for _, definition := range definitions {
+		query, err := database.StatementSQL(definition.ID, backend)
+		if err != nil {
+			failures = append(failures, statementAuditFailure{id: definition.ID, err: err})
+			continue
+		}
+		stmt, err := db.PrepareContext(ctx, query)
+		if err != nil {
+			failures = append(failures, statementAuditFailure{id: definition.ID, err: err})
+			continue
+		}
+		if err := stmt.Close(); err != nil {
+			failures = append(failures, statementAuditFailure{id: definition.ID, err: err})
+			continue
+		}
+		prepared++
+	}
+	return prepared, failures
+}
+
+func auditStatements(ctx context.Context, inputDir string, backend database.Backend) ([]statementAuditDatabase, error) {
+	definitions := map[string][]database.StatementDefinition{"auth": {}, "characters": {}, "world": {}}
+	for _, definition := range database.AllStatements() {
+		name, err := statementDatabase(definition.ID)
+		if err != nil {
+			return nil, err
+		}
+		definitions[name] = append(definitions[name], definition)
+	}
+	names := []string{"auth", "characters", "world"}
+	results := make([]statementAuditDatabase, 0, len(names))
+	for _, name := range names {
+		sort.Slice(definitions[name], func(i, j int) bool { return definitions[name][i].ID < definitions[name][j].ID })
+		path := filepath.Join(inputDir, name+".db")
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("%s database %s: %w", name, path, err)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("%s database path %s is a directory", name, path)
+		}
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			return nil, fmt.Errorf("%s database %s: %w", name, path, err)
+		}
+		db.SetMaxOpenConns(1)
+		if err := db.PingContext(ctx); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("%s database %s: %w", name, path, err)
+		}
+		prepared, failures := auditStatementDefinitions(ctx, db, backend, definitions[name])
+		dbErr := db.Close()
+		if dbErr != nil {
+			return nil, fmt.Errorf("%s database %s close: %w", name, path, dbErr)
+		}
+		results = append(results, statementAuditDatabase{name: name, total: len(definitions[name]), prepared: prepared, failures: failures})
+	}
+	return results, nil
+}
+
+func statementAudit(args []string) int {
+	fs := flag.NewFlagSet("statement-audit", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	dir := fs.String("input-dir", ".", "SQLite database directory")
+	backendName := fs.String("backend", "sqlite", "statement dialect; only sqlite can be audited against local database files")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	backend := database.Backend(strings.ToLower(*backendName))
+	if backend != database.BackendSQLite {
+		fmt.Fprintf(os.Stderr, "statement-audit requires --backend=sqlite for local database files\n")
+		return 2
+	}
+	results, err := auditStatements(context.Background(), *dir, backend)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	total, prepared, failures := 0, 0, 0
+	for _, result := range results {
+		fmt.Printf("%s statements=%d prepared=%d failures=%d\n", result.name, result.total, result.prepared, len(result.failures))
+		total += result.total
+		prepared += result.prepared
+		failures += len(result.failures)
+		for _, failure := range result.failures {
+			fmt.Printf("  %s: %v\n", failure.id, failure.err)
+		}
+	}
+	fmt.Printf("total statements=%d prepared=%d failures=%d backend=%s\n", total, prepared, failures, backend)
+	if failures != 0 {
+		return 1
+	}
+	return 0
 }
 
 func schema(args []string) int {

@@ -36,6 +36,9 @@ func TestSQLiteDialectOverridesAvoidMySQLOnlySyntax(t *testing.T) {
 		"LOGIN_INS_ALDL_IP_LOGGING", "LOGIN_INS_FACL_IP_LOGGING", "LOGIN_INS_CHAR_IP_LOGGING", "LOGIN_INS_FALP_IP_LOGGING", "LOGIN_INS_ACCOUNT_MUTE",
 		"LOGIN_INS_RBAC_ACCOUNT_PERMISSION", "CHAR_INS_CHARACTER_BAN",
 		"CHAR_INS_PVPSTATS_BATTLEGROUND", "CHAR_SEL_PVPSTATS_FACTIONS_OVERALL", "CHAR_INS_QUEST_TRACK", "CHAR_UPD_QUEST_TRACK_COMPLETE_TIME", "CHAR_UPD_QUEST_TRACK_ABANDON_TIME",
+		"LOGIN_SEL_PINFO", "CHAR_DEL_ITEM_BOP_TRADE", "CHAR_DEL_GUILD_MEMBER_WITHDRAW", "CHAR_DEL_ALL_GM_TICKETS",
+		"CHAR_DEL_EXPIRED_CHAR_INSTANCE_BY_MAP_DIFF", "CHAR_DEL_GROUP_INSTANCE_BY_MAP_DIFF", "CHAR_UPD_CHAR_INVENTORY_FACTION_CHANGE",
+		"CHAR_UPD_EXPIRE_CHAR_INSTANCE_BY_MAP_DIFF", "CHAR_UPD_QUEST_TRACK_GM_COMPLETE",
 	}
 	for _, id := range ids {
 		query, err := StatementSQL(id, BackendSQLite)
@@ -142,6 +145,92 @@ func TestSQLiteDialectOverridesExecuteRBACAndCharacterBanStatements(t *testing.T
 	}
 }
 
+func TestSQLiteDialectOverridesExecuteCleanupAndStateStatements(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := &Store{Name: "characters", Backend: BackendSQLite, DB: db}
+	for _, statement := range []string{
+		"CREATE TABLE gm_ticket (id INTEGER PRIMARY KEY)",
+		"CREATE TABLE guild_member_withdraw (guid INTEGER PRIMARY KEY, tab0 INTEGER, tab1 INTEGER, tab2 INTEGER, tab3 INTEGER, tab4 INTEGER, tab5 INTEGER, money INTEGER)",
+		"CREATE TABLE item_soulbound_trade_data (itemGuid INTEGER PRIMARY KEY, allowedPlayers TEXT)",
+		"CREATE TABLE instance (id INTEGER PRIMARY KEY, map INTEGER, difficulty INTEGER)",
+		"CREATE TABLE character_instance (guid INTEGER, instance INTEGER, permanent INTEGER, extendState INTEGER, PRIMARY KEY (guid, instance))",
+		"CREATE TABLE group_instance (guid INTEGER, instance INTEGER, permanent INTEGER, PRIMARY KEY (guid, instance))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER)",
+		"CREATE TABLE character_inventory (guid INTEGER, item INTEGER PRIMARY KEY)",
+		"CREATE TABLE quest_tracker (id INTEGER, character_guid INTEGER, quest_accept_time TEXT, quest_complete_time TEXT, quest_abandon_time TEXT, completed_by_gm INTEGER, core_hash TEXT, core_revision TEXT)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec("INSERT INTO gm_ticket VALUES (1), (2); INSERT INTO guild_member_withdraw VALUES (1, 1, 2, 3, 4, 5, 6, 7); INSERT INTO item_soulbound_trade_data VALUES (9, '10,11'); INSERT INTO instance VALUES (1, 33, 2), (2, 33, 2), (3, 34, 2); INSERT INTO character_instance VALUES (10, 1, 0, 0), (11, 2, 1, 1), (12, 3, 1, 2); INSERT INTO group_instance VALUES (20, 1, 0), (21, 3, 0); INSERT INTO item_instance VALUES (100, 200); INSERT INTO character_inventory VALUES (77, 100); INSERT INTO quest_tracker VALUES (5, 9, '2026-01-01 00:00:00', NULL, NULL, 0, 'a', 'a'), (5, 9, '2026-01-02 00:00:00', NULL, NULL, 0, 'b', 'b')"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, id := range []StatementID{"CHAR_DEL_ALL_GM_TICKETS", "CHAR_DEL_GUILD_MEMBER_WITHDRAW", "CHAR_DEL_ITEM_BOP_TRADE"} {
+		args := []any{}
+		if id == "CHAR_DEL_ITEM_BOP_TRADE" {
+			args = []any{9}
+		}
+		if _, err := store.ExecStatement(ctx, id, args...); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM gm_ticket").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("gm tickets=%d err=%v", count, err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM guild_member_withdraw").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("guild withdrawals=%d err=%v", count, err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM item_soulbound_trade_data").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("soulbound trade rows=%d err=%v", count, err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_DEL_EXPIRED_CHAR_INSTANCE_BY_MAP_DIFF", 33, 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_DEL_GROUP_INSTANCE_BY_MAP_DIFF", 33, 2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_UPD_EXPIRE_CHAR_INSTANCE_BY_MAP_DIFF", 34, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM character_instance WHERE instance = 1").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("expired character instances=%d err=%v", count, err)
+	}
+	var extendState int
+	if err := db.QueryRow("SELECT extendState FROM character_instance WHERE instance = 3").Scan(&extendState); err != nil || extendState != 1 {
+		t.Fatalf("extend state=%d err=%v", extendState, err)
+	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM group_instance WHERE instance = 1").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("group instances=%d err=%v", count, err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_UPD_CHAR_INVENTORY_FACTION_CHANGE", 300, 200, 77); err != nil {
+		t.Fatal(err)
+	}
+	var itemEntry int
+	if err := db.QueryRow("SELECT itemEntry FROM item_instance WHERE guid = 100").Scan(&itemEntry); err != nil || itemEntry != 300 {
+		t.Fatalf("item entry=%d err=%v", itemEntry, err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_UPD_QUEST_TRACK_GM_COMPLETE", 5, 9); err != nil {
+		t.Fatal(err)
+	}
+	var older, newer int
+	if err := db.QueryRow("SELECT completed_by_gm FROM quest_tracker WHERE quest_accept_time = '2026-01-01 00:00:00'").Scan(&older); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT completed_by_gm FROM quest_tracker WHERE quest_accept_time = '2026-01-02 00:00:00'").Scan(&newer); err != nil {
+		t.Fatal(err)
+	}
+	if older != 0 || newer != 1 {
+		t.Fatalf("quest completion older=%d newer=%d", older, newer)
+	}
+}
+
 func TestAllGeneratedStatementsResolveForConfiguredDialects(t *testing.T) {
 	backends := []Backend{BackendSQLite, BackendMySQL, BackendMariaDB}
 	for _, definition := range AllStatements() {
@@ -160,7 +249,7 @@ func TestAllGeneratedStatementsResolveForConfiguredDialects(t *testing.T) {
 func TestSQLiteOverridesCoverKnownMySQLSpecificStatements(t *testing.T) {
 	for _, definition := range AllStatements() {
 		upper := strings.ToUpper(definition.SQL)
-		needsOverride := strings.Contains(upper, "UNIX_TIMESTAMP") || strings.Contains(upper, "CONCAT(") || strings.Contains(upper, "ON DUPLICATE KEY") || strings.Contains(upper, "INSERT IGNORE") || strings.Contains(upper, "LIMIT 0,") || strings.Contains(upper, "DATEDIFF(") || strings.Contains(upper, "DELETE CB FROM")
+		needsOverride := strings.Contains(upper, "UNIX_TIMESTAMP") || strings.Contains(upper, "CONCAT(") || strings.Contains(upper, "ON DUPLICATE KEY") || strings.Contains(upper, "INSERT IGNORE") || strings.Contains(upper, "LIMIT 0,") || strings.Contains(upper, "DATEDIFF(") || strings.Contains(upper, "DELETE CB FROM") || strings.Contains(upper, "DATE_FORMAT(") || strings.Contains(upper, "TRUNCATE") || strings.Contains(upper, " USING ") || strings.Contains(upper, "UPDATE ITEM_INSTANCE II") || strings.Contains(upper, "ORDER BY QUEST_ACCEPT_TIME DESC LIMIT 1")
 		if needsOverride {
 			if _, ok := sqliteStatementOverrides[definition.ID]; !ok {
 				t.Fatalf("statement %s contains dialect-specific SQL without explicit SQLite override", definition.ID)

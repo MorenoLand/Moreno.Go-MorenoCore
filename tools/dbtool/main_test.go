@@ -1,12 +1,53 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	_ "modernc.org/sqlite"
 )
+
+func TestStatementDatabase(t *testing.T) {
+	tests := []struct {
+		id   database.StatementID
+		name string
+	}{
+		{id: "LOGIN_SEL_REALMLIST", name: "auth"},
+		{id: "CHAR_SEL_CHARACTER", name: "characters"},
+		{id: "WORLD_SEL_COMMANDS", name: "world"},
+	}
+	for _, test := range tests {
+		name, err := statementDatabase(test.id)
+		if err != nil {
+			t.Fatalf("statementDatabase(%q) failed: %v", test.id, err)
+		}
+		if name != test.name {
+			t.Errorf("statementDatabase(%q) = %q, want %q", test.id, name, test.name)
+		}
+	}
+	if _, err := statementDatabase("UNKNOWN"); err == nil {
+		t.Fatal("statementDatabase accepted an unmapped statement")
+	}
+}
+
+func TestAuditStatementDefinitions(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to open sqlite memory database: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE account (id INTEGER, username TEXT)"); err != nil {
+		t.Fatalf("failed to create statement fixture: %v", err)
+	}
+	definitions := []database.StatementDefinition{{ID: "LOGIN_SEL_ACCOUNT_ID_BY_NAME"}}
+	prepared, failures := auditStatementDefinitions(context.Background(), db, database.BackendSQLite, definitions)
+	if prepared != 1 || len(failures) != 0 {
+		t.Fatalf("audit prepared=%d failures=%v, want one prepared statement", prepared, failures)
+	}
+}
 
 func TestDatabaseStats(t *testing.T) {
 	tempDB := filepath.Join(t.TempDir(), "stats_test.db")
