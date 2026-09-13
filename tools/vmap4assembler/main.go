@@ -351,12 +351,14 @@ func writeGroupGeometry(writer io.Writer, group rawGroup) error {
 	if _, err := io.WriteString(writer, "TRIM"); err != nil {
 		return err
 	}
-	if err := binary.Write(writer, binary.LittleEndian, uint32(4+len(group.Triangles)*6)); err != nil || binary.Write(writer, binary.LittleEndian, uint32(len(group.Triangles))) != nil {
+	if err := binary.Write(writer, binary.LittleEndian, uint32(4+len(group.Triangles)*12)); err != nil || binary.Write(writer, binary.LittleEndian, uint32(len(group.Triangles))) != nil {
 		return errors.New("failed to write VMAP triangle header")
 	}
 	for _, triangle := range group.Triangles {
-		if err := binary.Write(writer, binary.LittleEndian, triangle); err != nil {
-			return err
+		for _, index := range triangle {
+			if err := binary.Write(writer, binary.LittleEndian, uint32(index)); err != nil {
+				return err
+			}
 		}
 	}
 	if err := writeBIHForGroup(writer, group); err != nil {

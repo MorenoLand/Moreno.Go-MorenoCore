@@ -84,4 +84,8 @@ func TestRawVMAPModelConversionWritesCompleteVMO(t *testing.T) {
 	if len(data) <= 64 || string(data[:8]) != vMapMagic || !bytes.Contains(data, []byte("WMOD")) || !bytes.Contains(data, []byte("GMOD")) || !bytes.Contains(data, []byte("MBIH")) || !bytes.Contains(data, []byte("GBIH")) {
 		t.Fatalf("invalid assembled output length=%d prefix=%q", len(data), data[:min(len(data), 8)])
 	}
+	trim := bytes.Index(data, []byte("TRIM"))
+	if trim < 0 || binary.LittleEndian.Uint32(data[trim+4:]) != 16 || binary.LittleEndian.Uint32(data[trim+8:]) != 1 || binary.LittleEndian.Uint32(data[trim+12:]) != 0 || binary.LittleEndian.Uint32(data[trim+16:]) != 1 || binary.LittleEndian.Uint32(data[trim+20:]) != 2 {
+		t.Fatalf("TRIM did not use reference 32-bit indices: offset=%d", trim)
+	}
 }
