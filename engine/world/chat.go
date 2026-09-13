@@ -121,6 +121,9 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if typeID == chatWhisper && language != languageAddon {
 		language = languageUniversal
 	}
+	if (typeID == chatGuild || typeID == chatOfficer) && !s.guildChatSpeakAllowed(typeID == chatOfficer) {
+		return true
+	}
 	values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, scripting.PlayerEventChat, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
 	if hookErr != nil {
 		s.debug("lua chat hook failed", "account", s.accountName, "error", hookErr)
@@ -146,6 +149,40 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	s.server.broadcastChat(s, receiver, uint8(typeID), language, message, channel)
 	s.debug("chat accepted", "account", s.accountName, "type", typeID, "gm_chat", s.gmChat)
 	return true
+}
+
+func (s *session) guildChatSpeakAllowed(officer bool) bool {
+	if s == nil || s.player == nil || s.player.GuildID == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return s != nil && s.player != nil && s.player.GuildID != 0
+	}
+	var rights int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(context.Background(), `SELECT COALESCE(gr.rights, 0)
+		FROM guild_member gm LEFT JOIN guild_rank gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
+		WHERE gm.guildid = ? AND gm.guid = ? LIMIT 1`, s.player.GuildID, s.playerGUID).Scan(&rights); err != nil {
+		return false
+	}
+	required := int64(0x42)
+	if officer {
+		required = 0x48
+	}
+	return rights&required == required
+}
+
+func (s *Server) guildChatListenAllowed(target *session, officer bool) bool {
+	if target == nil || target.player == nil || target.player.GuildID == 0 || s == nil || s.CharactersStore == nil || s.CharactersStore.DB == nil {
+		return target != nil && target.player != nil && target.player.GuildID != 0
+	}
+	var rights int64
+	if err := s.CharactersStore.DB.QueryRowContext(context.Background(), `SELECT COALESCE(gr.rights, 0)
+		FROM guild_member gm LEFT JOIN guild_rank gr ON gr.guildid = gm.guildid AND gr.rid = gm.rank
+		WHERE gm.guildid = ? AND gm.guid = ? LIMIT 1`, target.player.GuildID, target.playerGUID).Scan(&rights); err != nil {
+		return false
+	}
+	required := int64(0x41)
+	if officer {
+		required = 0x44
+	}
+	return rights&required == required
 }
 
 func luaCancelled(values []any) bool {
@@ -204,6 +241,9 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			}
 		} else if chatType == chatGuild || chatType == chatOfficer {
 			if source.player.GuildID == 0 || value.player.GuildID != source.player.GuildID {
+				continue
+			}
+			if !s.guildChatListenAllowed(value, chatType == chatOfficer) {
 				continue
 			}
 		} else if value.player.Map != source.player.Map {

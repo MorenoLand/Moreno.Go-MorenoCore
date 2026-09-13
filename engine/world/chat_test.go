@@ -2,14 +2,43 @@ package world
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"log/slog"
 	"net"
 	"testing"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
+
+func TestGuildChatUsesReferenceRankRights(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE guild_member (guildid INTEGER, guid INTEGER, rank INTEGER)",
+		"CREATE TABLE guild_rank (guildid INTEGER, rid INTEGER, rights INTEGER)",
+		"INSERT INTO guild_member VALUES (4, 10, 1), (4, 11, 2)",
+		"INSERT INTO guild_rank VALUES (4, 1, 66), (4, 2, 65)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}}
+	source := &session{server: server, playerGUID: 10, player: &playerState{GuildID: 4}}
+	if !source.guildChatSpeakAllowed(false) || source.guildChatSpeakAllowed(true) {
+		t.Fatal("rank 1 guild/officer speaking rights were not enforced")
+	}
+	target := &session{server: server, playerGUID: 11, player: &playerState{GuildID: 4}}
+	if !server.guildChatListenAllowed(target, false) || server.guildChatListenAllowed(target, true) {
+		t.Fatal("rank 2 guild/officer listening rights were not enforced")
+	}
+}
 
 func TestLuaChatHookCanCancelMessage(t *testing.T) {
 	runtime := scripting.NewRuntime(scripting.Config{Enabled: true})
