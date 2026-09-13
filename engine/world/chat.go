@@ -69,6 +69,21 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid addon language type", "type", typeID)
 		return true
 	}
+	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
+		if language == languageUniversal {
+			s.debug("chat rejected", "account", s.accountName, "reason", "universal language")
+			return true
+		}
+		skill, known := languageSkill(language)
+		if !known {
+			s.debug("chat rejected", "account", s.accountName, "reason", "unknown language", "language", language)
+			return true
+		}
+		if skill != 0 && !s.hasLanguageSkill(skill) {
+			s.debug("chat rejected", "account", s.accountName, "reason", "language not learned", "language", language, "skill", skill)
+			return true
+		}
+	}
 	var targetName, channel, message string
 	switch uint8(typeID) {
 	case chatWhisper:
@@ -177,6 +192,52 @@ func addonChatType(typeID uint32) bool {
 	default:
 		return false
 	}
+}
+
+func languageSkill(language uint32) (uint16, bool) {
+	switch language {
+	case 1:
+		return 109, true
+	case 2:
+		return 113, true
+	case 3:
+		return 115, true
+	case 6:
+		return 111, true
+	case 7:
+		return 98, true
+	case 8:
+		return 139, true
+	case 9:
+		return 140, true
+	case 10:
+		return 137, true
+	case 11:
+		return 138, true
+	case 12:
+		return 141, true
+	case 13:
+		return 313, true
+	case 14:
+		return 315, true
+	case 33:
+		return 673, true
+	case 35:
+		return 759, true
+	case 36, 37, 38:
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+func (s *session) hasLanguageSkill(skill uint16) bool {
+	for _, value := range s.player.Skills {
+		if value.Skill == skill && value.Value > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *session) guildChatSpeakAllowed(officer bool) bool {

@@ -88,11 +88,11 @@ func TestHandleMessageChatBroadcastsSayToSender(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
-	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Map: 0}}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Map: 0, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
 	server.sessions[state] = struct{}{}
 	payload := protocol.NewBuffer(16)
 	payload.WriteU32(chatSay)
-	payload.WriteU32(1)
+	payload.WriteU32(7)
 	payload.WriteCString("hello")
 	done := make(chan bool, 1)
 	go func() { done <- state.handleMessageChat(context.Background(), payload.Bytes()) }()
@@ -130,6 +130,29 @@ func TestHandleMessageChatBroadcastsSayToSender(t *testing.T) {
 	}
 	if !<-done {
 		t.Fatal("chat handler rejected a valid say packet")
+	}
+}
+
+func TestChatLanguageSkillMappingMatchesReference(t *testing.T) {
+	for _, test := range []struct {
+		language uint32
+		skill    uint16
+		known    bool
+	}{
+		{language: 1, skill: 109, known: true},
+		{language: 7, skill: 98, known: true},
+		{language: 13, skill: 313, known: true},
+		{language: 36, skill: 0, known: true},
+		{language: 99, skill: 0, known: false},
+	} {
+		skill, known := languageSkill(test.language)
+		if skill != test.skill || known != test.known {
+			t.Fatalf("language=%d skill=%d known=%v, want skill=%d known=%v", test.language, skill, known, test.skill, test.known)
+		}
+	}
+	state := &session{player: &playerState{Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	if !state.hasLanguageSkill(98) || state.hasLanguageSkill(109) {
+		t.Fatal("language skill ownership did not follow the loaded player skills")
 	}
 }
 
