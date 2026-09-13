@@ -4,7 +4,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 310 / 117277 | — |
+| Server source files / lines | 1410 / 710273 | 310 / 117350 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
 | Client opcode registrations | 727 | 727 | 0 |
 | Client behavioral opcode bindings (reference, non-NULL) | 430 | — | — |
@@ -15,8 +15,8 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 0 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
-| Script source files / lines | 707 / 316814 | 6 / 2525 | — |
-| Test source files / lines | 9 / 1390 | 158 / 41094 | — |
+| Script source files / lines | 707 / 316814 | 6 / 2598 | — |
+| Test source files / lines | 9 / 1390 | 158 / 41118 | — |
 
 ## Missing behavioral client opcode handlers
 
