@@ -1780,6 +1780,10 @@ func (s *session) completeLogout(ctx context.Context) error {
 	s.stopTimedAchievements()
 	s.triggerLogout(ctx)
 	s.releaseActiveLoot()
+	if s.player != nil && s.player.Health == 0 && s.player.PlayerFlags&playerFlagGhost == 0 && !s.deathTimer.IsZero() {
+		s.buildPlayerRepop(ctx)
+		s.repopAtGraveyard(ctx)
+	}
 	if s.trade != nil {
 		_ = s.handleCancelTrade(ctx)
 	}

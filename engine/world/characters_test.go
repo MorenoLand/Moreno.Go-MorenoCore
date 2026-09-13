@@ -536,6 +536,50 @@ func TestCompleteLogoutCleansStateBeforeCompletionPacket(t *testing.T) {
 	}
 }
 
+func TestCompleteLogoutRepopsDeadPlayerBeforeSaving(t *testing.T) {
+	root, err := packageRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stores := makeMemoryStores(t, root)
+	server := NewServer(stores, slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
+	if _, err := stores.Characters.DB.Exec("INSERT INTO characters (guid, account, name, race, class, level, position_x, position_y, position_z, taximask, health) VALUES (9, 7, 'DeadLogout', 1, 1, 20, 1, 2, 3, '', 0)"); err != nil {
+		t.Fatal(err)
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{server: server, conn: serverConn, accountID: 7, playerGUID: 9, playerLoaded: true, deathTimer: time.Now().Add(time.Minute), player: &playerState{GUID: 9, Name: "DeadLogout", Race: 1, Level: 20, Map: 0, X: 1, Y: 2, Z: 3, Health: 0, MaxHealth: 100}, activeAuras: make(map[uint32]*activeAura), auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8)}
+	done := make(chan error, 1)
+	go func() { done <- sess.completeLogout(context.Background()) }()
+	for {
+		opcode, _, readErr := readServerFrame(clientConn, nil)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if opcode == uint16(protocol.OpcodeSMSG_LOGOUT_COMPLETE) {
+			break
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	var flags, health int64
+	if err := stores.Characters.DB.QueryRow("SELECT playerFlags, health FROM characters WHERE guid = ?", 9).Scan(&flags, &health); err != nil {
+		t.Fatal(err)
+	}
+	if uint32(flags)&playerFlagGhost == 0 || health != 1 {
+		t.Fatalf("saved dead state flags=%x health=%d", flags, health)
+	}
+	var corpses int
+	if err := stores.Characters.DB.QueryRow("SELECT COUNT(*) FROM corpse WHERE guid = ?", 9).Scan(&corpses); err != nil {
+		t.Fatal(err)
+	}
+	if corpses != 1 {
+		t.Fatalf("corpse rows=%d", corpses)
+	}
+}
+
 func TestBuildUnlearnSpellsUsesKnownNextRank(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
