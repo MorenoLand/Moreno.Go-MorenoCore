@@ -220,8 +220,16 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			s.debug("chat rejected", "account", s.accountName, "reason", "whisper target missing")
 			return true
 		}
-		if s.security == 0 && s.player != nil && uint32(s.player.Level) < s.server.Config.ChatWhisperLevelReq {
+		if !chatGMMode(s) && s.player != nil && uint32(s.player.Level) < s.server.Config.ChatWhisperLevelReq {
 			s.debug("chat rejected", "account", s.accountName, "reason", "whisper level requirement", "required", s.server.Config.ChatWhisperLevelReq, "level", s.player.Level)
+			return true
+		}
+		if s.hasAura(1852) && !chatGMMode(receiver) {
+			s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852, "receiver", receiver.playerGUID)
+			return true
+		}
+		if !s.twoSideChat && !chatGMMode(receiver) && s.playerAlliance() != receiver.playerAlliance() {
+			s.debug("chat rejected", "account", s.accountName, "reason", "whisper wrong faction", "receiver", receiver.playerGUID)
 			return true
 		}
 	}
@@ -247,6 +255,10 @@ func addonChatType(typeID uint32) bool {
 	default:
 		return false
 	}
+}
+
+func chatGMMode(s *session) bool {
+	return s != nil && s.player != nil && s.player.ExtraFlags&playerExtraGMOn != 0
 }
 
 func languageSkill(language uint32) (uint16, bool) {

@@ -251,6 +251,38 @@ func TestGMSilenceAuraBlocksNonWhisperChat(t *testing.T) {
 	}
 }
 
+func TestGMSilenceAuraBlocksWhisperToNormalPlayer(t *testing.T) {
+	server := &Server{sessions: make(map[*session]struct{})}
+	source := &session{server: server, playerLoaded: true, playerGUID: 1, auras: map[uint32]struct{}{1852: {}}, player: &playerState{GUID: 1, Name: "Source", Race: 1, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	target := &session{server: server, playerLoaded: true, playerGUID: 2, player: &playerState{GUID: 2, Name: "Target", Race: 1}}
+	server.sessions[source] = struct{}{}
+	server.sessions[target] = struct{}{}
+	payload := protocol.NewBuffer(32)
+	payload.WriteU32(chatWhisper)
+	payload.WriteU32(7)
+	payload.WriteCString("Target")
+	payload.WriteCString("blocked")
+	if !source.handleMessageChat(context.Background(), payload.Bytes()) {
+		t.Fatal("silenced whisper closed the session")
+	}
+}
+
+func TestWhisperWrongFactionRejectedWithoutPermission(t *testing.T) {
+	server := &Server{sessions: make(map[*session]struct{})}
+	source := &session{server: server, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Name: "Alliance", Race: 1, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	target := &session{server: server, playerLoaded: true, playerGUID: 2, player: &playerState{GUID: 2, Name: "Horde", Race: 2}}
+	server.sessions[source] = struct{}{}
+	server.sessions[target] = struct{}{}
+	payload := protocol.NewBuffer(32)
+	payload.WriteU32(chatWhisper)
+	payload.WriteU32(7)
+	payload.WriteCString("Horde")
+	payload.WriteCString("blocked")
+	if !source.handleMessageChat(context.Background(), payload.Bytes()) {
+		t.Fatal("wrong-faction whisper closed the session")
+	}
+}
+
 func TestChatLevelRequirementRejectsLowLevelSay(t *testing.T) {
 	var logs bytes.Buffer
 	server := &Server{Config: config.Config{ChatSayLevelReq: 10}, Logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})), sessions: make(map[*session]struct{})}
