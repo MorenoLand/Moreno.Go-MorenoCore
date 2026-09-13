@@ -905,31 +905,50 @@ func (s *session) loadPlayerSkills(ctx context.Context, state *playerState) erro
 		state.Skills = defaults
 		return nil
 	}
-	skills := make([]playerSkill, 0, 16)
+	type loadedSkill struct {
+		skill, value, max uint16
+	}
+	loaded := make([]loadedSkill, 0, 16)
 	for rows.Next() {
-		var skill, value, max uint16
-		if err := rows.Scan(&skill, &value, &max); err == nil {
-			if !isAllowedClassSkill(state.Class, skill) {
-				_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", state.GUID, skill)
-				continue
-			}
-			if isLanguageSkill(skill) && (value == 0 || max == 0) {
-				value = 300
-				max = 300
-			} else if isLevelScaledSkill(skill) {
-				expectedMax := uint16(math.Max(float64(state.Level)*5, 5))
-				if max > expectedMax || max == 0 {
-					max = expectedMax
-					if value > max {
-						value = max
-					}
-					_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", value, max, state.GUID, skill)
-				}
-			}
-			skills = append(skills, playerSkill{Skill: skill, Step: 1, Value: value, Max: max})
+		var skill loadedSkill
+		if err := rows.Scan(&skill.skill, &skill.value, &skill.max); err == nil {
+			loaded = append(loaded, skill)
 		}
 	}
-	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	skills := make([]playerSkill, 0, 16)
+	for _, loadedSkill := range loaded {
+		skill, value, max := loadedSkill.skill, loadedSkill.value, loadedSkill.max
+		if !isAllowedClassSkill(state.Class, skill) {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", state.GUID, skill)
+			continue
+		}
+		originalValue, originalMax := value, max
+		if isLanguageSkill(skill) {
+			value, max = 300, 300
+		} else if isLevelScaledSkill(skill) {
+			expectedMax := uint16(state.Level) * 5
+			if expectedMax < 5 {
+				expectedMax = 5
+			}
+			max = expectedMax
+			if value > max {
+				value = max
+			}
+		}
+		if value == 0 {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_skills WHERE guid = ? AND skill = ?", state.GUID, skill)
+			continue
+		}
+		if value != originalValue || max != originalMax {
+			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ?, max = ? WHERE guid = ? AND skill = ?", value, max, state.GUID, skill)
+		}
+		skills = append(skills, playerSkill{Skill: skill, Step: 1, Value: value, Max: max})
+	}
 	for _, def := range defaults {
 		found := false
 		for i, sk := range skills {

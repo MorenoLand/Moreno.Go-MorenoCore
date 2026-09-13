@@ -39,3 +39,39 @@ func TestLoadOptionalPlayerStateRestAndDrunkenness(t *testing.T) {
 		t.Fatalf("rest=%d drunk=%d", state.RestState, state.DrunkenState)
 	}
 }
+
+func TestLoadPlayerSkillsNormalizesLanguageAndLevelRanges(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE character_skills (guid INTEGER, skill INTEGER, value INTEGER, max INTEGER, PRIMARY KEY (guid, skill))"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO character_skills VALUES (1, 98, 1, 1), (1, 43, 1, 1)"); err != nil {
+		t.Fatal(err)
+	}
+	sess := &session{server: &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}}}
+	state := playerState{GUID: 1, Race: 1, Class: 1, Level: 20}
+	if err := sess.loadPlayerSkills(context.Background(), &state); err != nil {
+		t.Fatal(err)
+	}
+	values := make(map[uint16]playerSkill)
+	for _, skill := range state.Skills {
+		values[skill.Skill] = skill
+	}
+	if values[98].Value != 300 || values[98].Max != 300 || values[43].Value != 1 || values[43].Max != 100 {
+		t.Fatalf("skills=%+v", values)
+	}
+	var languageMax, levelMax int
+	if err := db.QueryRow("SELECT max FROM character_skills WHERE guid = 1 AND skill = 98").Scan(&languageMax); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT max FROM character_skills WHERE guid = 1 AND skill = 43").Scan(&levelMax); err != nil {
+		t.Fatal(err)
+	}
+	if languageMax != 300 || levelMax != 100 {
+		t.Fatalf("persisted max values=%d/%d", languageMax, levelMax)
+	}
+}
