@@ -63,6 +63,18 @@ func TestLuaWorldObjectBindings(t *testing.T) {
 	if object.Type != "GameObject" || object.Fields["Name"] != "Test Chest" {
 		t.Fatalf("object=%v", object)
 	}
+	if values, err := object.Methods["GetDisplayId"](context.Background(), nil); err != nil || values[0] != uint32(1234) {
+		t.Fatalf("display=%v err=%v", values, err)
+	}
+	if values, err := object.Methods["GetGoState"](context.Background(), nil); err != nil || values[0] != uint32(1) {
+		t.Fatalf("go state=%v err=%v", values, err)
+	}
+	if _, err := object.Methods["Despawn"](context.Background(), nil); err != nil || !server.isGameObjectHidden(object.Fields["GUID"].(uint64)) {
+		t.Fatalf("despawn err=%v", err)
+	}
+	if _, err := object.Methods["Respawn"](context.Background(), nil); err != nil || server.isGameObjectHidden(object.Fields["GUID"].(uint64)) {
+		t.Fatalf("respawn err=%v", err)
+	}
 	if _, err := object.Methods["RemoveFromWorld"](context.Background(), nil); err != nil {
 		t.Fatal(err)
 	}

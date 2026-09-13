@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"math"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
@@ -34,6 +35,8 @@ type luaGameObjectState struct {
 	X         float32
 	Y         float32
 	Z         float32
+	GoState   uint32
+	LootState uint32
 }
 
 func (s *session) luaCreature(ctx context.Context, guid uint64) *scripting.Object {
@@ -160,6 +163,7 @@ func (s *session) loadLuaGameObject(ctx context.Context, low, entry uint32) (lua
 		return state, false
 	}
 	state.Map, state.GUID = uint32(mapID), gameObjectGUID(state.LowGUID, state.Entry)
+	state.GoState, state.LootState = 1, 1
 	return state, true
 }
 
@@ -168,6 +172,11 @@ func (s *session) luaGameObjectObject(state luaGameObjectState) *scripting.Objec
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetEntry"] = luaNoArgs(func() any { return state.Entry })
 	methods["GetDisplayId"] = luaNoArgs(func() any { return state.DisplayID })
+	methods["GetDBTableGUIDLow"] = luaNoArgs(func() any { return state.LowGUID })
+	methods["GetGoState"] = luaNoArgs(func() any { return state.GoState })
+	methods["GetLootState"] = luaNoArgs(func() any { return state.LootState })
+	methods["IsSpawned"] = luaNoArgs(func() any { return !s.server.isGameObjectHidden(state.GUID) })
+	methods["IsActive"] = luaNoArgs(func() any { return state.GoState == 0 })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
 	methods["GetGUIDLow"] = luaNoArgs(func() any { return state.LowGUID })
 	methods["GetObjectType"] = luaNoArgs(func() any { return "GameObject" })
@@ -184,7 +193,57 @@ func (s *session) luaGameObjectObject(state luaGameObjectState) *scripting.Objec
 		s.server.objectsMu.Unlock()
 		return nil, nil
 	}
-	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "InWorld": true}, Methods: methods}
+	methods["SetGoState"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("state is required")
+		}
+		value, err := luaUint32Arg(args, 0)
+		if err != nil || value > 2 {
+			if err == nil {
+				err = fmt.Errorf("invalid gameobject state")
+			}
+			return nil, err
+		}
+		state.GoState = value
+		return nil, nil
+	}
+	methods["SetLootState"] = func(_ context.Context, args []any) ([]any, error) {
+		if len(args) == 0 {
+			return nil, fmt.Errorf("loot state is required")
+		}
+		value, err := luaUint32Arg(args, 0)
+		if err != nil || value > 3 {
+			if err == nil {
+				err = fmt.Errorf("invalid loot state")
+			}
+			return nil, err
+		}
+		state.LootState = value
+		return nil, nil
+	}
+	methods["Despawn"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.objectsMuLockGameObject(state.GUID)
+		return nil, nil
+	}
+	methods["Respawn"] = func(_ context.Context, _ []any) ([]any, error) {
+		s.objectsMuUnlockGameObject(state.GUID)
+		return nil, nil
+	}
+	return &scripting.Object{Type: "GameObject", Fields: map[string]any{"Name": state.Name, "GUID": state.GUID, "Entry": state.Entry, "Map": state.Map, "MapId": state.Map, "X": state.X, "Y": state.Y, "Z": state.Z, "DisplayID": state.DisplayID, "GoState": state.GoState, "LootState": state.LootState, "InWorld": true}, Methods: methods}
+}
+
+func (s *session) objectsMuLockGameObject(guid uint64) {
+	s.server.objectsMu.Lock()
+	if s.server.hiddenGameObjects == nil {
+		s.server.hiddenGameObjects = make(map[uint64]struct{})
+	}
+	s.server.hiddenGameObjects[guid] = struct{}{}
+	s.server.objectsMu.Unlock()
+}
+func (s *session) objectsMuUnlockGameObject(guid uint64) {
+	s.server.objectsMu.Lock()
+	delete(s.server.hiddenGameObjects, guid)
+	s.server.objectsMu.Unlock()
 }
 
 func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y float32, distance float32) *scripting.Object {
@@ -201,6 +260,7 @@ func (s *session) nearestGameObject(ctx context.Context, mapID uint32, x, y floa
 			continue
 		}
 		candidate.Map = mapID
+		candidate.GoState, candidate.LootState = 1, 1
 		candidate.GUID = gameObjectGUID(candidate.LowGUID, candidate.Entry)
 		if s.server.isGameObjectHidden(candidate.GUID) {
 			continue
