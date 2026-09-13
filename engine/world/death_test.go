@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -320,6 +321,36 @@ func TestSendLoadedCorpseReplaysGhostPackets(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatalf("timeout waiting for opcode %x", expected)
 		}
+	}
+}
+
+func TestPrepareLoginResurrectionClearsPersistedDeathState(t *testing.T) {
+	player := &playerState{GUID: 9, Health: 1, MaxHealth: 100, PlayerFlags: playerFlagGhost, AtLogin: uint32(atLoginResurrect), MaxPowers: [7]uint32{100, 100, 0, 100}}
+	state, _, server := newDeathTestSession(t, player)
+	for _, statement := range []string{"ALTER TABLE characters ADD COLUMN at_login INTEGER NOT NULL DEFAULT 0", "ALTER TABLE characters ADD COLUMN health INTEGER NOT NULL DEFAULT 0", "ALTER TABLE characters ADD COLUMN playerFlags INTEGER NOT NULL DEFAULT 0", "INSERT INTO characters (guid, at_login, health, playerFlags, death_expire_time) VALUES (9, ?, 1, ?, 12345)"} {
+		var err error
+		if strings.Contains(statement, "VALUES") {
+			_, err = server.CharactersStore.DB.Exec(statement, atLoginResurrect, playerFlagGhost)
+		} else {
+			_, err = server.CharactersStore.DB.Exec(statement)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	state.activeAuras = map[uint32]*activeAura{8326: &activeAura{SpellID: 8326}}
+	state.auras = map[uint32]struct{}{8326: {}}
+	state.auraSlots = map[uint32]uint8{8326: 0}
+	state.prepareLoginResurrection(context.Background(), player)
+	if player.PlayerFlags&playerFlagGhost != 0 || player.Health != 50 || player.AtLogin&uint32(atLoginResurrect) != 0 || state.hasAura(8326) {
+		t.Fatalf("state=%+v auras=%v", player, state.auras)
+	}
+	var atLogin, health, flags, deathExpire int
+	if err := server.CharactersStore.DB.QueryRow("SELECT at_login, health, playerFlags, death_expire_time FROM characters WHERE guid = 9").Scan(&atLogin, &health, &flags, &deathExpire); err != nil {
+		t.Fatal(err)
+	}
+	if atLogin != 0 || health != 50 || flags&int(playerFlagGhost) != 0 || deathExpire != 0 {
+		t.Fatalf("persisted state at_login=%d health=%d flags=%x death_expire_time=%d", atLogin, health, flags, deathExpire)
 	}
 }
 

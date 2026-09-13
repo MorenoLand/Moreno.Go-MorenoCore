@@ -389,6 +389,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err != nil {
 		return false
 	}
+	s.prepareLoginResurrection(ctx, &state)
 	mounts, err := s.loadMountState(ctx, guid)
 	if err != nil {
 		return false

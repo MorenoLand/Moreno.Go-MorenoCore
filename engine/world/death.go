@@ -600,6 +600,40 @@ func (s *session) sendLoadedCorpse(ctx context.Context) {
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
 }
 
+func (s *session) prepareLoginResurrection(ctx context.Context, state *playerState) {
+	if s == nil || state == nil || state.AtLogin&uint32(atLoginResurrect) == 0 {
+		return
+	}
+	if s.server != nil && s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM corpse WHERE guid = ?", state.GUID)
+		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET at_login = at_login & ?, health = ?, playerFlags = ?, death_expire_time = 0 WHERE guid = ?", ^uint32(atLoginResurrect), maxUint32(state.MaxHealth/2, 1), state.PlayerFlags&^playerFlagGhost, state.GUID)
+	}
+	s.castMu.Lock()
+	for _, spellID := range []uint32{8326, 20584} {
+		if aura, ok := s.activeAuras[spellID]; ok && aura != nil {
+			aura.Stopped = true
+			if aura.Timer != nil {
+				aura.Timer.Stop()
+			}
+			if aura.TickTimer != nil {
+				aura.TickTimer.Stop()
+			}
+			delete(s.activeAuras, spellID)
+		}
+		delete(s.auras, spellID)
+		delete(s.auraSlots, spellID)
+	}
+	s.castMu.Unlock()
+	state.PlayerFlags &^= playerFlagGhost
+	state.PlayerFieldBytes &^= playerFieldByteReleaseTimer
+	state.Health = maxUint32(state.MaxHealth/2, 1)
+	state.Powers[0] = state.MaxPowers[0] / 2
+	state.Powers[1] = 0
+	state.Powers[3] = state.MaxPowers[3] / 2
+	state.AtLogin &^= uint32(atLoginResurrect)
+	s.deathExpireTime = 0
+}
+
 func battlegroundMap(mapID uint32) bool {
 	switch mapID {
 	case 30, 489, 529, 566, 559, 562, 572, 607, 617, 618, 628:
