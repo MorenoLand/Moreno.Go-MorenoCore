@@ -149,6 +149,13 @@ type playerState struct {
 	BankBagSlots         uint8
 	RestState            uint8
 	Level                uint8
+	TotalPlayedTime      uint32
+	LevelPlayedTime      uint32
+	RestBonus            float32
+	LogoutTime           int64
+	LogoutResting        bool
+	StableSlots          uint8
+	TaxiPath             string
 	XP                   uint32
 	Money                uint32
 	PlayerFlags          uint32
@@ -783,6 +790,28 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 	}
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(drunk, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&drunk); err == nil && drunk >= 0 {
 		state.DrunkenState = uint16(drunk)
+	}
+	var totalPlayed, levelPlayed, logoutTime, logoutResting, stableSlots int64
+	var restBonus float64
+	var taxiPath sql.NullString
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(totaltime, 0), COALESCE(leveltime, 0), COALESCE(rest_bonus, 0),
+		COALESCE(logout_time, 0), COALESCE(is_logout_resting, 0), COALESCE(stable_slots, 0), COALESCE(taxi_path, '')
+		FROM characters WHERE guid = ?`, state.GUID).Scan(&totalPlayed, &levelPlayed, &restBonus, &logoutTime, &logoutResting, &stableSlots, &taxiPath); err == nil {
+		if totalPlayed >= 0 {
+			state.TotalPlayedTime = uint32(totalPlayed)
+		}
+		if levelPlayed >= 0 {
+			state.LevelPlayedTime = uint32(levelPlayed)
+		}
+		state.RestBonus = float32(restBonus)
+		state.LogoutTime = logoutTime
+		state.LogoutResting = logoutResting != 0
+		if stableSlots >= 0 {
+			state.StableSlots = uint8(stableSlots)
+		}
+		if taxiPath.Valid {
+			state.TaxiPath = taxiPath.String
+		}
 	}
 	var bankSlots int64
 	_ = s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(bankSlots, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&bankSlots)

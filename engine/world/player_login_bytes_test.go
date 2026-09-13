@@ -19,15 +19,17 @@ func TestLoadOptionalPlayerStateRestAndDrunkenness(t *testing.T) {
 		power1 INTEGER, power2 INTEGER, power3 INTEGER, power4 INTEGER, power5 INTEGER, power6 INTEGER, power7 INTEGER,
 		cinematic INTEGER, knownCurrencies INTEGER, watchedFaction INTEGER, ammoId INTEGER, actionBars INTEGER,
 		restState INTEGER, drunk INTEGER, bankSlots INTEGER, talentGroupsCount INTEGER, activeTalentGroup INTEGER,
-		chosenTitle INTEGER, knownTitles TEXT
+		chosenTitle INTEGER, knownTitles TEXT, totaltime INTEGER, leveltime INTEGER, rest_bonus REAL,
+		logout_time INTEGER, is_logout_resting INTEGER, stable_slots INTEGER, taxi_path TEXT
 	)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO characters
 		(guid, account, xp, money, health, power1, power2, power3, power4, power5, power6, power7,
 		 cinematic, knownCurrencies, watchedFaction, ammoId, actionBars, restState, drunk, bankSlots,
-		 talentGroupsCount, activeTalentGroup, chosenTitle, knownTitles)
-		VALUES (1, 7, 10, 20, 30, 1, 2, 3, 4, 5, 6, 7, 0, 9, 10, 11, 12, 2, 77, 4, 2, 1, 123, '')`); err != nil {
+		 talentGroupsCount, activeTalentGroup, chosenTitle, knownTitles, totaltime, leveltime, rest_bonus,
+		 logout_time, is_logout_resting, stable_slots, taxi_path)
+		VALUES (1, 7, 10, 20, 30, 1, 2, 3, 4, 5, 6, 7, 0, 9, 10, 11, 12, 2, 77, 4, 2, 1, 123, '', 1234, 56, 78.5, 9876, 1, 4, 'path')`); err != nil {
 		t.Fatal(err)
 	}
 	sess := &session{server: &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}}, accountID: 7}
@@ -35,8 +37,8 @@ func TestLoadOptionalPlayerStateRestAndDrunkenness(t *testing.T) {
 	if err := sess.loadOptionalPlayerState(context.Background(), &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.RestState != 2 || state.DrunkenState != 77 {
-		t.Fatalf("rest=%d drunk=%d", state.RestState, state.DrunkenState)
+	if state.RestState != 2 || state.DrunkenState != 77 || state.TotalPlayedTime != 1234 || state.LevelPlayedTime != 56 || state.RestBonus != 78.5 || state.LogoutTime != 9876 || !state.LogoutResting || state.StableSlots != 4 || state.TaxiPath != "path" {
+		t.Fatalf("timing/rest state=%+v", state)
 	}
 }
 
