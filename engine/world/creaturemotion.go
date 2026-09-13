@@ -662,7 +662,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 				if duration < 300 {
 					duration = 300
 				}
-				s.broadcastMonsterMove(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration)
+				s.broadcastMonsterMoveMode(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, target.X, target.Y, target.Z, duration, false)
 				motion.X, motion.Y, motion.Z = target.X, target.Y, target.Z
 				motion.Moving = true
 				motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)
@@ -878,11 +878,13 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	var destX, destY, destZ float32
 	var speed float32
 	var wait time.Duration
+	walk := true
 	if motion.MoveType == 2 {
 		point := motion.Points[motion.NextIdx]
 		destX, destY, destZ = point.X, point.Y, point.Z
 		speed = motion.RunSpeed
-		if point.MoveType == 0 {
+		walk = point.MoveType == 0
+		if walk {
 			speed = motion.Speed
 		}
 		if point.Delay > 0 {
@@ -906,7 +908,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 	if duration < 250 {
 		duration = 250
 	}
-	s.broadcastMonsterMove(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration)
+	s.broadcastMonsterMoveMode(motion.Map, motion.GUID, motion.X, motion.Y, motion.Z, destX, destY, destZ, duration, walk)
 	motion.X, motion.Y, motion.Z = destX, destY, destZ
 	motion.Moving = true
 	motion.MoveEnds = now.Add(time.Duration(duration) * time.Millisecond)

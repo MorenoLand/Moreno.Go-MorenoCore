@@ -279,7 +279,17 @@ func maxUint32(value, fallback uint32) uint32 {
 }
 
 func (s *Server) broadcastMonsterMove(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32) {
+	s.broadcastMonsterMoveMode(mapID, rawGUID, startX, startY, startZ, destX, destY, destZ, duration, false)
+}
+
+func (s *Server) broadcastMonsterMoveMode(mapID uint32, rawGUID uint64, startX, startY, startZ, destX, destY, destZ float32, duration uint32, walk bool) {
 	packet := buildMonsterMove(rawGUID, startX, startY, startZ, destX, destY, destZ, duration)
+	modeOpcode := protocol.OpcodeSMSG_SPLINE_MOVE_SET_RUN_MODE
+	if walk {
+		modeOpcode = protocol.OpcodeSMSG_SPLINE_MOVE_SET_WALK_MODE
+	}
+	modePacket := protocol.NewBuffer(16)
+	modePacket.WritePackedGUID(rawGUID)
 	distance := float64(s.Config.VisibilityDistanceContinents)
 	if distance <= 0 {
 		distance = 150.0
@@ -291,6 +301,7 @@ func (s *Server) broadcastMonsterMove(mapID uint32, rawGUID uint64, startX, star
 			continue
 		}
 		if math.Hypot(float64(startX-sess.player.X), float64(startY-sess.player.Y)) <= distance {
+			_ = sess.write(uint16(modeOpcode), modePacket.Bytes(), true)
 			_ = sess.write(uint16(protocol.OpcodeSMSG_MONSTER_MOVE), packet, true)
 		}
 	}
