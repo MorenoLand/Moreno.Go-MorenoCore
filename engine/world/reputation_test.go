@@ -120,6 +120,28 @@ func TestSetWatchedFactionUpdatesFieldAndPushesValues(t *testing.T) {
 	}
 }
 
+func TestLoadPlayerReputationsPreservesSavedRowsWithoutDBC(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE character_reputation (guid INTEGER, faction INTEGER, standing INTEGER, flags INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO character_reputation VALUES (9, 72, 42000, 1)"); err != nil {
+		t.Fatal(err)
+	}
+	sess := &session{server: &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}}, playerGUID: 9}
+	state := playerState{GUID: 9, Race: 1, Class: 8}
+	if err := sess.loadPlayerReputations(context.Background(), &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Reputations) != 1 || state.Reputations[0].FactionID != 72 || state.Reputations[0].ListID != 72 || state.Reputations[0].Standing != 42000 || state.Reputations[0].Flags != 1 {
+		t.Fatalf("reputations=%+v", state.Reputations)
+	}
+}
+
 func TestSetWatchedFactionWithoutPlayerIsIgnored(t *testing.T) {
 	state := &session{server: &Server{}}
 	if !state.handleSetWatchedFaction(setWatchedFactionPayload(72)) {

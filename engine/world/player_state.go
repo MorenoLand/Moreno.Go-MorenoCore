@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -694,12 +695,12 @@ func restoreLoadedDeathState(state *playerState) {
 }
 
 func (s *session) loadPlayerReputations(ctx context.Context, state *playerState) error {
-	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil || s.server.Data == nil {
+	if s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
 		return nil
 	}
-	defaults, err := s.server.Data.Reputations(state.Race, state.Class)
-	if err != nil {
-		return err
+	var defaults []wotlk.Reputation
+	if s.server.Data != nil {
+		defaults, _ = s.server.Data.Reputations(state.Race, state.Class)
 	}
 	state.Reputations = make([]playerReputation, 0, len(defaults))
 	byFaction := make(map[uint32]int, len(defaults))
@@ -722,7 +723,9 @@ func (s *session) loadPlayerReputations(ctx context.Context, state *playerState)
 		}
 		index, found := byFaction[uint32(faction)]
 		if !found {
-			continue
+			index = len(state.Reputations)
+			byFaction[uint32(faction)] = index
+			state.Reputations = append(state.Reputations, playerReputation{FactionID: uint32(faction), ListID: uint32(faction)})
 		}
 		state.Reputations[index].Standing = int32(standing)
 		state.Reputations[index].Flags = uint8(flags)
