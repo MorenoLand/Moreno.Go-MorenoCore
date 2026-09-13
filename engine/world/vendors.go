@@ -398,7 +398,7 @@ func (s *session) vendorReputationRank(ctx context.Context, factionID uint32) ui
 	if s.player != nil {
 		for _, reputation := range s.player.Reputations {
 			if reputation.FactionID == factionID {
-				return reputationRank(int64(reputation.Base) + int64(reputation.Standing))
+				return reputationRank(int64(reputation.Standing))
 			}
 		}
 	}

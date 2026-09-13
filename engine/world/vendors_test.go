@@ -213,6 +213,13 @@ func TestVendorItemAccessRequirements(t *testing.T) {
 	}
 }
 
+func TestVendorReputationRankUsesAbsoluteStanding(t *testing.T) {
+	sess := &session{player: &playerState{Reputations: []playerReputation{{FactionID: 72, Base: 500, Standing: 2999}}}}
+	if got := sess.vendorReputationRank(context.Background(), 72); got != reputationRank(2999) {
+		t.Fatalf("vendor reputation rank=%d, want %d", got, reputationRank(2999))
+	}
+}
+
 func TestVendorListEncodesUnlimitedStockAsZero(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
