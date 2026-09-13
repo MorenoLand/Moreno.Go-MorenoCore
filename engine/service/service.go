@@ -31,6 +31,7 @@ type Service struct {
 	Address string
 	Store   *database.Store
 	Handler func(context.Context, net.Conn)
+	Stop    func()
 }
 
 func RunCombined(ctx context.Context, c config.Config, logger *slog.Logger) error {
@@ -55,7 +56,7 @@ func RunCombined(ctx context.Context, c config.Config, logger *slog.Logger) erro
 		return err
 	}
 	authService := &Service{Kind: Auth, Address: fmt.Sprintf(":%d", c.RealmServerPort), Store: stores.Auth, Handler: authServer.Handle}
-	worldService := &Service{Kind: World, Address: fmt.Sprintf(":%d", c.WorldServerPort), Store: stores.World, Handler: worldServer.Handle}
+	worldService := &Service{Kind: World, Address: fmt.Sprintf(":%d", c.WorldServerPort), Store: stores.World, Handler: worldServer.Handle, Stop: worldServer.Stop}
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	errs := make(chan error, 2)
@@ -103,7 +104,7 @@ func RunSingle(ctx context.Context, c config.Config, kind Kind, logger *slog.Log
 	if err := server.Initialize(ctx); err != nil {
 		return err
 	}
-	return (&Service{Kind: kind, Address: fmt.Sprintf(":%d", c.WorldServerPort), Store: stores.World, Handler: server.Handle}).Run(ctx, logger)
+	return (&Service{Kind: kind, Address: fmt.Sprintf(":%d", c.WorldServerPort), Store: stores.World, Handler: server.Handle, Stop: server.Stop}).Run(ctx, logger)
 }
 
 func configureProtocolTrace(path string) (*protocoltrace.Recorder, error) {
@@ -139,6 +140,11 @@ func (s *Service) Run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("%s listen %s: %w", s.Kind, s.Address, err)
 	}
+	defer func() {
+		if s.Stop != nil {
+			s.Stop()
+		}
+	}()
 	storeName := ""
 	storeBackend := ""
 	if s.Store != nil {

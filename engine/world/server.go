@@ -118,6 +118,7 @@ type Server struct {
 	spellCustomAttr         map[uint32]uint32
 	itemTemplateMu          sync.RWMutex
 	itemTemplates           map[uint32]itemTemplateClassInfo
+	stopOnce                sync.Once
 }
 
 type session struct {
@@ -296,6 +297,162 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadContinentTransports(ctx)
 	go s.runWorldTick(ctx)
 	return nil
+}
+
+func (s *Server) Stop() {
+	if s == nil {
+		return
+	}
+	s.stopOnce.Do(func() {
+		s.sessionsMu.RLock()
+		var sessions []*session
+		for sess := range s.sessions {
+			sessions = append(sessions, sess)
+		}
+		s.sessionsMu.RUnlock()
+		for _, sess := range sessions {
+			if sess != nil && sess.conn != nil {
+				_ = sess.conn.Close()
+			}
+		}
+		s.abMu.RLock()
+		abs := make([]*abBattlegroundState, 0, len(s.abState))
+		for _, state := range s.abState {
+			abs = append(abs, state)
+		}
+		s.abMu.RUnlock()
+		for _, state := range abs {
+			if state == nil {
+				continue
+			}
+			state.mu.Lock()
+			for i := range state.Nodes {
+				if state.Nodes[i].CaptureTimer != nil {
+					state.Nodes[i].CaptureTimer.Stop()
+					state.Nodes[i].CaptureTimer = nil
+				}
+			}
+			state.mu.Unlock()
+		}
+		s.avMu.RLock()
+		avs := make([]*avBattlegroundState, 0, len(s.avState))
+		for _, state := range s.avState {
+			avs = append(avs, state)
+		}
+		s.avMu.RUnlock()
+		for _, state := range avs {
+			if state == nil {
+				continue
+			}
+			state.mu.Lock()
+			for i := range state.Nodes {
+				if state.Nodes[i].CaptureTimer != nil {
+					state.Nodes[i].CaptureTimer.Stop()
+					state.Nodes[i].CaptureTimer = nil
+				}
+			}
+			state.mu.Unlock()
+		}
+		s.icMu.RLock()
+		ics := make([]*icBattlegroundState, 0, len(s.icState))
+		for _, state := range s.icState {
+			ics = append(ics, state)
+		}
+		s.icMu.RUnlock()
+		for _, state := range ics {
+			if state == nil {
+				continue
+			}
+			state.mu.Lock()
+			for i := range state.Nodes {
+				if state.Nodes[i].CaptureTimer != nil {
+					state.Nodes[i].CaptureTimer.Stop()
+					state.Nodes[i].CaptureTimer = nil
+				}
+			}
+			state.mu.Unlock()
+		}
+		s.eotsMu.RLock()
+		eotss := make([]*eotsBattlegroundState, 0, len(s.eotsState))
+		for _, state := range s.eotsState {
+			eotss = append(eotss, state)
+		}
+		s.eotsMu.RUnlock()
+		for _, state := range eotss {
+			if state == nil {
+				continue
+			}
+			state.mu.Lock()
+			if state.FlagReturnTimer != nil {
+				state.FlagReturnTimer.Stop()
+				state.FlagReturnTimer = nil
+			}
+			if state.FlagRespawnTimer != nil {
+				state.FlagRespawnTimer.Stop()
+				state.FlagRespawnTimer = nil
+			}
+			state.mu.Unlock()
+		}
+		s.wsgMu.RLock()
+		wsgs := make([]*wsgBattlegroundState, 0, len(s.wsgState))
+		for _, state := range s.wsgState {
+			wsgs = append(wsgs, state)
+		}
+		s.wsgMu.RUnlock()
+		for _, state := range wsgs {
+			if state == nil {
+				continue
+			}
+			state.mu.Lock()
+			if state.AllianceReturnTimer != nil {
+				state.AllianceReturnTimer.Stop()
+				state.AllianceReturnTimer = nil
+			}
+			if state.HordeReturnTimer != nil {
+				state.HordeReturnTimer.Stop()
+				state.HordeReturnTimer = nil
+			}
+			state.mu.Unlock()
+		}
+		s.objectsMu.Lock()
+		for _, dyn := range s.dynamicGameObjects {
+			if dyn == nil {
+				continue
+			}
+			if dyn.AutoCloseTimer != nil {
+				dyn.AutoCloseTimer.Stop()
+				dyn.AutoCloseTimer = nil
+			}
+			if dyn.DespawnTimer != nil {
+				dyn.DespawnTimer.Stop()
+				dyn.DespawnTimer = nil
+			}
+		}
+		s.objectsMu.Unlock()
+		s.auraMu.Lock()
+		for _, auras := range s.activeCreatureAuras {
+			for _, aura := range auras {
+				if aura == nil {
+					continue
+				}
+				aura.Stopped = true
+				if aura.Timer != nil {
+					aura.Timer.Stop()
+				}
+				if aura.TickTimer != nil {
+					aura.TickTimer.Stop()
+				}
+			}
+		}
+		s.auraMu.Unlock()
+		s.lootMu.Lock()
+		for _, roll := range s.groupRolls {
+			if roll != nil && roll.Timer != nil {
+				roll.Timer.Stop()
+			}
+		}
+		s.lootMu.Unlock()
+	})
 }
 
 func (s *Server) loadWardenChecks(ctx context.Context) {
