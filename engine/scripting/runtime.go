@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -65,11 +66,13 @@ type registeredHook struct {
 }
 
 type timer struct {
-	id      int
-	ref     int
-	delay   int64
-	repeats int
-	elapsed int64
+	id       int
+	ref      int
+	minDelay int64
+	maxDelay int64
+	delay    int64
+	repeats  int
+	elapsed  int64
 }
 
 func NewRuntime(c Config) *Runtime {
@@ -228,6 +231,7 @@ func (r *Runtime) Tick(ctx context.Context, elapsed int64) error {
 		removeCurrent := false
 		for current.elapsed >= current.delay {
 			current.elapsed -= current.delay
+			callbackDelay := current.delay
 			remove := current.repeats == 1
 			remainingRepeats := current.repeats
 			if current.repeats > 1 {
@@ -236,7 +240,7 @@ func (r *Runtime) Tick(ctx context.Context, elapsed int64) error {
 			r.state.SetTop(0)
 			r.state.RawGetInt(lua.RegistryIndex, current.ref)
 			r.state.PushInteger(current.id)
-			r.state.PushInteger(int(current.delay))
+			r.state.PushInteger(int(callbackDelay))
 			r.state.PushInteger(remainingRepeats)
 			if err := r.state.ProtectedCall(3, 0, 0); err != nil && r.config.Logger != nil {
 				r.config.Logger.Error("lua timer failed", "id", current.id, "error", err)
@@ -245,6 +249,7 @@ func (r *Runtime) Tick(ctx context.Context, elapsed int64) error {
 				removeCurrent = true
 				break
 			}
+			current.delay = timerDelay(current.minDelay, current.maxDelay)
 		}
 		if !removeCurrent {
 			remaining = append(remaining, current)
@@ -396,18 +401,36 @@ func (r *Runtime) createLuaEvent(state *lua.State) int {
 	if !state.IsFunction(1) {
 		lua.ArgumentError(state, 1, "function expected")
 	}
-	delay := int64(lua.CheckInteger(state, 2))
-	if delay < 1 {
-		delay = 1
+	var minDelay, maxDelay int64
+	if state.IsTable(2) {
+		state.RawGetInt(2, 1)
+		minDelay = int64(lua.CheckInteger(state, -1))
+		state.Pop(1)
+		state.RawGetInt(2, 2)
+		maxDelay = int64(lua.CheckInteger(state, -1))
+		state.Pop(1)
+	} else {
+		minDelay = int64(lua.CheckInteger(state, 2))
+		maxDelay = minDelay
+	}
+	if minDelay < 1 || maxDelay < minDelay {
+		lua.ArgumentError(state, 2, "invalid delay range")
 	}
 	repeats := 1
 	if state.Top() >= 3 && state.IsNumber(3) {
 		repeats = lua.CheckInteger(state, 3)
 	}
 	id := r.nextRef
-	r.timers = append(r.timers, timer{id: id, ref: r.storeFunction(state, 1), delay: delay, repeats: repeats})
+	r.timers = append(r.timers, timer{id: id, ref: r.storeFunction(state, 1), minDelay: minDelay, maxDelay: maxDelay, delay: timerDelay(minDelay, maxDelay), repeats: repeats})
 	state.PushInteger(id)
 	return 1
+}
+
+func timerDelay(minDelay, maxDelay int64) int64 {
+	if maxDelay <= minDelay {
+		return minDelay
+	}
+	return minDelay + rand.Int63n(maxDelay-minDelay+1)
 }
 
 func (r *Runtime) removeEvent(state *lua.State) int {

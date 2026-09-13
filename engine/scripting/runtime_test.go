@@ -50,6 +50,19 @@ func TestLuaTimerArgumentsAndInfiniteRepeats(t *testing.T) {
 	}
 }
 
+func TestLuaTimerAcceptsDelayRange(t *testing.T) {
+	runtime := NewRuntime(Config{Enabled: true})
+	if err := runtime.LoadString(`lastDelay = 0; CreateLuaEvent(function(event, delay, repeats) lastDelay = delay end, {10, 20}, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Tick(context.Background(), 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadString(`assert(lastDelay >= 10 and lastDelay <= 20)`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFileChunkEnvironment(t *testing.T) {
 	runtime := NewRuntime(Config{Enabled: true})
 	runtime.mu.Lock()
