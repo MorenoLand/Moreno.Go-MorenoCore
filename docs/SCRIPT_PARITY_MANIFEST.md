@@ -725,5 +725,5 @@ This generated inventory compares the pinned reference script tree with the curr
 | --- | ---: | --- |
 | `globals.go` | 473 | — |
 | `object.go` | 386 | — |
-| `query.go` | 297 | — |
+| `query.go` | 364 | — |
 | `runtime.go` | 767 | CreateLuaEvent, RegisterBGEvent, RegisterCreatureEvent, RegisterGameObjectEvent, RegisterGlobalEvent, RegisterGroupEvent, RegisterGuildEvent, RegisterItemEvent, RegisterMapEvent, RegisterPlayerEvent, RegisterServerEvent |
