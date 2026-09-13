@@ -132,6 +132,7 @@ type session struct {
 	accountName           string
 	security              uint8
 	accountExpansion      uint8
+	superseded            bool
 	muteTime              int64
 	speakTime             int64
 	speakCount            uint32
@@ -2974,6 +2975,14 @@ func (s *Server) kickDuplicateAccountSessions(accountID uint32, current *session
 		}
 	}
 	s.sessionsMu.RUnlock()
+	if len(duplicates) > 0 {
+		s.sessionsMu.Lock()
+		for _, sess := range duplicates {
+			sess.superseded = true
+			delete(s.sessions, sess)
+		}
+		s.sessionsMu.Unlock()
+	}
 	for _, sess := range duplicates {
 		sess.debug("session replaced by new login", "account", sess.accountName)
 		if sess.conn != nil {
@@ -3230,12 +3239,14 @@ func (s *session) logout() {
 			s.debug("player position save failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 			_ = s.savePlayerPosition(ctx)
 		}
-		_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID)
+		if !s.superseded {
+			_, _ = s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID)
+		}
 		if s.server != nil {
 			s.server.broadcastFriendStatus(s.playerGUID, friendsResultOffline, 0, 0, 0)
 		}
 	}
-	if s.accountID != 0 {
+	if s.accountID != 0 && !s.superseded {
 		_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID)
 	}
 }

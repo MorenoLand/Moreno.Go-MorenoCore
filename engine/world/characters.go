@@ -1806,11 +1806,15 @@ func (s *session) completeLogout(ctx context.Context) error {
 	if err := s.clearBuybackState(ctx); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID); err != nil && firstErr == nil {
-		firstErr = err
+	if !s.superseded {
+		if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_ACCOUNT_ONLINE", s.accountID); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID); err != nil && firstErr == nil {
-		firstErr = err
+	if !s.superseded {
+		if _, err := s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE id = ?", s.accountID); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_LOGOUT_COMPLETE), nil, true); err != nil {
 		return err

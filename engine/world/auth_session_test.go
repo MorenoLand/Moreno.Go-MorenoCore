@@ -19,4 +19,10 @@ func TestKickDuplicateAccountSession(t *testing.T) {
 	if _, err := oldClient.Read(buffer); err == nil {
 		t.Fatal("expected duplicate session connection to close")
 	}
+	if !old.superseded {
+		t.Fatal("expected duplicate session to be marked superseded")
+	}
+	if _, exists := server.sessions[old]; exists {
+		t.Fatal("expected duplicate session to be removed from active session map")
+	}
 }
