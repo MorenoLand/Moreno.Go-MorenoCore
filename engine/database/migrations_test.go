@@ -165,3 +165,37 @@ func TestEnsureSchemaHonorsUpdatesAutoSetup(t *testing.T) {
 		t.Fatalf("auto-setup-disabled table count=%d err=%v", count, err)
 	}
 }
+
+func TestConfiguredMigrationsLoadsUpdatesInclude(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	root := t.TempDir()
+	include := filepath.Join(root, "included")
+	if err := os.MkdirAll(include, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(include, "002_included.sql"), []byte("CREATE TABLE included (id INTEGER PRIMARY KEY)"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE updates_include (path TEXT PRIMARY KEY, state TEXT NOT NULL); INSERT INTO updates_include VALUES (?, 'ARCHIVED')", include); err != nil {
+		t.Fatal(err)
+	}
+	c := config.Default()
+	c.SchemaDir = root
+	c.UpdatesEnableDatabases = 1
+	store := &Store{Name: "auth", Backend: BackendSQLite, DB: db}
+	if err := applyConfiguredMigrations(context.Background(), c, store); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'included'").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("included table count=%d err=%v", count, err)
+	}
+	var state string
+	if err := db.QueryRow("SELECT state FROM updates WHERE name = '002_included.sql'").Scan(&state); err != nil || state != MigrationStateArchived {
+		t.Fatalf("included update state=%q err=%v", state, err)
+	}
+}

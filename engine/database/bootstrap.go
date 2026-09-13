@@ -47,19 +47,48 @@ func applyConfiguredMigrations(ctx context.Context, c config.Config, store *Stor
 		filepath.Join(c.SchemaDir, dialect, store.Name, "updates"),
 		filepath.Join(c.SchemaDir, "updates", store.Name),
 	}
-	var directory string
+	directories := make([]struct{ path, state string }, 0, len(candidates)+4)
 	for _, candidate := range candidates {
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
-			directory = candidate
-			break
+			directories = append(directories, struct{ path, state string }{path: candidate, state: MigrationStateReleased})
 		}
 	}
-	if directory == "" {
+	rows, err := store.DB.QueryContext(ctx, "SELECT path, state FROM updates_include ORDER BY path")
+	if err == nil {
+		for rows.Next() {
+			var path, state string
+			if scanErr := rows.Scan(&path, &state); scanErr != nil {
+				rows.Close()
+				return scanErr
+			}
+			if strings.HasPrefix(path, "$") {
+				path = filepath.Join(c.SchemaDir, strings.TrimLeft(strings.TrimPrefix(path, "$"), `/\\`))
+			}
+			if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
+				directories = append(directories, struct{ path, state string }{path: path, state: state})
+			}
+		}
+		if closeErr := rows.Close(); closeErr != nil {
+			return closeErr
+		}
+	} else if !strings.Contains(strings.ToLower(err.Error()), "no such table") && !strings.Contains(strings.ToLower(err.Error()), "doesn't exist") {
+		return err
+	}
+	if len(directories) == 0 {
 		return nil
 	}
-	migrations, err := LoadMigrations(directory)
-	if err != nil {
-		return fmt.Errorf("%s migration discovery %s: %w", store.Name, directory, err)
+	migrations := make([]Migration, 0)
+	for _, directory := range directories {
+		loaded, loadErr := LoadMigrations(directory.path)
+		if loadErr != nil {
+			return fmt.Errorf("%s migration discovery %s: %w", store.Name, directory.path, loadErr)
+		}
+		if directory.state != "" {
+			for index := range loaded {
+				loaded[index].State = strings.ToUpper(directory.state)
+			}
+		}
+		migrations = append(migrations, loaded...)
 	}
 	_, err = ApplyMigrationsWithOptions(ctx, store, migrations, MigrationOptions{RedundancyChecks: c.UpdatesRedundancy, AllowRehash: c.UpdatesAllowRehash, ArchivedRedundancy: c.UpdatesArchivedRedundancy, CleanOrphansMax: c.UpdatesCleanDeadReferencesMaxCount})
 	if err != nil {
