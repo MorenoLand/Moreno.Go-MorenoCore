@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -140,6 +141,31 @@ func TestLoadPlayerReputationsPreservesSavedRowsWithoutDBC(t *testing.T) {
 	if len(state.Reputations) != 1 || state.Reputations[0].FactionID != 72 || state.Reputations[0].ListID != 72 || state.Reputations[0].Standing != 42000 || state.Reputations[0].Flags != 1 {
 		t.Fatalf("reputations=%+v", state.Reputations)
 	}
+}
+
+func TestLoadPlayerReputationsUsesDBCBaseStanding(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE character_reputation (guid INTEGER, faction INTEGER, standing INTEGER, flags INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	sess := &session{server: &Server{CharactersStore: &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}, Data: wotlk.NewStore("../../data/dbc")}, playerGUID: 9}
+	state := playerState{GUID: 9, Race: 1, Class: 8}
+	if err := sess.loadPlayerReputations(context.Background(), &state); err != nil {
+		t.Fatal(err)
+	}
+	for _, reputation := range state.Reputations {
+		if reputation.FactionID == 72 {
+			if reputation.Base <= 0 || reputation.Standing != reputation.Base {
+				t.Fatalf("stormwind reputation=%+v", reputation)
+			}
+			return
+		}
+	}
+	t.Fatal("Stormwind reputation was not loaded")
 }
 
 func TestSetWatchedFactionWithoutPlayerIsIgnored(t *testing.T) {

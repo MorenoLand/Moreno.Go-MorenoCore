@@ -959,7 +959,7 @@ func (s *Server) isHostileFaction(creatureFaction uint32, player playerPos) bool
 			if reputation, found, err := s.Data.Reputation(creatureTemplate.Faction, player.Race, player.Class); err == nil && found && reputation.ReputationList >= 0 {
 				standing := int64(reputation.BaseStanding)
 				if saved, ok := player.Reputations[creatureTemplate.Faction]; ok {
-					standing += int64(saved.Standing)
+					standing = int64(saved.Standing)
 				}
 				return reputationRank(standing) <= 1
 			}
