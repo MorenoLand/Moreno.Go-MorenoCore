@@ -402,6 +402,11 @@ func TestSpellAreaEnemyTargetsExcludeCaster(t *testing.T) {
 	if len(groundTargets) != 2 {
 		t.Fatalf("ground targets=%v, want both hostile creatures around destination", groundTargets)
 	}
+	destinationEffectSpell := wotlk.Spell{ID: 12345, SchoolMask: 16, Effects: [3]wotlk.SpellEffect{{Effect: 27, ImplicitTargetA: 18, RadiusIndex: 13, Aura: 3}}}
+	destinationEffectTargets := sess.spellAreaEnemyTargets(context.Background(), destinationEffectSpell, protocol.SpellTargetData{Flags: protocol.SpellTargetFlagDestLocation, Destination: protocol.SpellTargetLocation{X: 3, Y: 0, Z: 0}})
+	if len(destinationEffectTargets) != 2 || !containsGUID(destinationEffectTargets, hostileGUID) || !containsGUID(destinationEffectTargets, rearHostileGUID) {
+		t.Fatalf("destination-effect targets=%v, want hostile creatures around destination", destinationEffectTargets)
+	}
 }
 
 func containsGUID(values []uint64, want uint64) bool {

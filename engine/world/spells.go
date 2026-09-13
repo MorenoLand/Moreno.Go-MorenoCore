@@ -96,7 +96,7 @@ func (s *session) spellAreaEnemyTargets(ctx context.Context, spell wotlk.Spell, 
 			if targetType == 24 || targetType == 54 {
 				cone = true
 			}
-			if targetType == 16 || targetType == 28 {
+			if targetType == 16 || targetType == 18 || targetType == 28 {
 				destinationCenter = true
 			}
 		}
