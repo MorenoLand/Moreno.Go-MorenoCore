@@ -897,9 +897,6 @@ func (s *session) handleCmdRevive(ctx context.Context, args []string) {
 		return
 	}
 	s.resurrectPlayer(ctx, 1.0)
-	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, playerFlags = ? WHERE guid = ?", s.player.Health, s.player.PlayerFlags, s.playerGUID)
-	}
 	s.sendSysMessage("You have been revived.")
 }
 

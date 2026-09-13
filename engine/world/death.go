@@ -644,9 +644,17 @@ func (s *session) resurrectPlayer(ctx context.Context, restorePercent float32) {
 		s.player.Powers[1] = 0                                                       // rage
 		s.player.Powers[3] = uint32(float32(s.player.MaxPowers[3]) * restorePercent) // energy
 	}
+	s.persistResurrectionState(ctx)
 	s.sendPlayerUpdate()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_LAND_WALK))
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
+}
+
+func (s *session) persistResurrectionState(ctx context.Context) {
+	if s == nil || s.player == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET health = ?, playerFlags = ?, death_expire_time = 0 WHERE guid = ?", s.player.Health, s.player.PlayerFlags, s.playerGUID)
 }
 
 // resurrectionData mirrors Player::_resurrectionData (ResurrectionData):
@@ -734,6 +742,7 @@ func (s *session) handleResurrectResponse(ctx context.Context, payload []byte) b
 	if s.player.MaxPowers[3] > 0 {
 		s.player.Powers[3] = s.player.MaxPowers[3] // full energy
 	}
+	s.persistResurrectionState(ctx)
 	s.resurrection = nil
 	s.spawnCorpseBones(ctx)
 	s.sendPlayerUpdate()

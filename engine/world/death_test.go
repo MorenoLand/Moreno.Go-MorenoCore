@@ -268,6 +268,28 @@ func TestSpawnCorpseBonesUsesStoredPositionAndOwnerlessFields(t *testing.T) {
 	}
 }
 
+func TestResurrectPersistsLiveCharacterState(t *testing.T) {
+	player := &playerState{GUID: 9, Health: 1, MaxHealth: 100, PlayerFlags: playerFlagGhost}
+	state, clientConn, server := newDeathTestSession(t, player)
+	drainServerFrames(t, clientConn)
+	for _, statement := range []string{"ALTER TABLE characters ADD COLUMN health INTEGER NOT NULL DEFAULT 0", "ALTER TABLE characters ADD COLUMN playerFlags INTEGER NOT NULL DEFAULT 0"} {
+		if _, err := server.CharactersStore.DB.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := server.CharactersStore.DB.Exec("INSERT INTO characters (guid, health, playerFlags, death_expire_time) VALUES (9, 1, ?, 12345)", playerFlagGhost); err != nil {
+		t.Fatal(err)
+	}
+	state.resurrectPlayer(context.Background(), 0.5)
+	var health, flags, deathExpire int
+	if err := server.CharactersStore.DB.QueryRow("SELECT health, playerFlags, death_expire_time FROM characters WHERE guid = 9").Scan(&health, &flags, &deathExpire); err != nil {
+		t.Fatal(err)
+	}
+	if health != 50 || flags&int(playerFlagGhost) != 0 || deathExpire != 0 {
+		t.Fatalf("persisted resurrection state health=%d flags=%x death_expire_time=%d", health, flags, deathExpire)
+	}
+}
+
 // drainServerFrames consumes everything the session writes so synchronous
 // net.Pipe writes cannot deadlock tests that do not assert packet order.
 func drainServerFrames(t *testing.T, conn net.Conn) {
