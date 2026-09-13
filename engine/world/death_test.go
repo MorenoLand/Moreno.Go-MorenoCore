@@ -1090,6 +1090,51 @@ func TestSpiritHealerActivateDurabilityAndResSickness(t *testing.T) {
 	}
 }
 
+func TestResurrectionSicknessAuraPacketIsNegative(t *testing.T) {
+	state, clientConn, _ := newDeathTestSession(t, &playerState{GUID: 9, Level: 21, Health: 50, MaxHealth: 100})
+	defer clientConn.Close()
+	packet := make(chan []byte, 1)
+	go func() {
+		for {
+			opcode, payload, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+			if opcode == uint16(protocol.OpcodeSMSG_AURA_UPDATE) {
+				packet <- payload
+				_, _, _ = readServerFrame(clientConn, nil)
+				return
+			}
+		}
+	}()
+	state.applyAuraWithDuration(15007, 600000)
+	select {
+	case payload := <-packet:
+		reader := protocol.NewReader(payload)
+		if _, err := reader.ReadPackedGUID(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reader.ReadU8(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reader.ReadU32(); err != nil {
+			t.Fatal(err)
+		}
+		flags, err := reader.ReadU8()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if flags&protocol.AuraFlagNegative == 0 || flags&protocol.AuraFlagPositive != 0 {
+			t.Fatalf("resurrection sickness aura flags=%x", flags)
+		}
+		if aura := state.activeAuras[15007]; aura == nil || aura.Positive {
+			t.Fatalf("resurrection sickness state=%+v", aura)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for resurrection sickness aura")
+	}
+}
+
 func TestSpiritHealerLowLevelNoSickness(t *testing.T) {
 	// Level 10 player (should NOT get sickness)
 	player := &playerState{GUID: 9, Level: 10, Health: 1, MaxHealth: 100, PlayerFlags: playerFlagGhost}

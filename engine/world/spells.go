@@ -1962,12 +1962,12 @@ func (s *session) clearActiveAuras() {
 	}
 }
 
-func (s *session) sendAuraUpdate(slot uint8, spellID uint32, remove bool, maxDurationMs, durationMs uint32) {
+func (s *session) sendAuraUpdate(slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32) {
 	level := uint8(1)
 	if s.player != nil && s.player.Level > 0 {
 		level = s.player.Level
 	}
-	pkt := protocol.BuildAuraUpdate(s.playerGUID, s.playerGUID, slot, spellID, remove, true, maxDurationMs, durationMs, level)
+	pkt := protocol.BuildAuraUpdate(s.playerGUID, s.playerGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, level)
 	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), pkt, true)
 }
 
@@ -2028,6 +2028,10 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 			}
 		}
 	}
+	positive := !isHarmfulAura(auraType)
+	if spellID == 15007 {
+		positive = false
+	}
 	aura := &activeAura{
 		SpellID:            spellID,
 		DispelType:         dispelType,
@@ -2038,7 +2042,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 		DurationMs:         durationMs,
 		RemainingMs:        durationMs,
 		Slot:               slot,
-		Positive:           true,
+		Positive:           positive,
 		AuraInterruptFlags: auraInterruptFlags,
 	}
 	if durationMs > 0 && durationMs < 18000000 {
@@ -2049,7 +2053,7 @@ func (s *session) applyAuraWithDuration(spellID uint32, durationMs uint32) {
 	s.activeAuras[spellID] = aura
 	s.castMu.Unlock()
 
-	s.sendAuraUpdate(slot, spellID, false, durationMs, durationMs)
+	s.sendAuraUpdate(slot, spellID, false, positive, durationMs, durationMs)
 	s.sendPlayerUpdate()
 }
 
@@ -2078,7 +2082,7 @@ func (s *session) removeAura(spellID uint32) {
 	}
 	if s.auraSlots != nil {
 		if slot, ok := s.auraSlots[spellID]; ok {
-			s.sendAuraUpdate(slot, 0, true, 0, 0)
+			s.sendAuraUpdate(slot, 0, true, false, 0, 0)
 			delete(s.auraSlots, spellID)
 		}
 	}
