@@ -149,7 +149,7 @@ func TestQuestAutoAcceptOnlySpecialFlags4(t *testing.T) {
 
 	// 1. Query quest 201 (ordinary): should NOT be added to player quest log
 	buf201 := protocol.NewBuffer(16)
-	buf201.WriteU64(50)
+	buf201.WritePackedGUID(50)
 	buf201.WriteU32(201)
 	sess.handleQuestgiverQueryQuest(ctx, buf201.Bytes())
 	if sess.player.QuestLog[0].QuestID == 201 {
@@ -158,7 +158,7 @@ func TestQuestAutoAcceptOnlySpecialFlags4(t *testing.T) {
 
 	// 2. Query quest 202 (SpecialFlags=4): MUST auto-accept into player quest log
 	buf202 := protocol.NewBuffer(16)
-	buf202.WriteU64(50)
+	buf202.WritePackedGUID(50)
 	buf202.WriteU32(202)
 	sess.handleQuestgiverQueryQuest(ctx, buf202.Bytes())
 	if sess.player.QuestLog[0].QuestID != 202 {
@@ -197,7 +197,7 @@ func TestTalkToQuestAutoCompletes(t *testing.T) {
 
 	// Accept quest 350
 	acceptBuf := protocol.NewBuffer(16)
-	acceptBuf.WriteU64(0)
+	acceptBuf.WritePackedGUID(0)
 	acceptBuf.WriteU32(350)
 	sess.handleQuestgiverAcceptQuest(ctx, acceptBuf.Bytes())
 

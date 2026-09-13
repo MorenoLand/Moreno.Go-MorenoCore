@@ -114,7 +114,7 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		if defaultMenu != nil && len(defaultMenu.Items) == 0 && len(defaultMenu.Quests) == 1 {
 			q := defaultMenu.Quests[0]
 			queryPayload := protocol.NewBuffer(12)
-			queryPayload.WriteU64(guid)
+			queryPayload.WritePackedGUID(guid)
 			queryPayload.WriteU32(q.ID)
 			status, _ := s.characterQuestStatus(ctx, q.ID)
 			if status == questStatusComplete || status == questStatusIncomplete {
