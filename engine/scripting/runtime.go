@@ -260,6 +260,10 @@ func (r *Runtime) TriggerServerEvent(ctx context.Context, event int, args ...any
 }
 
 func (r *Runtime) TriggerPacketEvent(ctx context.Context, opcode, event int, args ...any) ([]any, error) {
+	if !r.mu.TryLock() {
+		return nil, nil
+	}
+	r.mu.Unlock()
 	return r.Trigger(ctx, "packet:"+strconv.Itoa(opcode), event, append([]any{event}, args...)...)
 }
 

@@ -339,6 +339,24 @@ func TestElunaPacketEventDispatch(t *testing.T) {
 	}
 }
 
+func TestElunaPacketHookReentryDoesNotDeadlock(t *testing.T) {
+	runtime := NewRuntime(Config{Enabled: true})
+	object := &Object{Type: "Player", Methods: map[string]ObjectMethod{"Send": func(context.Context, []any) ([]any, error) {
+		values, err := runtime.TriggerPacketEvent(context.Background(), 0x123, 7, &Packet{Opcode: 0x123}, nil)
+		if err != nil || values != nil {
+			return nil, fmt.Errorf("nested packet hook executed: values=%v err=%v", values, err)
+		}
+		return []any{true}, nil
+	}}}
+	if err := runtime.LoadString(`RegisterPlayerEvent(91, function(event, player) return player:Send() end)`); err != nil {
+		t.Fatal(err)
+	}
+	values, err := runtime.TriggerPlayerEvent(context.Background(), 91, 91, object)
+	if err != nil || len(values) != 1 || values[0] != true {
+		t.Fatalf("values=%v err=%v", values, err)
+	}
+}
+
 func TestElunaQuestLookup(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
