@@ -136,6 +136,9 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 1 {
 		return true
 	}
+	if s.isDeadOrGhost() {
+		return true
+	}
 	reader := protocol.NewReader(payload)
 	targetGUID, err := reader.ReadPackedGUID()
 	if err != nil {
@@ -187,6 +190,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		if !newLoot {
 			loot.addViewer(s)
 			s.activeLoot = loot
+			s.interruptCurrentCast()
 			return s.sendLootResponse(loot) == nil
 		}
 
@@ -245,6 +249,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		}
 		loot.addViewer(s)
 		s.activeLoot = loot
+		s.interruptCurrentCast()
 		return s.sendLootResponse(loot) == nil
 	}
 
@@ -283,6 +288,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 		}
 		loot.addViewer(s)
 		s.activeLoot = loot
+		s.interruptCurrentCast()
 		return s.sendLootResponse(loot) == nil
 	}
 	// Query min/max gold and lootid from creature_template
@@ -354,6 +360,7 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	}
 	loot.addViewer(s)
 	s.activeLoot = loot
+	s.interruptCurrentCast()
 	return s.sendLootResponse(loot) == nil
 }
 
@@ -555,6 +562,9 @@ func (s *session) handleLootMoney(ctx context.Context) bool {
 
 func (s *session) handleAutostoreLootItem(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || s.activeLoot == nil || len(payload) < 1 {
+		return true
+	}
+	if s.isDeadOrGhost() {
 		return true
 	}
 	lootSlot := payload[0]

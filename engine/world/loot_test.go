@@ -87,6 +87,22 @@ func TestLootingMoneyAndItems(t *testing.T) {
 	}
 }
 
+func TestDeadPlayerCannotOpenOrStoreLoot(t *testing.T) {
+	server := &Server{creatureLoot: make(map[uint64]*activeLootState)}
+	sess := &session{server: server, playerLoaded: true, player: &playerState{GUID: 1, Health: 0, MaxHealth: 100}}
+	payload := protocol.NewBuffer(8)
+	payload.WritePackedGUID(creatureWorldGUID(1, 303))
+	if !sess.handleLoot(context.Background(), payload.Bytes()) {
+		t.Fatal("dead loot request closed the session")
+	}
+	if sess.activeLoot != nil {
+		t.Fatal("dead player opened loot")
+	}
+	if !sess.handleAutostoreLootItem(context.Background(), []byte{0}) {
+		t.Fatal("dead autostore request closed the session")
+	}
+}
+
 func TestDeadMotionStateRemainsLootableAgainstStaleDatabaseHealth(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
