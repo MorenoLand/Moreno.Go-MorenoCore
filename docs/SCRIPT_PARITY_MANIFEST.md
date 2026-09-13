@@ -5,7 +5,7 @@ This generated inventory compares the pinned reference script tree with the curr
 - Reference script files: 707
 - Go scripting source files: 4
 - Reference `AddSC_` registrations: 621
-- Go hook registrations: 4
+- Go hook registrations: 11
 
 ## Reference files
 
@@ -726,4 +726,4 @@ This generated inventory compares the pinned reference script tree with the curr
 | `globals.go` | 348 | — |
 | `object.go` | 109 | — |
 | `query.go` | 297 | — |
-| `runtime.go` | 538 | CreateLuaEvent, RegisterGlobalEvent, RegisterPlayerEvent, RegisterServerEvent |
+| `runtime.go` | 765 | CreateLuaEvent, RegisterBGEvent, RegisterCreatureEvent, RegisterGameObjectEvent, RegisterGlobalEvent, RegisterGroupEvent, RegisterGuildEvent, RegisterItemEvent, RegisterMapEvent, RegisterPlayerEvent, RegisterServerEvent |
