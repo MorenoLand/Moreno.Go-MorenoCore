@@ -158,7 +158,7 @@ func readQueryEntryAndGUID(payload []byte) (uint32, uint64, error) {
 	if reader.Remaining() == 0 {
 		return entry, 0, nil
 	}
-	guid, err := reader.ReadPackedGUID()
+	guid, err := reader.ReadU64()
 	return entry, guid, err
 }
 

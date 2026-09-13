@@ -6,11 +6,11 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
-func TestReadQueryEntryAndPackedGUID(t *testing.T) {
+func TestReadQueryEntryAndGUID(t *testing.T) {
 	const guid = uint64(0xF130000012345678)
 	packet := protocol.NewBuffer(16)
 	packet.WriteU32(68)
-	packet.WritePackedGUID(guid)
+	packet.WriteU64(guid)
 	entry, gotGUID, err := readQueryEntryAndGUID(packet.Bytes())
 	if err != nil {
 		t.Fatal(err)
