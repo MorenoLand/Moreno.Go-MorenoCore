@@ -29,6 +29,7 @@ var (
 	goOpcodePattern                   = regexp.MustCompile(`protocol\.Opcode([A-Z0-9_]+)`)
 	goSessionHandlerPattern           = regexp.MustCompile(`(?ms)func\s+\(s\s+\*session\)\s+(handle[A-Z][A-Za-z0-9_]*)\s*\([^{}]*\)\s*[^{}]*\{\s*return\s+(true|false)\s*\}`)
 	goSessionHandlerDefinitionPattern = regexp.MustCompile(`(?m)func\s+\(s\s+\*session\)\s+(handle[A-Z][A-Za-z0-9_]*)\s*\(`)
+	nullOpcodeAuditPattern            = regexp.MustCompile(`(?m)DEFINE_HANDLER\(\s*([A-Z0-9_]+)\s*,\s*(STATUS_[A-Z0-9_]+)[^;\n]*Handle_NULL`)
 	statementSQLPattern               = regexp.MustCompile(`(?s)PrepareStatement\(\s*([A-Z0-9_]+)\s*,\s*(.*?)(?:,\s*CONNECTION|\);)`)
 	stringLitPattern                  = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
 	goStatementSQLPattern             = regexp.MustCompile(`ID:\s*"([A-Z0-9_]+)"\s*,\s*SQL:\s*"((?:[^"\\]|\\.)*)"`)
@@ -98,6 +99,10 @@ func buildReport(reference, repo string) (string, error) {
 		return "", err
 	}
 	refNullOpcodes = clientOpcodes(refNullOpcodes)
+	nullAudit, err := nullOpcodeAudit(filepath.Join(reference, "src", "server"))
+	if err != nil {
+		return "", err
+	}
 	refBehavioralOpcodes := difference(refOpcodes, refNullOpcodes)
 	refStatementSQL, err := statementDetails(filepath.Join(reference, "src", "server"), statementSQLPattern, nil)
 	if err != nil {
@@ -170,6 +175,11 @@ func buildReport(reference, repo string) (string, error) {
 	fmt.Fprintf(&report, "## Go session handlers with trivial return bodies\n\n%s\n", list(goTrivialHandlers))
 	fmt.Fprintf(&report, "## Go registered opcodes without static test references\n\n%s\n", list(difference(goOpcodes, goTestOpcodes)))
 	fmt.Fprintf(&report, "## Reference client opcodes intentionally bound to Handle_NULL\n\n%s\n", list(refNullOpcodes))
+	fmt.Fprintf(&report, "## Handle_NULL status audit\n\n| Opcode | Reference status | Classification | Required evidence |\n| --- | --- | --- | --- |\n")
+	for _, entry := range nullAudit {
+		classification, evidence := nullAuditClassification(entry.Status)
+		fmt.Fprintf(&report, "| `%s` | `%s` | %s | %s |\n", entry.Opcode, entry.Status, classification, evidence)
+	}
 	fmt.Fprintf(&report, "## Missing prepared statements\n\n%s\n", list(difference(refStatements, goStatements)))
 	fmt.Fprintf(&report, "## Prepared statement SQL mismatches\n\n%s\n", list(sqlDifferences(refStatementSQL, goStatementSQL)))
 	fmt.Fprintf(&report, "## Missing schema tables/views\n\n### MySQL\n\n%s\n\n### SQLite\n\n%s\n", list(difference(keys(refSchema), keys(goMySQLSchema))), list(difference(keys(refSchema), keys(goSQLiteSchema))))
@@ -195,6 +205,38 @@ func buildReport(reference, repo string) (string, error) {
 		fmt.Fprintln(&report)
 	}
 	return report.String(), nil
+}
+
+type nullAuditEntry struct {
+	Opcode string
+	Status string
+}
+
+func nullOpcodeAudit(root string) ([]nullAuditEntry, error) {
+	data, err := os.ReadFile(filepath.Join(root, "game", "Server", "Protocol", "Opcodes.cpp"))
+	if err != nil {
+		return nil, err
+	}
+	matches := nullOpcodeAuditPattern.FindAllStringSubmatch(string(data), -1)
+	entries := make([]nullAuditEntry, 0, len(matches))
+	for _, match := range matches {
+		if len(match) == 3 && (strings.HasPrefix(match[1], "CMSG_") || strings.HasPrefix(match[1], "MSG_")) {
+			entries = append(entries, nullAuditEntry{Opcode: match[1], Status: match[2]})
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Opcode < entries[j].Opcode })
+	return entries, nil
+}
+
+func nullAuditClassification(status string) (string, string) {
+	switch status {
+	case "STATUS_NEVER":
+		return "reference never-accepted no-op", "safe consume/reject test"
+	case "STATUS_UNHANDLED":
+		return "reference unhandled packet", "rejection/disconnect test"
+	default:
+		return "logged-in reference null handler", "security and packet-consumption test"
+	}
 }
 
 func toolBehaviorFindings(name, content string) []string {
