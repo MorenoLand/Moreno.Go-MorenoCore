@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
@@ -547,10 +548,66 @@ func (s *session) handleQuestPushResult(ctx context.Context, payload []byte) boo
 // handleQuestgiverStatusMultipleQuery processes CMSG_QUESTGIVER_STATUS_MULTIPLE_QUERY (0x417).
 // Reference: WorldSession::HandleQuestgiverStatusMultipleQuery (QuestHandler.cpp:45).
 func (s *session) handleQuestgiverStatusMultipleQuery(ctx context.Context, payload []byte) bool {
-	buf := protocol.NewBuffer(4)
-	buf.WriteU32(0) // count = 0
-	_ = s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE), buf.Bytes(), true)
-	return true
+	return s.sendQuestgiverStatusMultiple(ctx)
+}
+
+func (s *session) sendQuestgiverStatusMultiple(ctx context.Context) bool {
+	if s == nil || s.server == nil || s.player == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE), []byte{0, 0, 0, 0}, true) == nil
+	}
+	distance := float64(s.server.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 150
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.position_x, c.position_y, COALESCE(t.faction, 0)
+		FROM creature AS c JOIN creature_template AS t ON t.entry = c.id
+		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
+		AND (COALESCE(t.npcflag, 0) & 2) <> 0`, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance)
+	if err != nil {
+		return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE), []byte{0, 0, 0, 0}, true) == nil
+	}
+	type questgiver struct {
+		guid, entry uint32
+		faction     uint32
+	}
+	questgivers := make([]questgiver, 0)
+	for rows.Next() {
+		var guid, entry, faction int64
+		var x, y float64
+		if rows.Scan(&guid, &entry, &x, &y, &faction) != nil || guid <= 0 || entry <= 0 || math.Hypot(x-float64(s.player.X), y-float64(s.player.Y)) > distance {
+			continue
+		}
+		questgivers = append(questgivers, questgiver{guid: uint32(guid), entry: uint32(entry), faction: uint32(faction)})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false
+	}
+	player := playerPos{Map: s.player.Map, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	entries := make([]struct {
+		guid   uint64
+		status uint8
+	}, 0, len(questgivers))
+	for _, questgiver := range questgivers {
+		if s.server.isHostileFaction(questgiver.faction, player) {
+			continue
+		}
+		status, statusErr := s.questDialogStatus(ctx, questgiver.entry)
+		if statusErr != nil {
+			continue
+		}
+		entries = append(entries, struct {
+			guid   uint64
+			status uint8
+		}{creatureWorldGUID(questgiver.guid, questgiver.entry), status})
+	}
+	packet := protocol.NewBuffer(4 + len(entries)*9)
+	packet.WriteU32(uint32(len(entries)))
+	for _, entry := range entries {
+		packet.WriteU64(entry.guid)
+		packet.WriteU8(entry.status)
+	}
+	return s.write(uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE), packet.Bytes(), true) == nil
 }
 
 func (s *session) completeQuest(ctx context.Context, questID uint32) {

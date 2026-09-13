@@ -196,6 +196,12 @@ func (s *session) handleTimeSyncResponse(payload []byte) bool {
 		return false
 	}
 	s.debug("time sync response", "account", s.accountName, "counter", counter, "client_time", clientTime)
+	if s.playerLoaded && !s.questStatusSent {
+		s.questStatusSent = true
+		if !s.sendQuestgiverStatusMultiple(context.Background()) {
+			return false
+		}
+	}
 	return true
 }
 

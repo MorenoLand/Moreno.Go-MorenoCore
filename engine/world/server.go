@@ -172,6 +172,7 @@ type session struct {
 	lastCastTime          time.Time
 	lastCombatTime        time.Time
 	logoutHook            bool
+	questStatusSent       bool
 	gossip                *gossipMenuState
 	gossipClosed          bool
 	channels              map[string]struct{}
