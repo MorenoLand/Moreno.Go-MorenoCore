@@ -182,6 +182,10 @@ func buildReport(reference, repo string) (string, error) {
 	}
 	fmt.Fprintf(&report, "## Missing prepared statements\n\n%s\n", list(difference(refStatements, goStatements)))
 	fmt.Fprintf(&report, "## Prepared statement SQL mismatches\n\n%s\n", list(sqlDifferences(refStatementSQL, goStatementSQL)))
+	fmt.Fprintln(&report, "## Prepared statement execution audit")
+	fmt.Fprintln(&report)
+	fmt.Fprintln(&report, "The inventory generator does not open local databases or execute statements. Run `go run ./tools/dbtool statement-audit --input-dir bin` to prepare all generated statements against the auth, characters, and world SQLite files; this checks SQL resolution and schema compatibility, not parameter/result/transaction parity.")
+	fmt.Fprintln(&report)
 	fmt.Fprintf(&report, "## Missing schema tables/views\n\n### MySQL\n\n%s\n\n### SQLite\n\n%s\n", list(difference(keys(refSchema), keys(goMySQLSchema))), list(difference(keys(refSchema), keys(goSQLiteSchema))))
 	fmt.Fprintf(&report, "## Extraction tools\n\n| Reference tool | Go path | Status |\n| --- | --- | --- |\n")
 	for _, tool := range tools {

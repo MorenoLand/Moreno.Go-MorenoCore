@@ -7,3 +7,5 @@ Queries use prepared statements and transactions. Dialect-specific SQL is select
 ## Local dumps
 
 Use explicit input paths with `tools/dbtool`. No Desktop path, credential, live row, generated database, or dump is embedded in the repository.
+
+Run `go run ./tools/dbtool statement-audit --input-dir bin` after importing or migrating local databases. The command prepares every generated statement against its logical SQLite database and reports each failure deterministically. A successful `612/612` preparation result proves SQL/schema compatibility only; exact parameter binding, result shapes, NULL handling, transaction failures, and MySQL/MariaDB behavior remain separate parity work.

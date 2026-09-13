@@ -18,7 +18,7 @@ The ignored `bin/` directory is the local runtime package: place the three SQLit
 
 ## Database input
 
-The public SQL files contain schema only. Use `go run ./tools/dbtool schema` to derive public schema templates from explicit dump paths, `go run ./tools/dbtool import-sql` to convert local SQL dumps into SQLite files, and `go run ./tools/dbtool verify` to check imported table and row totals. Local dumps and generated databases are ignored by Git.
+The public SQL files contain schema only. Use `go run ./tools/dbtool schema` to derive public schema templates from explicit dump paths, `go run ./tools/dbtool import-sql` to convert local SQL dumps into SQLite files, `go run ./tools/dbtool verify` to check imported table and row totals, and `go run ./tools/dbtool statement-audit --input-dir bin` to prepare all 612 generated statements against the three local SQLite schemas. The statement audit is a schema/dialect gate; it does not replace fixture execution tests for parameters, results, transactions, or MySQL/MariaDB behavior. Local dumps and generated databases are ignored by Git.
 
 ## Build and test
 

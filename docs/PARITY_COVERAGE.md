@@ -4,7 +4,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 311 / 118626 | — |
+| Server source files / lines | 1410 / 710273 | 311 / 118896 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
 | Client opcode registrations | 727 | 727 | 0 |
 | Client behavioral opcode bindings (reference, non-NULL) | 430 | — | — |
@@ -16,7 +16,7 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 | Prepared statement SQL mismatches | — | — | 0 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 6 / 2681 | — |
-| Test source files / lines | 9 / 1390 | 159 / 41691 | — |
+| Test source files / lines | 9 / 1390 | 159 / 41821 | — |
 
 ## Missing behavioral client opcode handlers
 
@@ -1326,6 +1326,10 @@ No missing symbols detected.
 ## Prepared statement SQL mismatches
 
 No missing symbols detected.
+## Prepared statement execution audit
+
+The inventory generator does not open local databases or execute statements. Run `go run ./tools/dbtool statement-audit --input-dir bin` to prepare all generated statements against the auth, characters, and world SQLite files; this checks SQL resolution and schema compatibility, not parameter/result/transaction parity.
+
 ## Missing schema tables/views
 
 ### MySQL
