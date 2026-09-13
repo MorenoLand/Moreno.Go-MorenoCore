@@ -433,10 +433,12 @@ func (s *Server) updateActiveCreatures(ctx context.Context) {
 		CASE WHEN c.curhealth > 0 THEN c.curhealth ELSE COALESCE(NULLIF(t.maxlevel*30, 0), 42) END
 		FROM creature AS c
 		JOIN creature_template AS t ON t.entry = c.id
-		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ? AND (c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)`
+		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
+		AND (? OR c.phaseMask = 0 OR (c.phaseMask & 1) <> 0)
+		AND (? OR ? OR ((COALESCE(t.flags_extra, 0) & 0x400) = 0 AND (COALESCE(t.npcflag, 0) & 0xC000) = 0))`
 	seenCreatures := make(map[uint32]struct{})
 	for _, p := range players {
-		rows, err := s.WorldStore.DB.QueryContext(ctx, query, p.Map, float64(p.X)-distance, float64(p.X)+distance, float64(p.Y)-distance, float64(p.Y)+distance)
+		rows, err := s.WorldStore.DB.QueryContext(ctx, query, p.Map, float64(p.X)-distance, float64(p.X)+distance, float64(p.Y)-distance, float64(p.Y)+distance, p.IsGM, p.IsGM, p.IsDead)
 		if err != nil {
 			continue
 		}
@@ -530,7 +532,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 			}
 		}
 		// If target left map, logged out, dead, or turned on GM mode: drop threat
-		if target == nil || target.IsDead || target.IsGM || target.Sess == nil || target.Sess.player == nil || target.Sess.isDeadOrGhost() {
+		if target == nil || target.IsDead || target.IsGM || target.Sess == nil || target.Sess.player == nil || target.Sess.isDeadOrGhost() || (motion.FlagsExtra&0x00000400 != 0 && !target.IsDead) {
 			if motion.ThreatMgr != nil {
 				motion.ThreatMgr.RemoveThreat(motion.TargetGUID)
 			}
@@ -829,7 +831,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 
 	// 3. Check for nearby hostile aggro
 	for _, p := range players {
-		if p.Map != motion.Map || p.IsGM || p.IsDead || isCreaturePassive(motion) || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
+		if p.Map != motion.Map || p.IsGM || p.IsDead || (motion.FlagsExtra&0x00000400 != 0) || isCreaturePassive(motion) || creatureCombatDisabled(motion.UnitFlags, motion.FlagsExtra) {
 			continue
 		}
 		dist := float32(math.Hypot(float64(p.X-motion.X), float64(p.Y-motion.Y)))

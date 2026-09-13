@@ -152,6 +152,23 @@ func TestDeadGhostIsNotTargetedAndPassiveCreaturesDoNotAggro(t *testing.T) {
 	}
 }
 
+func TestGhostOnlyCreaturesDoNotAggroLivingPlayers(t *testing.T) {
+	server := &Server{creatureMotion: make(map[uint64]*creatureMotion), sessions: make(map[*session]struct{})}
+	motion := &creatureMotion{GUID: creatureWorldGUID(102, 68), Map: 0, Health: 100, MaxHealth: 100, FlagsExtra: 0x00000400, ReactState: creatureReactAggressive, ReactStateKnown: true}
+	server.stepCreatureMotion(context.Background(), motion, []playerPos{{GUID: 1, Map: 0, X: 1, Y: 1, IsDead: false}}, time.Now())
+	if motion.InCombat || motion.TargetGUID != 0 {
+		t.Fatalf("ghost-only creature entered combat with living player: inCombat=%v target=%d", motion.InCombat, motion.TargetGUID)
+	}
+	motion.InCombat = true
+	motion.TargetGUID = 1
+	motion.ThreatMgr = NewThreatManager(motion.GUID)
+	motion.ThreatMgr.AddThreat(1, 100, true)
+	server.stepCreatureMotion(context.Background(), motion, []playerPos{{GUID: 1, Map: 0, X: 1, Y: 1, IsDead: false}}, time.Now())
+	if motion.InCombat || motion.TargetGUID != 0 {
+		t.Fatalf("ghost-only creature retained stale combat with living player: inCombat=%v target=%d", motion.InCombat, motion.TargetGUID)
+	}
+}
+
 func TestCreatureDoesNotDamageDeadSessionFromStalePlayerSnapshot(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
