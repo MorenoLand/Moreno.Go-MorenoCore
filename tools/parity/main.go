@@ -252,7 +252,9 @@ func toolBehaviorFindings(name, content string) []string {
 			findings = append(findings, "source extracts DBC files but has no WDT/ADT/liquid/camera extraction path")
 		}
 	case "vmap4_extractor":
-		if strings.Contains(content, "os.WriteFile") || strings.Contains(content, "io.Copy") {
+		if strings.Contains(content, "extractWMO") {
+			findings = append(findings, "source converts WMO root/group collision geometry to VMAP047 raw models; M2/MDX conversion and fixture parity remain open")
+		} else if strings.Contains(content, "os.WriteFile") || strings.Contains(content, "io.Copy") {
 			findings = append(findings, "source copies raw archive assets; VMAP geometry extraction/output parity is not demonstrated")
 		}
 	case "vmap4_assembler":

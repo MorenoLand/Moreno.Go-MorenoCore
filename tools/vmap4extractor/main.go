@@ -87,6 +87,9 @@ func main() {
 			if ext != ".wmo" && ext != ".m2" && ext != ".mdx" && ext != ".wdt" {
 				continue
 			}
+			if ext == ".wmo" && isWMOGroupName(name) {
+				continue
+			}
 
 			normalized := strings.ToLower(filepath.ToSlash(name))
 			if _, exists := seen[normalized]; exists {
@@ -94,8 +97,16 @@ func main() {
 			}
 			seen[normalized] = struct{}{}
 
-			data, err := arc.ReadFile(name)
+			var data []byte
+			if ext == ".wmo" {
+				data, err = extractWMO(arc, name, files)
+			} else {
+				data, err = arc.ReadFile(name)
+			}
 			if err != nil {
+				if *verbose {
+					fmt.Printf("Skipping %s: %v\n", name, err)
+				}
 				continue
 			}
 
