@@ -68,7 +68,7 @@ func LoadMigrations(dir string) ([]Migration, error) {
 		if strings.EqualFold(filepath.Base(filepath.Dir(path)), "archived") {
 			state = MigrationStateArchived
 		}
-		result = append(result, Migration{Version: version, Name: parts[1], Statements: SplitSQL(string(data)), Hash: migrationHash(data), State: state})
+		result = append(result, Migration{Version: version, Name: entry.Name(), Statements: SplitSQL(string(data)), Hash: migrationHash(data), State: state})
 		return nil
 	})
 	if err != nil {
@@ -98,12 +98,17 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 	}
 	sort.Slice(migrations, func(i, j int) bool { return migrations[i].Version < migrations[j].Version })
 	seen := make(map[int]struct{}, len(migrations))
+	seenNames := make(map[string]struct{}, len(migrations))
 	for index := range migrations {
 		migration := &migrations[index]
 		if _, exists := seen[migration.Version]; exists {
 			return result, fmt.Errorf("duplicate migration version %d", migration.Version)
 		}
 		seen[migration.Version] = struct{}{}
+		if _, exists := seenNames[migration.Name]; exists {
+			return result, fmt.Errorf("duplicate migration name %s", migration.Name)
+		}
+		seenNames[migration.Name] = struct{}{}
 		if migration.State == "" {
 			migration.State = MigrationStateReleased
 		}
@@ -111,21 +116,21 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 			migration.Hash = migrationHash([]byte(strings.Join(migration.Statements, "\n")))
 		}
 		var applied migrationRecord
-		err := store.DB.QueryRowContext(ctx, "SELECT version, name, hash, state FROM trinitygo_migrations WHERE version = ?", migration.Version).Scan(&applied.Version, &applied.Name, &applied.Hash, &applied.State)
+		err := store.DB.QueryRowContext(ctx, "SELECT name, hash, state FROM updates WHERE name = ?", migration.Name).Scan(&applied.Name, &applied.Hash, &applied.State)
 		if err == nil {
 			if !options.RedundancyChecks || (!options.ArchivedRedundancy && applied.State == MigrationStateArchived && migration.State == MigrationStateArchived) {
 				continue
 			}
 			if applied.Hash == migration.Hash {
-				if applied.Name != migration.Name || applied.State != migration.State {
-					if _, err := store.DB.ExecContext(ctx, "UPDATE trinitygo_migrations SET name = ?, state = ? WHERE version = ?", migration.Name, migration.State, migration.Version); err != nil {
+				if applied.State != migration.State {
+					if _, err := store.DB.ExecContext(ctx, "UPDATE updates SET hash = ?, state = ? WHERE name = ?", migration.Hash, migration.State, migration.Name); err != nil {
 						return result, err
 					}
 				}
 				continue
 			}
 			if options.AllowRehash && applied.Hash == "" {
-				if _, err := store.DB.ExecContext(ctx, "UPDATE trinitygo_migrations SET name = ?, hash = ?, state = ? WHERE version = ?", migration.Name, migration.Hash, migration.State, migration.Version); err != nil {
+				if _, err := store.DB.ExecContext(ctx, "UPDATE updates SET hash = ?, state = ? WHERE name = ?", migration.Hash, migration.State, migration.Name); err != nil {
 					return result, err
 				}
 				result.Rehashed++
@@ -149,19 +154,19 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 		result.Applied++
 	}
 	if options.CleanOrphans || options.CleanOrphansMax != 0 {
-		rows, err := store.DB.QueryContext(ctx, "SELECT version FROM trinitygo_migrations")
+		rows, err := store.DB.QueryContext(ctx, "SELECT name FROM updates")
 		if err != nil {
 			return result, err
 		}
-		var orphaned []int
+		var orphaned []string
 		for rows.Next() {
-			var version int
-			if err := rows.Scan(&version); err != nil {
+			var name string
+			if err := rows.Scan(&name); err != nil {
 				rows.Close()
 				return result, err
 			}
-			if _, exists := seen[version]; !exists {
-				orphaned = append(orphaned, version)
+			if !migrationNamesContain(migrations, name) {
+				orphaned = append(orphaned, name)
 			}
 		}
 		if err := rows.Close(); err != nil {
@@ -174,8 +179,8 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 		if !cleanup {
 			return result, nil
 		}
-		for _, version := range orphaned {
-			if _, err := store.DB.ExecContext(ctx, "DELETE FROM trinitygo_migrations WHERE version = ?", version); err != nil {
+		for _, name := range orphaned {
+			if _, err := store.DB.ExecContext(ctx, "DELETE FROM updates WHERE name = ?", name); err != nil {
 				return result, err
 			}
 			result.Orphans++
@@ -185,23 +190,22 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 }
 
 type migrationRecord struct {
-	Version int
-	Name    string
-	Hash    string
-	State   string
+	Name  string
+	Hash  string
+	State string
 }
 
 func ensureMigrationMetadata(ctx context.Context, store *Store) error {
-	meta := "CREATE TABLE IF NOT EXISTS trinitygo_migrations (version INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL, hash TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'RELEASED', speed INTEGER NOT NULL DEFAULT 0, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+	meta := "CREATE TABLE IF NOT EXISTS updates (name TEXT NOT NULL PRIMARY KEY, hash TEXT DEFAULT '', state TEXT NOT NULL DEFAULT 'RELEASED', timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, speed INTEGER NOT NULL DEFAULT 0)"
 	if store.Backend != BackendSQLite {
-		meta = "CREATE TABLE IF NOT EXISTS trinitygo_migrations (version INT NOT NULL PRIMARY KEY, name VARCHAR(255) NOT NULL, hash VARCHAR(40) NOT NULL DEFAULT '', state VARCHAR(16) NOT NULL DEFAULT 'RELEASED', speed INT NOT NULL DEFAULT 0, applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+		meta = "CREATE TABLE IF NOT EXISTS updates (name VARCHAR(200) NOT NULL PRIMARY KEY, hash CHAR(40) DEFAULT '', state VARCHAR(16) NOT NULL DEFAULT 'RELEASED', timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, speed INT UNSIGNED NOT NULL DEFAULT 0)"
 	}
 	if _, err := store.DB.ExecContext(ctx, meta); err != nil {
 		return err
 	}
 	columns := []struct{ name, definition string }{{"hash", "TEXT NOT NULL DEFAULT ''"}, {"state", "TEXT NOT NULL DEFAULT 'RELEASED'"}, {"speed", "INTEGER NOT NULL DEFAULT 0"}}
 	for _, column := range columns {
-		if _, err := store.DB.ExecContext(ctx, "ALTER TABLE trinitygo_migrations ADD COLUMN "+column.name+" "+column.definition); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
+		if _, err := store.DB.ExecContext(ctx, "ALTER TABLE updates ADD COLUMN "+column.name+" "+column.definition); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
 			return err
 		}
 	}
@@ -224,11 +228,11 @@ func applyMigration(ctx context.Context, store *Store, migration Migration, repl
 		}
 	}
 	speed := time.Since(start).Milliseconds()
-	query := "INSERT INTO trinitygo_migrations (version, name, hash, state, speed) VALUES (?, ?, ?, ?, ?)"
-	args := []any{migration.Version, migration.Name, migration.Hash, migration.State, speed}
+	query := "INSERT INTO updates (name, hash, state, speed) VALUES (?, ?, ?, ?)"
+	args := []any{migration.Name, migration.Hash, migration.State, speed}
 	if replacing {
-		query = "UPDATE trinitygo_migrations SET name = ?, hash = ?, state = ?, speed = ?, applied_at = CURRENT_TIMESTAMP WHERE version = ?"
-		args = []any{migration.Name, migration.Hash, migration.State, speed, migration.Version}
+		query = "UPDATE updates SET hash = ?, state = ?, speed = ?, timestamp = CURRENT_TIMESTAMP WHERE name = ?"
+		args = []any{migration.Hash, migration.State, speed, migration.Name}
 	}
 	if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 		_ = tx.Rollback()
@@ -243,4 +247,13 @@ func applyMigration(ctx context.Context, store *Store, migration Migration, repl
 func migrationHash(data []byte) string {
 	digest := sha1.Sum(data)
 	return hex.EncodeToString(digest[:])
+}
+
+func migrationNamesContain(migrations []Migration, name string) bool {
+	for _, migration := range migrations {
+		if migration.Name == name {
+			return true
+		}
+	}
+	return false
 }

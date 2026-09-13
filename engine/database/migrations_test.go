@@ -78,7 +78,7 @@ func TestApplyMigrationsRollbackAndOrphanCleanup(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM sample").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("rolled-back rows=%d err=%v", count, err)
 	}
-	if _, err := db.Exec("INSERT INTO trinitygo_migrations (version, name, hash, state) VALUES (99, 'orphan', 'x', 'RELEASED')"); err != nil {
+	if _, err := db.Exec("INSERT INTO updates (name, hash, state) VALUES ('orphan.sql', 'x', 'RELEASED')"); err != nil {
 		t.Fatal(err)
 	}
 	result, err := ApplyMigrationsWithOptions(context.Background(), store, base, MigrationOptions{CleanOrphans: true})
@@ -88,7 +88,7 @@ func TestApplyMigrationsRollbackAndOrphanCleanup(t *testing.T) {
 	if result.Orphans != 1 {
 		t.Fatalf("result=%+v", result)
 	}
-	if err := db.QueryRow("SELECT COUNT(*) FROM trinitygo_migrations WHERE version = 99").Scan(&count); err != nil || count != 0 {
+	if err := db.QueryRow("SELECT COUNT(*) FROM updates WHERE name = 'orphan.sql'").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("orphan count=%d err=%v", count, err)
 	}
 }
