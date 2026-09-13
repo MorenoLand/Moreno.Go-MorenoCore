@@ -22,6 +22,8 @@ type trainerSpellRecord struct {
 	ReqSpell3     uint32
 }
 
+const unitNPCFlagTrainer uint32 = 0x00000070
+
 func (s *session) handleTrainerList(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true
@@ -36,6 +38,9 @@ func (s *session) handleTrainerList(ctx context.Context, payload []byte) bool {
 
 func (s *session) sendTrainerList(ctx context.Context, trainerGUID uint64) bool {
 	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return true
+	}
+	if !s.canInteractWithNPC(ctx, trainerGUID, uint64(unitNPCFlagTrainer)) {
 		return true
 	}
 	var creatureEntry uint32
@@ -293,6 +298,9 @@ func (s *session) handleTrainerBuySpell(ctx context.Context, payload []byte) boo
 	wdb := s.server.WorldStore.DB
 	cdb := s.server.CharactersStore.DB
 	if wdb == nil || cdb == nil {
+		return true
+	}
+	if !s.canInteractWithNPC(ctx, trainerGUID, uint64(unitNPCFlagTrainer)) {
 		return true
 	}
 	var creatureEntry uint32
