@@ -159,6 +159,61 @@ func (s *session) handleTaxiNodeStatusQuery(ctx context.Context, payload []byte)
 	return true
 }
 
+func (s *session) sendTaxiNodeStatusMultiple(ctx context.Context) bool {
+	if s == nil || s.server == nil || s.player == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil || s.server.Data == nil {
+		return true
+	}
+	distance := float64(s.server.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 150
+	}
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z, COALESCE(t.faction, 0)
+		FROM creature AS c JOIN creature_template AS t ON t.entry = c.id
+		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
+		AND (COALESCE(t.npcflag, 0) & ?) <> 0`, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance, unitNPCFlagFlightmaster)
+	if err != nil {
+		return true
+	}
+	type flightmaster struct {
+		guid, entry uint32
+		x, y, z     float32
+		faction     uint32
+	}
+	masters := make([]flightmaster, 0)
+	for rows.Next() {
+		var guid, entry, faction int64
+		var x, y, z float64
+		if rows.Scan(&guid, &entry, &x, &y, &z, &faction) == nil {
+			masters = append(masters, flightmaster{guid: uint32(guid), entry: uint32(entry), x: float32(x), y: float32(y), z: float32(z), faction: uint32(faction)})
+		}
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return false
+	}
+	player := playerPos{Map: s.player.Map, X: s.player.X, Y: s.player.Y, Z: s.player.Z, GUID: s.playerGUID, Race: s.player.Race, Class: s.player.Class, Level: s.player.Level, FactionTemplate: s.server.raceFaction(s.player.Race), Reputations: playerReputationMap(s.player.Reputations), Sess: s}
+	for _, master := range masters {
+		if s.server.isHostileFaction(master.faction, player) {
+			continue
+		}
+		node, nodeErr := s.server.Data.NearestTaxiNode(master.x, master.y, master.z, s.player.Map, s.playerAlliance())
+		if nodeErr != nil || node == 0 {
+			continue
+		}
+		packet := protocol.NewBuffer(9)
+		packet.WriteU64(creatureWorldGUID(master.guid, master.entry))
+		if s.isTaxiMaskNodeKnown(node) || s.isTaxiCheater() {
+			packet.WriteU8(1)
+		} else {
+			packet.WriteU8(0)
+		}
+		if err := s.write(uint16(protocol.OpcodeSMSG_TAXINODE_STATUS), packet.Bytes(), true); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *session) handleTaxiQueryAvailableNodes(ctx context.Context, payload []byte) bool {
 	if !s.playerLoaded || s.player == nil || len(payload) < 8 {
 		return true

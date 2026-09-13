@@ -201,6 +201,9 @@ func (s *session) handleTimeSyncResponse(payload []byte) bool {
 		if !s.sendQuestgiverStatusMultiple(context.Background()) {
 			return false
 		}
+		if !s.sendTaxiNodeStatusMultiple(context.Background()) {
+			return false
+		}
 	}
 	return true
 }
