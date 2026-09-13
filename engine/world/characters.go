@@ -1694,8 +1694,17 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 	s.releaseActiveLoot()
 	inCombat := s.attackTarget != 0 || (s.player != nil && s.player.UnitFlags&unitFlagInCombat != 0)
 	resting := s.player != nil && s.player.PlayerFlags&playerFlagResting != 0
+	instantLogoutPermission := false
+	if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil {
+		var permissionErr error
+		instantLogoutPermission, permissionErr = accountHasPermission(ctx, s.server.AuthStore.DB, s.accountID, s.server.RealmID, s.security, permissionInstantLogout)
+		if permissionErr != nil {
+			s.debug("logout permission lookup failed", "account", s.accountName, "permission", permissionInstantLogout, "error", permissionErr)
+			instantLogoutPermission = false
+		}
+	}
 	reason := uint32(0)
-	if inCombat && !resting && s.security == 0 {
+	if inCombat && !resting {
 		reason = 1 // ERR_LOGOUT_IN_COMBAT
 	} else if s.isFalling {
 		reason = 3 // ERR_LOGOUT_FAILED_FALLING
@@ -1709,7 +1718,7 @@ func (s *session) handleLogoutRequest(ctx context.Context) bool {
 		_ = s.write(uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE), response.Bytes(), true)
 		return true
 	}
-	instant := (resting && !inCombat) || s.security > 0 || s.inFlight
+	instant := (resting && !inCombat) || instantLogoutPermission || s.inFlight
 	response := protocol.NewBuffer(5)
 	response.WriteU32(0) // reason 0 = OK
 	if instant {

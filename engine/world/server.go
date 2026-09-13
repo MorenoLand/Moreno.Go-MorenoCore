@@ -827,7 +827,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 				if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 					state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 				}
-				return
+				continue
 			}
 			return
 		}
@@ -839,7 +839,7 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if logoutErr := state.completeLogout(ctx); logoutErr != nil {
 				state.debug("player logout failed", "account", state.accountName, "error", logoutErr)
 			}
-			return
+			continue
 		}
 		if state.authed && state.server.Features != nil && state.server.Features.Scripts != nil {
 			packet := &scripting.Packet{Opcode: header.Opcode, Data: append([]byte(nil), payload...)}
@@ -1419,9 +1419,6 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			}
 		case uint32(protocol.OpcodeCMSG_LOGOUT_REQUEST):
 			if !state.authed || !state.handleLogoutRequest(ctx) {
-				return
-			}
-			if !state.playerLoaded {
 				return
 			}
 		case uint32(protocol.OpcodeCMSG_PLAYER_LOGOUT):

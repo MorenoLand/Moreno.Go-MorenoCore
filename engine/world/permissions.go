@@ -7,6 +7,8 @@ import (
 
 const permissionCommandGMChat uint32 = 372
 
+const permissionInstantLogout uint32 = 1
+
 // permissionSkipCheckOverSpeedPing mirrors rbac::RBAC_PERM_SKIP_CHECK_OVERSPEED_PING (RBAC.h).
 const permissionSkipCheckOverSpeedPing uint32 = 23
 

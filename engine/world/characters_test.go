@@ -644,6 +644,40 @@ func TestLogoutRejectsPlayerCombatFlag(t *testing.T) {
 	}
 }
 
+func TestLogoutSecurityLevelDoesNotBypassCombatWithoutRBACPermission(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE rbac_account_permissions (accountId INTEGER, permissionId INTEGER, granted INTEGER, realmId INTEGER)",
+		"CREATE TABLE rbac_default_permissions (secId INTEGER, permissionId INTEGER, realmId INTEGER)",
+		"CREATE TABLE rbac_linked_permissions (id INTEGER, linkedId INTEGER)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{AuthStore: &database.Store{Name: "auth", Backend: database.BackendSQLite, DB: db}}
+	sess := &session{server: server, conn: serverConn, accountID: 7, security: 3, playerLoaded: true, player: &playerState{GUID: 9, UnitFlags: unitFlagInCombat}}
+	done := make(chan bool, 1)
+	go func() { done <- sess.handleLogoutRequest(context.Background()) }()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_LOGOUT_RESPONSE) || len(payload) != 5 || payload[0] != 1 {
+		t.Fatalf("opcode=%x payload=%x", opcode, payload)
+	}
+	if !<-done || !sess.logoutAt.IsZero() {
+		t.Fatal("security level bypassed combat logout without RBAC permission")
+	}
+}
+
 func TestLogoutRejectsFallingAndDuelStates(t *testing.T) {
 	for _, test := range []struct {
 		name    string
