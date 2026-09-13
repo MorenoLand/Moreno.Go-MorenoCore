@@ -15,13 +15,15 @@ type wdtTile struct {
 }
 
 type wdtInfo struct {
-	Version      uint32
-	MPHD         [8]uint32
-	Tiles        [wdtMapSize][wdtMapSize]wdtTile
-	TileCount    int
-	HasMain      bool
-	HasGlobalWMO bool
-	GlobalWMO    string
+	Version             uint32
+	MPHD                [8]uint32
+	Tiles               [wdtMapSize][wdtMapSize]wdtTile
+	TileCount           int
+	HasMain             bool
+	HasGlobalWMO        bool
+	GlobalWMO           string
+	GlobalWMOModels     []adtWorldModelInstance
+	GlobalWMOModelNames []string
 }
 
 func parseWDT(data []byte) (wdtInfo, error) {
@@ -68,8 +70,15 @@ func parseWDT(data []byte) (wdtInfo, error) {
 		case "MWMO":
 			info.HasGlobalWMO = size > 0
 			if size > 0 {
+				info.GlobalWMOModelNames = parseNameList(chunk)
 				info.GlobalWMO = strings.TrimRight(string(chunk), "\x00")
 			}
+		case "MODF":
+			instances, err := parseMODF(chunk)
+			if err != nil {
+				return wdtInfo{}, err
+			}
+			info.GlobalWMOModels = append(info.GlobalWMOModels, instances...)
 		}
 		offset += size
 	}

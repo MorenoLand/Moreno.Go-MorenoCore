@@ -75,6 +75,14 @@ func buildADTDirBin(info adtInfo, mapID, tileX, tileY uint32) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+func buildWDTDirBin(info wdtInfo, mapID uint32) ([]byte, error) {
+	order := make([]adtModelInstanceRef, len(info.GlobalWMOModels))
+	for index := range order {
+		order[index] = adtModelInstanceRef{Index: index}
+	}
+	return buildADTDirBin(adtInfo{WorldModels: info.GlobalWMOModels, WorldModelNames: info.GlobalWMOModelNames, InstanceOrder: order}, mapID, 65, 65)
+}
+
 type modelSpawn struct {
 	Flags                uint32
 	ADTID                uint16

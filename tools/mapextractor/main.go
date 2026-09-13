@@ -21,7 +21,13 @@ func main() {
 	tileY := flag.Uint("tile-y", 0, "ADT tile Y coordinate written to dir_bin records")
 	flag.Parse()
 	if *dirBin != "" && *adtFile == "" {
-		fmt.Fprintln(os.Stderr, "-dir-bin requires -adt-file")
+		if *wdtFile == "" {
+			fmt.Fprintln(os.Stderr, "-dir-bin requires -adt-file or -wdt-file")
+			os.Exit(2)
+		}
+	}
+	if *dirBin != "" && *adtFile != "" && *wdtFile != "" {
+		fmt.Fprintln(os.Stderr, "-dir-bin accepts one source file at a time")
 		os.Exit(2)
 	}
 	if *adtFile != "" {
@@ -46,11 +52,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "dir_bin conversion failed: %v\n", err)
 				os.Exit(1)
 			}
-			if err := os.MkdirAll(filepath.Dir(*dirBin), 0755); err != nil {
-				fmt.Fprintf(os.Stderr, "dir_bin directory failed: %v\n", err)
-				os.Exit(1)
-			}
-			if err := os.WriteFile(*dirBin, payload, 0644); err != nil {
+			if err := writeDirBin(*dirBin, payload); err != nil {
 				fmt.Fprintf(os.Stderr, "dir_bin write failed: %v\n", err)
 				os.Exit(1)
 			}
@@ -72,6 +74,22 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("Parsed %s: version=%d active_tiles=%d global_wmo=%t name=%s\n", filepath.Base(*wdtFile), info.Version, info.TileCount, info.HasGlobalWMO, info.GlobalWMO)
+		if *dirBin != "" {
+			if uint64(*mapID) > uint64(^uint32(0)) {
+				fmt.Fprintln(os.Stderr, "dir_bin map ID is invalid")
+				os.Exit(2)
+			}
+			payload, err := buildWDTDirBin(info, uint32(*mapID))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "dir_bin conversion failed: %v\n", err)
+				os.Exit(1)
+			}
+			if err := writeDirBin(*dirBin, payload); err != nil {
+				fmt.Fprintf(os.Stderr, "dir_bin write failed: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Wrote %d dir_bin bytes to %s\n", len(payload), *dirBin)
+		}
 		if *input == "" {
 			return
 		}
@@ -86,4 +104,11 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("Extracted and validated %d DBC files into %s\n", count, *output)
+}
+
+func writeDirBin(path string, payload []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, payload, 0644)
 }

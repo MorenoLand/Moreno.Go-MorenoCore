@@ -30,11 +30,18 @@ func TestParseWDTMainTiles(t *testing.T) {
 	data := append(wdtChunk("MVER", func() []byte { b := make([]byte, 4); binary.LittleEndian.PutUint32(b, 18); return b }()), wdtChunk("MPHD", mphd)...)
 	data = append(data, wdtChunk("MAIN", main)...)
 	data = append(data, wdtChunk("MWMO", []byte("World\\Map.wmo\x00"))...)
+	modf := make([]byte, 64)
+	binary.LittleEndian.PutUint32(modf[0:], 0)
+	binary.LittleEndian.PutUint32(modf[4:], 77)
+	binary.LittleEndian.PutUint32(modf[8:], math.Float32bits(1))
+	binary.LittleEndian.PutUint16(modf[60:], 4)
+	binary.LittleEndian.PutUint16(modf[62:], 1024)
+	data = append(data, wdtChunk("MODF", modf)...)
 	info, err := parseWDT(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Version != 18 || !info.HasMain || !info.HasGlobalWMO || info.GlobalWMO != "World\\Map.wmo" || info.TileCount != 2 || info.MPHD[0] != 0x1234 {
+	if info.Version != 18 || !info.HasMain || !info.HasGlobalWMO || info.GlobalWMO != "World\\Map.wmo" || len(info.GlobalWMOModelNames) != 1 || len(info.GlobalWMOModels) != 1 || info.GlobalWMOModels[0].UniqueID != 77 || info.GlobalWMOModels[0].NameSet != 4 || info.TileCount != 2 || info.MPHD[0] != 0x1234 {
 		t.Fatalf("unexpected WDT info: %+v", info)
 	}
 	if info.Tiles[3][2].Exists != 1 || info.Tiles[3][2].Data != 7 || info.Tiles[63][63].Exists != 2 {
@@ -51,6 +58,16 @@ func TestParseWDTRejectsMissingMain(t *testing.T) {
 func TestParseWDTRejectsTruncatedMain(t *testing.T) {
 	if _, err := parseWDT(wdtChunk("MAIN", make([]byte, 8))); err == nil {
 		t.Fatal("expected truncated MAIN error")
+	}
+}
+
+func TestBuildWDTDirBinUsesWorldSpawnRecord(t *testing.T) {
+	payload, err := buildWDTDirBin(wdtInfo{GlobalWMOModelNames: []string{"World\\Global.WMO"}, GlobalWMOModels: []adtWorldModelInstance{{NameID: 0, UniqueID: 42, NameSet: 3, Position: [3]float32{1, 2, 3}, BoundsMin: [3]float32{-1, -2, -3}, BoundsMax: [3]float32{4, 5, 6}}}}, 571)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) < 22 || binary.LittleEndian.Uint32(payload[0:]) != 571 || binary.LittleEndian.Uint32(payload[4:]) != 65 || binary.LittleEndian.Uint32(payload[8:]) != 65 || binary.LittleEndian.Uint32(payload[12:]) != modelFlagHasBound|modelFlagWorldSpawn || binary.LittleEndian.Uint16(payload[16:]) != 3 || binary.LittleEndian.Uint32(payload[18:]) != 1 {
+		t.Fatalf("unexpected WDT dir_bin header: %x", payload[:22])
 	}
 }
 
