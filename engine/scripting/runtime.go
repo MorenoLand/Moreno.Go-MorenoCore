@@ -225,21 +225,28 @@ func (r *Runtime) Tick(ctx context.Context, elapsed int64) error {
 	remaining := r.timers[:0]
 	for _, current := range r.timers {
 		current.elapsed += elapsed
+		removeCurrent := false
 		for current.elapsed >= current.delay {
 			current.elapsed -= current.delay
-			r.state.SetTop(0)
-			r.state.RawGetInt(lua.RegistryIndex, current.ref)
-			if err := r.state.ProtectedCall(0, 0, 0); err != nil && r.config.Logger != nil {
-				r.config.Logger.Error("lua timer failed", "id", current.id, "error", err)
-			}
-			if current.repeats > 0 {
+			remove := current.repeats == 1
+			remainingRepeats := current.repeats
+			if current.repeats > 1 {
 				current.repeats--
 			}
-			if current.repeats == 0 {
+			r.state.SetTop(0)
+			r.state.RawGetInt(lua.RegistryIndex, current.ref)
+			r.state.PushInteger(current.id)
+			r.state.PushInteger(int(current.delay))
+			r.state.PushInteger(remainingRepeats)
+			if err := r.state.ProtectedCall(3, 0, 0); err != nil && r.config.Logger != nil {
+				r.config.Logger.Error("lua timer failed", "id", current.id, "error", err)
+			}
+			if remove {
+				removeCurrent = true
 				break
 			}
 		}
-		if current.repeats != 0 {
+		if !removeCurrent {
 			remaining = append(remaining, current)
 		}
 	}
@@ -393,7 +400,7 @@ func (r *Runtime) createLuaEvent(state *lua.State) int {
 	if delay < 1 {
 		delay = 1
 	}
-	repeats := -1
+	repeats := 1
 	if state.Top() >= 3 && state.IsNumber(3) {
 		repeats = lua.CheckInteger(state, 3)
 	}

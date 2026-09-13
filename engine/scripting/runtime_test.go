@@ -34,6 +34,22 @@ func TestLuaObjectMethodsAndTimers(t *testing.T) {
 	}
 }
 
+func TestLuaTimerArgumentsAndInfiniteRepeats(t *testing.T) {
+	runtime := NewRuntime(Config{Enabled: true})
+	if err := runtime.LoadString(`calls = 0; lastEvent = 0; lastDelay = 0; lastRepeats = 0; CreateLuaEvent(function(event, delay, repeats) calls = calls + 1; lastEvent = event; lastDelay = delay; lastRepeats = repeats end, 10, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Tick(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.Tick(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.LoadString(`assert(calls == 2); assert(lastEvent > 0); assert(lastDelay == 10); assert(lastRepeats == 0)`); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFileChunkEnvironment(t *testing.T) {
 	runtime := NewRuntime(Config{Enabled: true})
 	runtime.mu.Lock()
