@@ -344,6 +344,23 @@ func (s *session) buildUnlearnSpells(ctx context.Context, state playerState) []b
 			rows.Close()
 		}
 	}
+	if s != nil && s.server != nil && s.server.Data != nil {
+		for _, spell := range state.Spells {
+			if _, ok := nextRanks[spell.ID]; ok {
+				continue
+			}
+			abilities, found, err := s.server.Data.SkillLineAbilities(spell.ID)
+			if err != nil || !found {
+				continue
+			}
+			for _, ability := range abilities {
+				if ability.SupercededBySpell != 0 {
+					nextRanks[spell.ID] = ability.SupercededBySpell
+					break
+				}
+			}
+		}
+	}
 	result := make([]uint32, 0, len(inactive))
 	for _, spellID := range inactive {
 		next, ok := nextRanks[spellID]
