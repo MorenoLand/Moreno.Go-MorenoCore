@@ -964,6 +964,10 @@ func (s *session) handleChannelVoiceOn(ctx context.Context, payload []byte) bool
 // handleChannelModerate processes CMSG_CHANNEL_MODERATE (0x0A8).
 // Reference: TrinityCore Opcodes.cpp CMSG_CHANNEL_MODERATE -> WorldSession::Handle_NULL.
 func (s *session) handleChannelModerate(ctx context.Context, payload []byte) bool {
+	if !s.playerLoaded {
+		return false
+	}
+	s.debug("reference logged-in no-op", "account", s.accountName, "opcode", protocol.OpcodeCMSG_CHANNEL_MODERATE, "size", len(payload))
 	return true
 }
 

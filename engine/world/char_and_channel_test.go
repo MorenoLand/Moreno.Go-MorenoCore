@@ -10,6 +10,15 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+func TestLoggedInReferenceChannelNoopRequiresPlayer(t *testing.T) {
+	if (&session{}).handleChannelModerate(context.Background(), nil) {
+		t.Fatal("unloaded channel moderate should be rejected")
+	}
+	if !(&session{playerLoaded: true}).handleChannelModerate(context.Background(), nil) {
+		t.Fatal("logged-in channel moderate no-op should be consumed")
+	}
+}
+
 func TestChannelAndCharServiceHandlers(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

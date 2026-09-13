@@ -2488,6 +2488,11 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			if !state.authed || !state.handleMovement(ctx, header.Opcode, payload) {
 				return
 			}
+		case uint32(protocol.OpcodeCMSG_GROUP_CANCEL), uint32(protocol.OpcodeCMSG_TELEPORT_TO_UNIT), uint32(protocol.OpcodeCMSG_UNUSED5):
+			if !state.authed || !state.playerLoaded {
+				return
+			}
+			state.debug("reference logged-in no-op", "account", state.accountName, "opcode", opcodeName(header.Opcode), "size", len(payload))
 		// Reference client opcodes intentionally bound to Handle_NULL (TrinityCore Opcodes.cpp)
 		case uint32(protocol.OpcodeCMSG_ACTIVE_PVP_CHEAT),
 			uint32(protocol.OpcodeCMSG_ADD_PVP_MEDAL_CHEAT),
@@ -2609,7 +2614,6 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			uint32(protocol.OpcodeCMSG_GM_VISION),
 			uint32(protocol.OpcodeCMSG_GM_WHISPER),
 			uint32(protocol.OpcodeCMSG_GODMODE),
-			uint32(protocol.OpcodeCMSG_GROUP_CANCEL),
 			uint32(protocol.OpcodeCMSG_GROUP_SWAP_SUB_GROUP),
 			uint32(protocol.OpcodeCMSG_IGNORE_DIMINISHING_RETURNS_CHEAT),
 			uint32(protocol.OpcodeCMSG_IGNORE_KNOCKBACK_CHEAT),
@@ -2714,7 +2718,6 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			uint32(protocol.OpcodeCMSG_TAXIENABLEALLNODES),
 			uint32(protocol.OpcodeCMSG_TAXIENABLENODE),
 			uint32(protocol.OpcodeCMSG_TAXISHOWNODES),
-			uint32(protocol.OpcodeCMSG_TELEPORT_TO_UNIT),
 			uint32(protocol.OpcodeCMSG_TEST_DROP_RATE),
 			uint32(protocol.OpcodeCMSG_TOGGLE_XP_GAIN),
 			uint32(protocol.OpcodeCMSG_TRIGGER_CINEMATIC_CHEAT),
@@ -2724,7 +2727,6 @@ func (s *Server) Handle(ctx context.Context, conn net.Conn) {
 			uint32(protocol.OpcodeCMSG_UNLEARN_DANCE_MOVE),
 			uint32(protocol.OpcodeCMSG_UNLEARN_SPELL),
 			uint32(protocol.OpcodeCMSG_UNLEARN_TALENTS),
-			uint32(protocol.OpcodeCMSG_UNUSED5),
 			uint32(protocol.OpcodeCMSG_UNUSED6),
 			uint32(protocol.OpcodeCMSG_USE_SKILL_CHEAT),
 			uint32(protocol.OpcodeCMSG_VOICE_SET_TALKER_MUTED_REQUEST),
