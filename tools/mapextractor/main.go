@@ -15,7 +15,15 @@ func main() {
 	output := flag.String("output", "data", "output data directory")
 	wdtFile := flag.String("wdt-file", "", "parse one local WDT file and print its active tile count")
 	adtFile := flag.String("adt-file", "", "parse one local ADT file and print its chunk inventory")
+	dirBin := flag.String("dir-bin", "", "write VMAP dir_bin records from the local ADT file")
+	mapID := flag.Uint("map-id", 0, "map ID written to dir_bin records")
+	tileX := flag.Uint("tile-x", 0, "ADT tile X coordinate written to dir_bin records")
+	tileY := flag.Uint("tile-y", 0, "ADT tile Y coordinate written to dir_bin records")
 	flag.Parse()
+	if *dirBin != "" && *adtFile == "" {
+		fmt.Fprintln(os.Stderr, "-dir-bin requires -adt-file")
+		os.Exit(2)
+	}
 	if *adtFile != "" {
 		data, err := os.ReadFile(*adtFile)
 		if err != nil {
@@ -28,6 +36,26 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("Parsed %s: mcnk=%d mh2o=%d liquid_layers=%d mcvt=%d mcly=%d mcal=%d mddf=%d modf=%d\n", filepath.Base(*adtFile), info.MCNKCount, info.MH2OCount, info.LiquidLayers, info.MCVTCount, info.MCLYCount, info.MCALCount, len(info.Doodads), len(info.WorldModels))
+		if *dirBin != "" {
+			if uint64(*mapID) > uint64(^uint32(0)) || *tileX > 65 || *tileY > 65 || (*tileX == 64 || *tileY == 64) {
+				fmt.Fprintln(os.Stderr, "dir_bin map/tile coordinates are invalid")
+				os.Exit(2)
+			}
+			payload, err := buildADTDirBin(info, uint32(*mapID), uint32(*tileX), uint32(*tileY))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "dir_bin conversion failed: %v\n", err)
+				os.Exit(1)
+			}
+			if err := os.MkdirAll(filepath.Dir(*dirBin), 0755); err != nil {
+				fmt.Fprintf(os.Stderr, "dir_bin directory failed: %v\n", err)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(*dirBin, payload, 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "dir_bin write failed: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Wrote %d dir_bin bytes to %s\n", len(payload), *dirBin)
+		}
 		if *input == "" && *wdtFile == "" {
 			return
 		}

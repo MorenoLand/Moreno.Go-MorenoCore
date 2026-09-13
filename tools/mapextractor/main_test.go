@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -112,6 +114,81 @@ func TestParseADTChunkInventory(t *testing.T) {
 func TestParseADTRejectsMissingMCNK(t *testing.T) {
 	if _, err := parseADT(wdtChunk("MHDR", make([]byte, 16))); err == nil {
 		t.Fatal("expected missing MCNK error")
+	}
+}
+
+func TestBuildADTDirBinMatchesModelSpawnLayout(t *testing.T) {
+	info := adtInfo{
+		DoodadNames:     []string{"World\\Models\\Tree M2.MDX"},
+		WorldModelNames: []string{"World\\Buildings\\Storm Wind.WMO"},
+		Doodads:         []adtDoodadInstance{{NameID: 0, UniqueID: 11, Position: [3]float32{1, 2, 3}, Rotation: [3]float32{4, 5, 6}, Scale: 2}},
+		WorldModels:     []adtWorldModelInstance{{NameID: 0, UniqueID: 22, Position: [3]float32{7, 8, 9}, Rotation: [3]float32{10, 11, 12}, BoundsMin: [3]float32{-1, -2, -3}, BoundsMax: [3]float32{4, 5, 6}, NameSet: 9}},
+		InstanceOrder:   []adtModelInstanceRef{{Doodad: true, Index: 0}, {Index: 0}},
+	}
+	payload, err := buildADTDirBin(info, 571, 65, 65)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := bytes.NewReader(payload)
+	readRecord := func(hasBounds bool) (uint32, uint16, uint32, [3]float32, [3]float32, float32, [3]float32, [3]float32, string) {
+		var mapID, tileX, tileY, flags, id, nameLen uint32
+		var adtID uint16
+		var position, rotation, boundsMin, boundsMax [3]float32
+		var scale float32
+		if err := binary.Read(reader, binary.LittleEndian, &mapID); err != nil {
+			t.Fatal(err)
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &tileX); err != nil {
+			t.Fatal(err)
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &tileY); err != nil {
+			t.Fatal(err)
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &flags); err != nil {
+			t.Fatal(err)
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &adtID); err != nil {
+			t.Fatal(err)
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &id); err != nil {
+			t.Fatal(err)
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &position); err != nil {
+			t.Fatal(err)
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &rotation); err != nil {
+			t.Fatal(err)
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &scale); err != nil {
+			t.Fatal(err)
+		}
+		if hasBounds {
+			if err := binary.Read(reader, binary.LittleEndian, &boundsMin); err != nil {
+				t.Fatal(err)
+			}
+			if err := binary.Read(reader, binary.LittleEndian, &boundsMax); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &nameLen); err != nil {
+			t.Fatal(err)
+		}
+		name := make([]byte, nameLen)
+		if _, err := io.ReadFull(reader, name); err != nil {
+			t.Fatal(err)
+		}
+		return flags, adtID, id, position, rotation, scale, boundsMin, boundsMax, string(name)
+	}
+	flags, adtID, id, position, rotation, scale, boundsMin, boundsMax, name := readRecord(false)
+	if flags != modelFlagM2|modelFlagWorldSpawn || adtID != 0 || id != 1 || position != [3]float32{3, 1, 2} || rotation != [3]float32{4, 5, 6} || scale != 2 || boundsMin != [3]float32{} || boundsMax != [3]float32{} || name != "Tree_M2.mdx" {
+		t.Fatalf("unexpected M2 dir_bin record flags=%d adt=%d id=%d pos=%v rot=%v scale=%v min=%v max=%v name=%q", flags, adtID, id, position, rotation, scale, boundsMin, boundsMax, name)
+	}
+	flags, adtID, id, position, rotation, scale, boundsMin, boundsMax, name = readRecord(true)
+	if flags != modelFlagHasBound|modelFlagWorldSpawn || adtID != 9 || id != 2 || position != [3]float32{9, 7, 8} || rotation != [3]float32{10, 11, 12} || scale != 1 || boundsMin != [3]float32{-3, -1, -2} || boundsMax != [3]float32{6, 4, 5} || name != "Storm_Wind.wmo" {
+		t.Fatalf("unexpected WMO dir_bin record flags=%d adt=%d id=%d pos=%v rot=%v scale=%v min=%v max=%v name=%q", flags, adtID, id, position, rotation, scale, boundsMin, boundsMax, name)
+	}
+	if reader.Len() != 0 {
+		t.Fatalf("unexpected trailing dir_bin bytes=%d", reader.Len())
 	}
 }
 

@@ -37,6 +37,9 @@ type adtInfo struct {
 	Cells             []adtCellInfo
 	Doodads           []adtDoodadInstance
 	WorldModels       []adtWorldModelInstance
+	DoodadNames       []string
+	WorldModelNames   []string
+	InstanceOrder     []adtModelInstanceRef
 }
 
 type adtDoodadInstance struct {
@@ -57,6 +60,11 @@ type adtWorldModelInstance struct {
 	DoodadSet        uint16
 	NameSet          uint16
 	Scale            float32
+}
+
+type adtModelInstanceRef struct {
+	Doodad bool
+	Index  int
 }
 
 type adtCellInfo struct {
@@ -91,10 +99,12 @@ func parseADT(data []byte) (adtInfo, error) {
 			info.HasMTEX = true
 		case "MMDX":
 			info.HasMMDX = true
+			info.DoodadNames = parseNameList(chunk)
 		case "MMID":
 			info.HasMMID = true
 		case "MWMO":
 			info.HasMWMO = true
+			info.WorldModelNames = parseNameList(chunk)
 		case "MWID":
 			info.HasMWID = true
 		case "MDDF":
@@ -103,14 +113,22 @@ func parseADT(data []byte) (adtInfo, error) {
 			if err != nil {
 				return adtInfo{}, err
 			}
+			start := len(info.Doodads)
 			info.Doodads = append(info.Doodads, instances...)
+			for index := range instances {
+				info.InstanceOrder = append(info.InstanceOrder, adtModelInstanceRef{Doodad: true, Index: start + index})
+			}
 		case "MODF":
 			info.HasMODF = true
 			instances, err := parseMODF(chunk)
 			if err != nil {
 				return adtInfo{}, err
 			}
+			start := len(info.WorldModels)
 			info.WorldModels = append(info.WorldModels, instances...)
+			for index := range instances {
+				info.InstanceOrder = append(info.InstanceOrder, adtModelInstanceRef{Index: start + index})
+			}
 		case "MH2O":
 			info.MH2OCount++
 			if err := parseMH2O(chunk, &info); err != nil {
@@ -128,6 +146,21 @@ func parseADT(data []byte) (adtInfo, error) {
 		return adtInfo{}, errors.New("ADT MCNK chunks not found")
 	}
 	return info, nil
+}
+
+func parseNameList(data []byte) []string {
+	result := make([]string, 0)
+	for start := 0; start < len(data); {
+		end := start
+		for end < len(data) && data[end] != 0 {
+			end++
+		}
+		if end > start {
+			result = append(result, string(data[start:end]))
+		}
+		start = end + 1
+	}
+	return result
 }
 
 func parseMDDF(chunk []byte) ([]adtDoodadInstance, error) {
