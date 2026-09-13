@@ -59,6 +59,11 @@ var sqliteStatementOverrides = map[StatementID]string{
 	"LOGIN_INS_IP_BANNED":                "INSERT INTO ip_banned (ip, bandate, unbandate, bannedby, banreason) VALUES (?, unixepoch(), unixepoch()+?, ?, ?)",
 	"LOGIN_INS_ACCOUNT_BANNED":           "INSERT INTO account_banned (id, bandate, unbandate, bannedby, banreason, active) VALUES (?, unixepoch(), unixepoch()+?, ?, ?, 1)",
 	"LOGIN_INS_ACCOUNT":                  "INSERT INTO account(username, salt, verifier, reg_mail, email, joindate) VALUES(?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+	"LOGIN_INS_ALDL_IP_LOGGING":          "INSERT INTO logs_ip_actions (account_id, character_guid, realm_id, type, ip, systemnote, unixtime, time) VALUES (?, ?, ?, ?, (SELECT last_ip FROM account WHERE id = ?), ?, unixepoch(), CURRENT_TIMESTAMP)",
+	"LOGIN_INS_FACL_IP_LOGGING":          "INSERT INTO logs_ip_actions (account_id, character_guid, realm_id, type, ip, systemnote, unixtime, time) VALUES (?, ?, ?, ?, (SELECT last_attempt_ip FROM account WHERE id = ?), ?, unixepoch(), CURRENT_TIMESTAMP)",
+	"LOGIN_INS_CHAR_IP_LOGGING":          "INSERT INTO logs_ip_actions (account_id, character_guid, realm_id, type, ip, systemnote, unixtime, time) VALUES (?, ?, ?, ?, ?, ?, unixepoch(), CURRENT_TIMESTAMP)",
+	"LOGIN_INS_FALP_IP_LOGGING":          "INSERT INTO logs_ip_actions (account_id, character_guid, realm_id, type, ip, systemnote, unixtime, time) VALUES (?, 0, 0, 1, ?, ?, unixepoch(), CURRENT_TIMESTAMP)",
+	"LOGIN_INS_ACCOUNT_MUTE":             "INSERT INTO account_muted VALUES (?, unixepoch(), ?, ?, ?)",
 	"CHAR_DEL_EXPIRED_BANS":              "UPDATE character_banned SET active = 0 WHERE unbandate <= unixepoch() AND unbandate <> bandate",
 	"CHAR_SEL_CHAR_CREATE_INFO":          "SELECT level, race, class FROM characters WHERE account = ? LIMIT ?",
 	"CHAR_DEL_CHARACTER_BAN":             "DELETE FROM character_banned WHERE guid IN (SELECT guid FROM characters WHERE account = ?)",
@@ -76,6 +81,11 @@ var sqliteStatementOverrides = map[StatementID]string{
 	"CHAR_UPD_DELETE_INFO":               "UPDATE characters SET deleteInfos_Name = name, deleteInfos_Account = account, deleteDate = unixepoch(), name = '', account = 0 WHERE guid = ?",
 	"CHAR_SEL_CHAR_DEL_INFO_BY_NAME":     "SELECT guid, deleteInfos_Name, deleteInfos_Account, deleteDate FROM characters WHERE deleteDate IS NOT NULL AND deleteInfos_Name LIKE '%' || ? || '%'",
 	"CHAR_INS_DESERTER_TRACK":            "INSERT INTO battleground_deserters (guid, type, datetime) VALUES (?, ?, CURRENT_TIMESTAMP)",
+	"CHAR_INS_PVPSTATS_BATTLEGROUND":     "INSERT INTO pvpstats_battlegrounds (id, winner_faction, bracket_id, type, date) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+	"CHAR_SEL_PVPSTATS_FACTIONS_OVERALL": "SELECT winner_faction, COUNT(*) AS count FROM pvpstats_battlegrounds WHERE julianday('now') - julianday(date) < 7 GROUP BY winner_faction ORDER BY winner_faction ASC",
+	"CHAR_INS_QUEST_TRACK":               "INSERT INTO quest_tracker (id, character_guid, quest_accept_time, core_hash, core_revision) VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)",
+	"CHAR_UPD_QUEST_TRACK_COMPLETE_TIME": "UPDATE quest_tracker SET quest_complete_time = CURRENT_TIMESTAMP WHERE rowid IN (SELECT rowid FROM quest_tracker WHERE id = ? AND character_guid = ? ORDER BY quest_accept_time DESC LIMIT 1)",
+	"CHAR_UPD_QUEST_TRACK_ABANDON_TIME":  "UPDATE quest_tracker SET quest_abandon_time = CURRENT_TIMESTAMP WHERE rowid IN (SELECT rowid FROM quest_tracker WHERE id = ? AND character_guid = ? ORDER BY quest_accept_time DESC LIMIT 1)",
 	"CHAR_SEL_CHECK_NAME":                "SELECT 1 FROM characters WHERE UPPER(name) = UPPER(?)",
 }
 
