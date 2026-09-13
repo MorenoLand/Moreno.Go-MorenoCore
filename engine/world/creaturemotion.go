@@ -975,15 +975,20 @@ func (s *Server) isHostileFaction(creatureFaction uint32, player playerPos) bool
 					return true
 				}
 			}
+			if creatureTemplate.EnemyGroup&playerTemplate.FactionGroup != 0 {
+				return true
+			}
 			for _, friend := range creatureTemplate.Friends {
 				if friend != 0 && friend == playerTemplate.Faction {
 					return false
 				}
 			}
-			if creatureTemplate.EnemyGroup&playerTemplate.FactionGroup != 0 {
-				return true
+			for _, friend := range playerTemplate.Friends {
+				if friend != 0 && friend == creatureTemplate.Faction {
+					return false
+				}
 			}
-			if creatureTemplate.FriendGroup&playerTemplate.FactionGroup != 0 || creatureTemplate.FactionGroup&playerTemplate.FriendGroup != 0 {
+			if creatureTemplate.FriendGroup&playerTemplate.FactionGroup != 0 || creatureTemplate.FactionGroup&playerTemplate.FriendGroup != 0 || playerTemplate.FriendGroup&creatureTemplate.FactionGroup != 0 || playerTemplate.FactionGroup&creatureTemplate.FriendGroup != 0 {
 				return false
 			}
 			return creatureTemplate.Flags&0x00002000 != 0
