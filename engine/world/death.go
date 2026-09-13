@@ -810,6 +810,9 @@ func (s *session) handleAreaSpiritHealerQuery(ctx context.Context, payload []byt
 	if !s.creatureIsSpiritService(ctx, guid) {
 		return true
 	}
+	if !s.canInteractWithNPC(ctx, guid, uint64(npcFlagSpiritService)) {
+		return true
+	}
 	now := time.Now()
 	s.server.spiritWaveMu.Lock()
 	elapsed := now.Sub(s.server.lastSpiritWave)
@@ -834,6 +837,9 @@ func (s *session) handleAreaSpiritHealerQueue(ctx context.Context, payload []byt
 		return true
 	}
 	if !s.creatureIsSpiritService(ctx, guid) {
+		return true
+	}
+	if !s.canInteractWithNPC(ctx, guid, uint64(npcFlagSpiritService)) {
 		return true
 	}
 	s.server.spiritWaveMu.Lock()
@@ -898,6 +904,9 @@ func (s *session) handleSpiritHealerActivate(ctx context.Context, payload []byte
 	r := protocol.NewReader(payload)
 	guid, _ := r.ReadU64()
 	if !s.creatureIsSpiritService(ctx, guid) {
+		return true
+	}
+	if !s.canInteractWithNPC(ctx, guid, uint64(npcFlagSpiritService)) {
 		return true
 	}
 	s.resurrectPlayer(ctx, 0.5)

@@ -807,7 +807,7 @@ func TestSpiritHealerActivateDurabilityAndResSickness(t *testing.T) {
 	_, _ = cdb.Exec("INSERT INTO corpse (guid, posX, posY, posZ, orientation, mapId, corpseType) VALUES (9, 0, 0, 0, 0, 0, 1)")
 
 	// Spawn spirit healer creature
-	spiritGUID := uint64(55555)
+	spiritGUID := creatureWorldGUID(55555, 6491)
 	_, _ = cdb.Exec("INSERT INTO creature (guid, id, map, npcflag) VALUES (?, 6491, 0, ?)", spiritGUID, npcFlagSpiritHealer)
 	_, _ = cdb.Exec("INSERT INTO creature_template (entry, npcflag) VALUES (6491, ?)", npcFlagSpiritHealer)
 
