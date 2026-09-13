@@ -1778,6 +1778,7 @@ func (s *session) completeLogout(ctx context.Context) error {
 	s.stopSpellLifecycle()
 	s.clearActiveAuras()
 	s.stopTimedAchievements()
+	s.broadcastGuildMemberLogout()
 	s.triggerLogout(ctx)
 	s.releaseActiveLoot()
 	if s.player != nil && s.player.Health == 0 && s.player.PlayerFlags&playerFlagGhost == 0 && !s.deathTimer.IsZero() {

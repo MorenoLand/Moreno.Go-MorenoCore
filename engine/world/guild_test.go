@@ -11,6 +11,54 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
+func TestGuildMemberLogoutBroadcastsSignedOffEvent(t *testing.T) {
+	senderConn, senderClient := net.Pipe()
+	defer senderConn.Close()
+	defer senderClient.Close()
+	targetConn, targetClient := net.Pipe()
+	defer targetConn.Close()
+	defer targetClient.Close()
+	server := &Server{sessions: make(map[*session]struct{})}
+	sender := &session{server: server, conn: senderConn, playerGUID: 9, playerLoaded: true, player: &playerState{GUID: 9, Name: "Leaving", GuildID: 4}}
+	target := &session{server: server, conn: targetConn, playerGUID: 10, playerLoaded: true, player: &playerState{GUID: 10, Name: "Remaining", GuildID: 4}}
+	server.sessions[sender] = struct{}{}
+	server.sessions[target] = struct{}{}
+	done := make(chan struct{})
+	go func() {
+		sender.broadcastGuildMemberLogout()
+		close(done)
+	}()
+	opcode, payload, err := readServerFrame(targetClient, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_GUILD_EVENT) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	event, err := reader.ReadU8()
+	if err != nil || event != 13 {
+		t.Fatalf("event=%d err=%v", event, err)
+	}
+	count, err := reader.ReadU8()
+	if err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	name, err := reader.ReadCString()
+	if err != nil || name != "Leaving" {
+		t.Fatalf("name=%q err=%v", name, err)
+	}
+	guid, err := reader.ReadU64()
+	if err != nil || guid != 9 {
+		t.Fatalf("guid=%d err=%v", guid, err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("guild logout broadcast did not finish")
+	}
+}
+
 func TestGuildQueryRosterAndInvite(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
