@@ -33,6 +33,7 @@ type adtInfo struct {
 	LiquidTiles       int
 	LiquidExistsBytes int
 	LiquidVertexBytes int
+	MCLQBytes         int
 }
 
 func parseADT(data []byte) (adtInfo, error) {
@@ -186,7 +187,11 @@ func countADTSubchunks(chunk []byte, info *adtInfo) error {
 		case "MCAL":
 			info.MCALCount++
 		case "MCLQ":
+			if size < 804 {
+				return fmt.Errorf("truncated ADT MCLQ subchunk: got %d, want %d", size, 804)
+			}
 			info.MCLQCount++
+			info.MCLQBytes += size
 		}
 		offset += size
 	}

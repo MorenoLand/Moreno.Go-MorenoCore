@@ -62,6 +62,7 @@ func TestParseADTChunkInventory(t *testing.T) {
 	mcnk = append(mcnk, wdtChunk("MCVT", heights)...)
 	mcnk = append(mcnk, wdtChunk("MCLY", make([]byte, 4))...)
 	mcnk = append(mcnk, wdtChunk("MCAL", make([]byte, 4))...)
+	mcnk = append(mcnk, wdtChunk("MCLQ", make([]byte, 804))...)
 	data := append(wdtChunk("MHDR", make([]byte, 16)), wdtChunk("MCIN", make([]byte, 8))...)
 	data = append(data, wdtChunk("MTEX", []byte("texture.blp\x00"))...)
 	mh2o := make([]byte, 3133)
@@ -77,7 +78,7 @@ func TestParseADTChunkInventory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MH2OHeaders != 256 || info.LiquidLayers != 1 || info.LiquidInstances != 1 || info.LiquidTiles != 1 || info.LiquidAttributes != 1 || info.LiquidExistsBytes != 1 || info.LiquidVertexBytes != 20 || info.MCNKCount != 1 || info.MCVTCount != 1 || info.MCVTHeights != 145 || info.HeightMin != 10 || info.HeightMax != 20 || info.MCLYCount != 1 || info.MCALCount != 1 {
+	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MH2OHeaders != 256 || info.LiquidLayers != 1 || info.LiquidInstances != 1 || info.LiquidTiles != 1 || info.LiquidAttributes != 1 || info.LiquidExistsBytes != 1 || info.LiquidVertexBytes != 20 || info.MCNKCount != 1 || info.MCVTCount != 1 || info.MCVTHeights != 145 || info.HeightMin != 10 || info.HeightMax != 20 || info.MCLYCount != 1 || info.MCALCount != 1 || info.MCLQCount != 1 || info.MCLQBytes != 804 {
 		t.Fatalf("unexpected ADT info: %+v", info)
 	}
 }
