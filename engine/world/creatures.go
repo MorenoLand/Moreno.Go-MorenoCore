@@ -22,33 +22,35 @@ const (
 )
 
 type creatureSpawn struct {
-	GUID         uint32
-	Entry        uint32
-	Map          uint32
-	X            float32
-	Y            float32
-	Z            float32
-	Orientation  float32
-	Model        uint32
-	Faction      uint32
-	NPCFlags     uint32
-	UnitFlags    uint32
-	DynamicFlags uint32
-	Level        uint32
-	Health       uint32
-	Mana         uint32
-	Scale        float32
-	WalkSpeed    float32
-	RunSpeed     float32
-	AttackTime   uint32
-	RangedAttack uint32
-	Mount        uint32
-	Bytes1       uint32
-	Bytes2       uint32
-	Emote        uint32
-	Item1        uint32
-	Item2        uint32
-	Item3        uint32
+	GUID           uint32
+	Entry          uint32
+	Map            uint32
+	X              float32
+	Y              float32
+	Z              float32
+	Orientation    float32
+	Model          uint32
+	Faction        uint32
+	NPCFlags       uint32
+	UnitFlags      uint32
+	DynamicFlags   uint32
+	Level          uint32
+	Health         uint32
+	Mana           uint32
+	Scale          float32
+	BoundingRadius float32
+	CombatReach    float32
+	WalkSpeed      float32
+	RunSpeed       float32
+	AttackTime     uint32
+	RangedAttack   uint32
+	Mount          uint32
+	Bytes1         uint32
+	Bytes2         uint32
+	Emote          uint32
+	Item1          uint32
+	Item2          uint32
+	Item3          uint32
 }
 
 func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerState) (*protocol.Packet, int, error) {
@@ -113,8 +115,7 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			}
 			return nil, 0, err
 		}
-		defer rows.Close()
-		updates := protocol.NewUpdateData()
+		spawns := make([]creatureSpawn, 0)
 		count := 0
 		for rows.Next() {
 			var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, mana, attackTime, rangedAttack int64
@@ -126,20 +127,26 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 				continue
 			}
 			spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), Mana: uint32(mana), Scale: float32(scale), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack)}
-			updates.AddUpdateBlock(buildCreatureUpdate(spawn))
+			spawns = append(spawns, spawn)
 			count++
 		}
+		rows.Close()
 		if err := rows.Err(); err != nil {
 			return nil, count, err
 		}
 		if count == 0 {
 			return nil, 0, nil
 		}
+		updates := protocol.NewUpdateData()
+		for index := range spawns {
+			stats := s.loadCreatureStats(ctx, spawns[index].Entry)
+			spawns[index].BoundingRadius, spawns[index].CombatReach = stats.BoundingRadius, stats.CombatReach
+			updates.AddUpdateBlock(buildCreatureUpdate(spawns[index]))
+		}
 		packet, err := updates.BuildPacket(0)
 		return packet, count, err
 	}
-	defer rows.Close()
-	updates := protocol.NewUpdateData()
+	spawns := make([]creatureSpawn, 0)
 	count := 0
 	for rows.Next() {
 		var guid, entry, mapID, model, faction, npcFlags, unitFlags, dynamicFlags, level, health, mana, attackTime, rangedAttack, mount, bytes1, bytes2, emote, item1, item2, item3 int64
@@ -151,14 +158,21 @@ func (s *Server) buildNearbyCreatureUpdates(ctx context.Context, state playerSta
 			continue
 		}
 		spawn := creatureSpawn{GUID: uint32(guid), Entry: uint32(entry), Map: uint32(mapID), X: float32(x), Y: float32(y), Z: float32(z), Orientation: float32(orientation), Model: uint32(model), Faction: uint32(faction), NPCFlags: uint32(npcFlags), UnitFlags: uint32(unitFlags), DynamicFlags: uint32(dynamicFlags), Level: uint32(level), Health: uint32(health), Mana: uint32(mana), Scale: float32(scale), WalkSpeed: float32(walkSpeed), RunSpeed: float32(runSpeed), AttackTime: uint32(attackTime), RangedAttack: uint32(rangedAttack), Mount: uint32(mount), Bytes1: uint32(bytes1), Bytes2: uint32(bytes2), Emote: uint32(emote), Item1: uint32(item1), Item2: uint32(item2), Item3: uint32(item3)}
-		updates.AddUpdateBlock(buildCreatureUpdate(spawn))
+		spawns = append(spawns, spawn)
 		count++
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, count, err
 	}
 	if count == 0 {
 		return nil, 0, nil
+	}
+	updates := protocol.NewUpdateData()
+	for index := range spawns {
+		stats := s.loadCreatureStats(ctx, spawns[index].Entry)
+		spawns[index].BoundingRadius, spawns[index].CombatReach = stats.BoundingRadius, stats.CombatReach
+		updates.AddUpdateBlock(buildCreatureUpdate(spawns[index]))
 	}
 	packet, err := updates.BuildPacket(0)
 	return packet, count, err
@@ -191,8 +205,16 @@ func buildCreatureUpdate(spawn creatureSpawn) []byte {
 	values[unitFieldNPCFlags] = spawn.NPCFlags
 	values[unitFieldAttackTime] = maxUint32(spawn.AttackTime, 2000)
 	values[unitFieldAttackTimeOffhand] = maxUint32(spawn.AttackTime, 2000)
-	values[unitFieldBoundingRadius] = math.Float32bits(0.306349)
-	values[unitFieldCombatReach] = math.Float32bits(1.5)
+	boundingRadius := spawn.BoundingRadius
+	if boundingRadius <= 0 {
+		boundingRadius = 0.306349
+	}
+	combatReach := spawn.CombatReach
+	if combatReach <= 0 {
+		combatReach = 1.5
+	}
+	values[unitFieldBoundingRadius] = math.Float32bits(boundingRadius)
+	values[unitFieldCombatReach] = math.Float32bits(combatReach)
 	values[unitFieldDisplayID] = spawn.Model
 	values[unitFieldNativeDisplayID] = spawn.Model
 	if spawn.Mount != 0 {

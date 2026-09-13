@@ -922,6 +922,7 @@ type creatureStats struct {
 	MinDamage       float32
 	MaxDamage       float32
 	AttackTime      uint32
+	BoundingRadius  float32
 	CombatReach     float32
 	UnitFlags       uint32
 	FlagsExtra      uint32
@@ -932,15 +933,16 @@ type creatureStats struct {
 func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureStats {
 	if s == nil {
 		return creatureStats{
-			Level:       1,
-			Health:      100,
-			MaxHealth:   100,
-			Armor:       10,
-			MinDamage:   1.0,
-			MaxDamage:   2.0,
-			AttackTime:  2000,
-			CombatReach: 1.5,
-			ReactState:  creatureReactAggressive,
+			Level:          1,
+			Health:         100,
+			MaxHealth:      100,
+			Armor:          10,
+			MinDamage:      1.0,
+			MaxDamage:      2.0,
+			AttackTime:     2000,
+			BoundingRadius: 0.306349,
+			CombatReach:    1.5,
+			ReactState:     creatureReactAggressive,
 		}
 	}
 	s.statsMu.RLock()
@@ -953,15 +955,16 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 	s.statsMu.RUnlock()
 
 	stats := creatureStats{
-		Level:       1,
-		Health:      100,
-		MaxHealth:   100,
-		Armor:       10,
-		MinDamage:   1.0,
-		MaxDamage:   2.0,
-		AttackTime:  2000,
-		CombatReach: 1.5,
-		ReactState:  creatureReactAggressive,
+		Level:          1,
+		Health:         100,
+		MaxHealth:      100,
+		Armor:          10,
+		MinDamage:      1.0,
+		MaxDamage:      2.0,
+		AttackTime:     2000,
+		BoundingRadius: 0.306349,
+		CombatReach:    1.5,
+		ReactState:     creatureReactAggressive,
 	}
 	if s.WorldStore == nil || s.WorldStore.DB == nil {
 		return stats
@@ -1071,8 +1074,11 @@ func (s *Server) loadCreatureStats(ctx context.Context, entry uint32) creatureSt
 		stats.MaxDamage = stats.MinDamage + 1.0
 	}
 
-	var modelCombatReach sql.NullFloat64
-	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT cmi.CombatReach FROM creature_template ct JOIN creature_model_info cmi ON ct.modelid1 = cmi.DisplayID WHERE ct.entry = ?", entry).Scan(&modelCombatReach)
+	var modelBoundingRadius, modelCombatReach sql.NullFloat64
+	_ = s.WorldStore.DB.QueryRowContext(ctx, "SELECT cmi.BoundingRadius, cmi.CombatReach FROM creature_template ct JOIN creature_model_info cmi ON ct.modelid1 = cmi.DisplayID WHERE ct.entry = ?", entry).Scan(&modelBoundingRadius, &modelCombatReach)
+	if modelBoundingRadius.Valid && modelBoundingRadius.Float64 > 0 {
+		stats.BoundingRadius = float32(modelBoundingRadius.Float64)
+	}
 	if modelCombatReach.Valid && modelCombatReach.Float64 > 0 {
 		stats.CombatReach = float32(modelCombatReach.Float64)
 	}
