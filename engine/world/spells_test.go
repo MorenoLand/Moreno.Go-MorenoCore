@@ -409,6 +409,32 @@ func TestSpellAreaEnemyTargetsExcludeCaster(t *testing.T) {
 	}
 }
 
+func TestSpellAreaEnemyTargetsTreatZeroCreatureHealthAsAlive(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, curhealth INTEGER NOT NULL)",
+		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, faction INTEGER NOT NULL, unit_flags INTEGER NOT NULL, flags_extra INTEGER NOT NULL, maxlevel INTEGER NOT NULL)",
+		"INSERT INTO creature_template VALUES (68, 14, 0, 0, 10)",
+		"INSERT INTO creature VALUES (200, 68, 0, 3, 0, 0, 0)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}, Data: wotlk.NewStore("../../data/dbc"), creatureMotion: make(map[uint64]*creatureMotion)}
+	sess := &session{server: server, playerGUID: 1, player: &playerState{GUID: 1, Map: 0, Race: 1, Class: 8, Level: 21}}
+	spell := wotlk.Spell{ID: 122, SchoolMask: 16, Effects: [3]wotlk.SpellEffect{{Effect: 2, ImplicitTargetA: 22, RadiusIndex: 13}}}
+	targets := sess.spellAreaEnemyTargets(context.Background(), spell, protocol.SpellTargetData{})
+	if len(targets) != 1 || targets[0] != creatureWorldGUID(200, 68) {
+		t.Fatalf("area targets=%v, want zero-health database creature", targets)
+	}
+}
+
 func containsGUID(values []uint64, want uint64) bool {
 	for _, value := range values {
 		if value == want {
