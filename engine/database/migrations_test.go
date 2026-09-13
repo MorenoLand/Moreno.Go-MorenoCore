@@ -3,7 +3,11 @@ package database
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 )
 
 func TestApplyMigrationsIsOrderedAndIdempotent(t *testing.T) {
@@ -86,5 +90,52 @@ func TestApplyMigrationsRollbackAndOrphanCleanup(t *testing.T) {
 	}
 	if err := db.QueryRow("SELECT COUNT(*) FROM trinitygo_migrations WHERE version = 99").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("orphan count=%d err=%v", count, err)
+	}
+}
+
+func TestLoadMigrationsWalksArchivedDirectories(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "archived"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "001_first.sql"), []byte("CREATE TABLE first (id INTEGER)"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "archived", "002_old.sql"), []byte("CREATE TABLE old (id INTEGER)"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	migrations, err := LoadMigrations(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) != 2 || migrations[0].State != MigrationStateReleased || migrations[1].State != MigrationStateArchived || migrations[0].Hash == "" || migrations[1].Hash == "" {
+		t.Fatalf("migrations=%+v", migrations)
+	}
+}
+
+func TestConfiguredMigrationsApplyFromSchemaUpdatesDirectory(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	root := t.TempDir()
+	updates := filepath.Join(root, "sqlite", "updates", "auth")
+	if err := os.MkdirAll(updates, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(updates, "001_create.sql"), []byte("CREATE TABLE applied (id INTEGER PRIMARY KEY)"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c := config.Default()
+	c.SchemaDir = root
+	c.UpdatesEnableDatabases = 1
+	store := &Store{Name: "auth", Backend: BackendSQLite, DB: db}
+	if err := applyConfiguredMigrations(context.Background(), c, store); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'applied'").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("applied table count=%d err=%v", count, err)
 	}
 }

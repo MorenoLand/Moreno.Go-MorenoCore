@@ -4,7 +4,7 @@ import "testing"
 
 func TestFeatureConfigurationDefaultsAndOverrides(t *testing.T) {
 	c := Default()
-	if !c.SoloLFGEnable || !c.SoloLFGAnnounce || !c.NPCBots.Enable || c.CharactersPerAccount != 50 || c.CharactersPerRealm != 10 || c.ChatFloodMessageCount != 10 || c.ChatFloodMessageDelay != 1 || c.ChatFloodMuteTime != 10 || c.ChatChannelLevelReq != 1 || c.ChatWhisperLevelReq != 1 || c.ChatEmoteLevelReq != 1 || c.ChatSayLevelReq != 1 || c.ChatYellLevelReq != 1 {
+	if !c.SoloLFGEnable || !c.SoloLFGAnnounce || !c.NPCBots.Enable || c.CharactersPerAccount != 50 || c.CharactersPerRealm != 10 || c.ChatFloodMessageCount != 10 || c.ChatFloodMessageDelay != 1 || c.ChatFloodMuteTime != 10 || c.ChatChannelLevelReq != 1 || c.ChatWhisperLevelReq != 1 || c.ChatEmoteLevelReq != 1 || c.ChatSayLevelReq != 1 || c.ChatYellLevelReq != 1 || c.UpdatesEnableDatabases != 7 || !c.UpdatesAutoSetup || !c.UpdatesRedundancy || c.UpdatesArchivedRedundancy || !c.UpdatesAllowRehash || c.UpdatesCleanDeadReferencesMaxCount != 3 {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
 	if err := c.Set("CharacterCreating.Disabled.RaceMask", "1024"); err != nil {
@@ -13,10 +13,15 @@ func TestFeatureConfigurationDefaultsAndOverrides(t *testing.T) {
 	if err := c.Set("NpcBot.Mult.Damage.Physical", "2.5"); err != nil {
 		t.Fatal(err)
 	}
+	for _, setting := range []struct{ key, value string }{{"Updates.EnableDatabases", "4"}, {"Updates.AutoSetup", "0"}, {"Updates.Redundancy", "0"}, {"Updates.ArchivedRedundancy", "1"}, {"Updates.AllowRehash", "0"}, {"Updates.CleanDeadRefMaxCount", "-1"}} {
+		if err := c.Set(setting.key, setting.value); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Setenv("MORENOCORE_SOLO_LFG_ENABLE", "false")
 	t.Setenv("MORENOCORE_NPCBOT_MAX_BOTS", "50")
 	c.ApplyEnv()
-	if c.CharacterCreatingDisabledRaceMask != 1024 || c.NPCBots.DamagePhysicalMultiplier != 2.5 || c.SoloLFGEnable || c.NPCBots.MaxBots != 50 {
+	if c.CharacterCreatingDisabledRaceMask != 1024 || c.NPCBots.DamagePhysicalMultiplier != 2.5 || c.SoloLFGEnable || c.NPCBots.MaxBots != 50 || c.UpdatesEnableDatabases != 4 || c.UpdatesAutoSetup || c.UpdatesRedundancy || !c.UpdatesArchivedRedundancy || c.UpdatesAllowRehash || c.UpdatesCleanDeadReferencesMaxCount != -1 {
 		t.Fatalf("overrides were not applied: %+v", c)
 	}
 	if err := c.Validate(); err != nil {

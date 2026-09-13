@@ -32,6 +32,7 @@ type MigrationOptions struct {
 	AllowRehash        bool
 	ArchivedRedundancy bool
 	CleanOrphans       bool
+	CleanOrphansMax    int
 }
 
 type MigrationResult struct {
@@ -42,29 +43,36 @@ type MigrationResult struct {
 }
 
 func LoadMigrations(dir string) ([]Migration, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]Migration, 0, len(entries))
-	for _, entry := range entries {
+	result := make([]Migration, 0)
+	err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".sql" {
-			continue
+			return nil
 		}
 		base := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
 		parts := strings.SplitN(base, "_", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("migration %s must begin with a numeric version", entry.Name())
+			return fmt.Errorf("migration %s must begin with a numeric version", entry.Name())
 		}
 		version, err := strconv.Atoi(parts[0])
 		if err != nil {
-			return nil, fmt.Errorf("migration %s: %w", entry.Name(), err)
+			return fmt.Errorf("migration %s: %w", entry.Name(), err)
 		}
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		data, err := os.ReadFile(path)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		result = append(result, Migration{Version: version, Name: parts[1], Statements: SplitSQL(string(data)), Hash: migrationHash(data), State: MigrationStateReleased})
+		state := MigrationStateReleased
+		if strings.EqualFold(filepath.Base(filepath.Dir(path)), "archived") {
+			state = MigrationStateArchived
+		}
+		result = append(result, Migration{Version: version, Name: parts[1], Statements: SplitSQL(string(data)), Hash: migrationHash(data), State: state})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Version < result[j].Version })
 	for i := 1; i < len(result); i++ {
@@ -140,7 +148,7 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 		}
 		result.Applied++
 	}
-	if options.CleanOrphans {
+	if options.CleanOrphans || options.CleanOrphansMax != 0 {
 		rows, err := store.DB.QueryContext(ctx, "SELECT version FROM trinitygo_migrations")
 		if err != nil {
 			return result, err
@@ -158,6 +166,13 @@ func ApplyMigrationsWithOptions(ctx context.Context, store *Store, migrations []
 		}
 		if err := rows.Close(); err != nil {
 			return result, err
+		}
+		cleanup := options.CleanOrphans
+		if options.CleanOrphansMax != 0 {
+			cleanup = options.CleanOrphansMax < 0 || len(orphaned) <= options.CleanOrphansMax
+		}
+		if !cleanup {
+			return result, nil
 		}
 		for _, version := range orphaned {
 			if _, err := store.DB.ExecContext(ctx, "DELETE FROM trinitygo_migrations WHERE version = ?", version); err != nil {

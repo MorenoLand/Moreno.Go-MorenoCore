@@ -19,10 +19,51 @@ var (
 )
 
 func EnsureSchemas(ctx context.Context, c config.Config, set *Set) error {
-	for _, store := range []*Store{set.Auth, set.Characters, set.World} {
+	stores := []struct {
+		store *Store
+		mask  uint32
+	}{{set.Auth, 1}, {set.Characters, 2}, {set.World, 4}}
+	for _, item := range stores {
+		store := item.store
 		if err := ensureSchema(ctx, c, store); err != nil {
 			return err
 		}
+		if c.UpdatesEnableDatabases&item.mask != 0 {
+			if err := applyConfiguredMigrations(ctx, c, store); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func applyConfiguredMigrations(ctx context.Context, c config.Config, store *Store) error {
+	dialect := "mysql"
+	if store.Backend == BackendSQLite {
+		dialect = "sqlite"
+	}
+	candidates := []string{
+		filepath.Join(c.SchemaDir, dialect, "updates", store.Name),
+		filepath.Join(c.SchemaDir, dialect, store.Name, "updates"),
+		filepath.Join(c.SchemaDir, "updates", store.Name),
+	}
+	var directory string
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			directory = candidate
+			break
+		}
+	}
+	if directory == "" {
+		return nil
+	}
+	migrations, err := LoadMigrations(directory)
+	if err != nil {
+		return fmt.Errorf("%s migration discovery %s: %w", store.Name, directory, err)
+	}
+	_, err = ApplyMigrationsWithOptions(ctx, store, migrations, MigrationOptions{RedundancyChecks: c.UpdatesRedundancy, AllowRehash: c.UpdatesAllowRehash, ArchivedRedundancy: c.UpdatesArchivedRedundancy, CleanOrphansMax: c.UpdatesCleanDeadReferencesMaxCount})
+	if err != nil {
+		return fmt.Errorf("%s migrations: %w", store.Name, err)
 	}
 	return nil
 }
