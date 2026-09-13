@@ -47,10 +47,10 @@ func TestVendorBuyingAndSelling(t *testing.T) {
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
-		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER, AllowableClass INTEGER, Bonding INTEGER, RequiredReputationFaction INTEGER, RequiredReputationRank INTEGER)",
 		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
 		"INSERT INTO characters VALUES (1, 1000, '')",
-		"INSERT INTO item_template VALUES (5001, 100, 50, 10, 100, 1, 0)",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 10, 100, 1, 0, -1, 0, 0, 0)",
 		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 0)",
 	} {
 		if _, err := db.Exec(stmt); err != nil {
@@ -158,11 +158,11 @@ func TestVendorExtendedCostPurchase(t *testing.T) {
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, arenaPoints INTEGER, totalHonorPoints INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
-		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER, stackable INTEGER, ContainerSlots INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER, AllowableClass INTEGER, Bonding INTEGER, RequiredReputationFaction INTEGER, RequiredReputationRank INTEGER, stackable INTEGER, ContainerSlots INTEGER)",
 		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
 		"INSERT INTO characters VALUES (1, 1000, 20, 30, '')",
-		"INSERT INTO item_template VALUES (5001, 100, 75, 10, 100, 1, 0, 1, 0)",
-		"INSERT INTO item_template VALUES (6001, 101, 1, 1, 100, 1, 0, 20, 0)",
+		"INSERT INTO item_template VALUES (5001, 100, 75, 10, 100, 1, 0, -1, 0, 0, 0, 1, 0)",
+		"INSERT INTO item_template VALUES (6001, 101, 1, 1, 100, 1, 0, -1, 0, 0, 0, 20, 0)",
 		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 7)",
 		"INSERT INTO item_instance VALUES (700, 6001, 1, 0, 4, 0, '', 0, '', 0, 100, 0, '')",
 		"INSERT INTO character_inventory VALUES (1, 0, 23, 700)",
@@ -191,6 +191,23 @@ func TestVendorExtendedCostPurchase(t *testing.T) {
 	}
 }
 
+func TestVendorItemAccessRequirements(t *testing.T) {
+	sess := &session{player: &playerState{Class: 8, Race: 1, Reputations: []playerReputation{{FactionID: 72, Standing: 9000}}}}
+	if result, allowed := sess.vendorItemAccess(1, 1, 0, 0, 0, context.Background()); allowed || result != buyErrCantFindItem {
+		t.Fatalf("class restriction result=%d allowed=%v", result, allowed)
+	}
+	if result, allowed := sess.vendorItemAccess(^uint32(0), 0, 0x00000001, 0, 0, context.Background()); allowed || result != -1 {
+		t.Fatalf("faction restriction result=%d allowed=%v", result, allowed)
+	}
+	if result, allowed := sess.vendorItemAccess(^uint32(0), 0, 0, 72, 5, context.Background()); !allowed || result != buyErrCantFindItem {
+		t.Fatalf("reputation success result=%d allowed=%v", result, allowed)
+	}
+	sess.player.Reputations[0].Standing = 3000
+	if result, allowed := sess.vendorItemAccess(^uint32(0), 0, 0, 72, 5, context.Background()); allowed || result != buyErrReputationRequire {
+		t.Fatalf("reputation failure result=%d allowed=%v", result, allowed)
+	}
+}
+
 func TestVendorListEncodesUnlimitedStockAsFFFFFFFF(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -199,9 +216,9 @@ func TestVendorListEncodesUnlimitedStockAsFFFFFFFF(t *testing.T) {
 	defer db.Close()
 	for _, statement := range []string{
 		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
-		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER, AllowableClass INTEGER, Bonding INTEGER, RequiredReputationFaction INTEGER, RequiredReputationRank INTEGER)",
 		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 0)",
-		"INSERT INTO item_template VALUES (5001, 100, 50, 100, 1, 0)",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 100, 1, 0, -1, 0, 0, 0)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -248,10 +265,10 @@ func TestBuyItemSendsItemCreate(t *testing.T) {
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
-		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER, AllowableClass INTEGER, Bonding INTEGER, RequiredReputationFaction INTEGER, RequiredReputationRank INTEGER)",
 		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
 		"INSERT INTO characters VALUES (1, 1000, '')",
-		"INSERT INTO item_template VALUES (5001, 100, 50, 10, 100, 1, 0)",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 10, 100, 1, 0, -1, 0, 0, 0)",
 		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 0)",
 	} {
 		if _, err := db.Exec(stmt); err != nil {
@@ -303,9 +320,9 @@ func TestVendorBuybackFullParityAndFields(t *testing.T) {
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
-		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, ContainerSlots INTEGER, FlagsExtra INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, ContainerSlots INTEGER, FlagsExtra INTEGER, AllowableClass INTEGER, Bonding INTEGER, RequiredReputationFaction INTEGER, RequiredReputationRank INTEGER)",
 		"INSERT INTO characters VALUES (1, 1000, '')",
-		"INSERT INTO item_template VALUES (5001, 100, 50, 25, 100, 1, 0, 0)",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 25, 100, 1, 0, 0, -1, 0, 0, 0)",
 		"INSERT INTO item_instance (guid, itemEntry, owner_guid, count, durability) VALUES (500, 5001, 1, 1, 100)",
 		"INSERT INTO character_inventory VALUES (1, 0, 23, 500)",
 	} {

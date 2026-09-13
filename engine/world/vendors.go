@@ -23,6 +23,14 @@ type vendorItemRecord struct {
 
 const itemFlag2DontIgnoreBuyPrice uint32 = 0x00000004
 
+const (
+	buyErrCantFindItem      = 0
+	buyErrItemAlreadySold   = 1
+	buyErrNotEnoughMoney    = 2
+	buyErrCantCarryMore     = 8
+	buyErrReputationRequire = 12
+)
+
 type vendorInventoryStack struct {
 	GUID  int64
 	Bag   int64
@@ -236,9 +244,9 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		return true
 	}
 	vendorEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
-	var maxCount, incrTime, extCost, buyPrice, buyCount, flagsExtra int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT v.maxcount, v.incrtime, v.ExtendedCost, t.BuyPrice, t.BuyCount, COALESCE(t.FlagsExtra, 0) FROM npc_vendor AS v JOIN item_template AS t ON t.entry = v.item WHERE v.entry = ? AND v.item = ? AND v.slot = ? LIMIT 1", vendorEntry, itemEntry, slot).Scan(&maxCount, &incrTime, &extCost, &buyPrice, &buyCount, &flagsExtra); err != nil {
-		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 0), true)
+	var maxCount, incrTime, extCost, buyPrice, buyCount, flagsExtra, allowableClass, bonding, requiredReputationFaction, requiredReputationRank int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT v.maxcount, v.incrtime, v.ExtendedCost, t.BuyPrice, t.BuyCount, COALESCE(t.FlagsExtra, 0), COALESCE(t.AllowableClass, -1), COALESCE(t.Bonding, 0), COALESCE(t.RequiredReputationFaction, 0), COALESCE(t.RequiredReputationRank, 0) FROM npc_vendor AS v JOIN item_template AS t ON t.entry = v.item WHERE v.entry = ? AND v.item = ? AND v.slot = ? LIMIT 1", vendorEntry, itemEntry, slot).Scan(&maxCount, &incrTime, &extCost, &buyPrice, &buyCount, &flagsExtra, &allowableClass, &bonding, &requiredReputationFaction, &requiredReputationRank); err != nil {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
 		return true
 	}
 	if buyCount <= 0 {
@@ -246,6 +254,13 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	}
 	amount := uint64(count) * uint64(buyCount)
 	if amount > uint64(^uint32(0)) {
+		return true
+	}
+	accessResult, allowed := s.vendorItemAccess(uint32(allowableClass), uint32(bonding), uint32(flagsExtra), uint32(requiredReputationFaction), uint32(requiredReputationRank), ctx)
+	if !allowed {
+		if accessResult >= 0 {
+			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, uint8(accessResult)), true)
+		}
 		return true
 	}
 	if extCost != 0 && flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) == 0 {
@@ -259,7 +274,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	if maxCount > 0 {
 		current := s.server.currentVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
 		if current < int32(amount) {
-			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 5), true)
+			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrItemAlreadySold), true)
 			return true
 		}
 	}
@@ -268,19 +283,19 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		if extendedCostResult != equipErrOk {
 			s.sendEquipError(extendedCostResult, 0)
 		} else {
-			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 0), true)
+			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
 		}
 		return true
 	}
 	if s.player.Money < totalCost {
-		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 2), true)
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrNotEnoughMoney), true)
 		return true
 	}
 	if maxCount > 0 {
 		var ok bool
 		remainingStock, ok = s.server.consumeVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), uint32(amount))
 		if !ok {
-			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 5), true)
+			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrItemAlreadySold), true)
 			return true
 		}
 	}
@@ -289,7 +304,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		if maxCount > 0 {
 			s.server.restoreVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), uint32(amount))
 		}
-		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 1), true) // BUY_ERR_CANT_CARRY_MORE = 1
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantCarryMore), true)
 		return true
 	}
 	if extendedCost.ID != 0 {
@@ -298,7 +313,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 			if maxCount > 0 {
 				s.server.restoreVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), uint32(amount))
 			}
-			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 0), true)
+			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
 			return true
 		}
 	}
@@ -320,6 +335,46 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	s.sendPlayerUpdate()
 	s.debug("item bought from vendor", "account", s.accountName, "item", itemEntry, "count", count, "cost", totalCost, "extended_cost", extCost, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
 	return true
+}
+
+func (s *session) vendorItemAccess(allowableClass, bonding, flagsExtra, requiredFaction, requiredRank uint32, ctx context.Context) (int, bool) {
+	isGM := s != nil && s.player != nil && (s.security > 0 || s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0)
+	if !isGM && bonding == 1 && s.player != nil {
+		if s.player.Class == 0 || allowableClass&(uint32(1)<<(s.player.Class-1)) == 0 {
+			return buyErrCantFindItem, false
+		}
+	}
+	if !isGM && s.player != nil {
+		team := teamForRace(s.player.Race)
+		if flagsExtra&0x00000001 != 0 && team != 1 {
+			return -1, false
+		}
+		if flagsExtra&0x00000002 != 0 && team != 0 {
+			return -1, false
+		}
+	}
+	if requiredFaction != 0 && s.vendorReputationRank(ctx, requiredFaction) < requiredRank {
+		return buyErrReputationRequire, false
+	}
+	return buyErrCantFindItem, true
+}
+
+func (s *session) vendorReputationRank(ctx context.Context, factionID uint32) uint32 {
+	if s.player != nil {
+		for _, reputation := range s.player.Reputations {
+			if reputation.FactionID == factionID {
+				return reputationRank(int64(reputation.Base) + int64(reputation.Standing))
+			}
+		}
+	}
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	var standing int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT standing FROM character_reputation WHERE guid = ? AND faction = ?", s.playerGUID, factionID).Scan(&standing); err != nil {
+		return 0
+	}
+	return reputationRank(standing)
 }
 
 func (s *session) vendorExtendedCost(ctx context.Context, id, count uint32) (wotlk.ItemExtendedCostEntry, uint8, bool) {
