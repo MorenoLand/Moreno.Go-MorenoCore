@@ -2,13 +2,47 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+const (
+	rawVMapMagic  = "VMAP047"
+	vMapMagic     = "VMAP_4.7"
+	rawHeaderSize = 8
+)
+
+type vector3 struct{ X, Y, Z float32 }
+
+type rawLiquid struct {
+	TilesX, TilesY uint32
+	Corner         vector3
+	Type           uint32
+	Heights        []float32
+	Flags          []byte
+}
+
+type rawGroup struct {
+	MogpFlags, GroupWMOID uint32
+	Low, High             vector3
+	Triangles             [][3]uint16
+	Vertices              []vector3
+	Liquid                *rawLiquid
+}
+
+type rawModel struct {
+	RootWMOID uint32
+	Groups    []rawGroup
+}
 
 func printBanner() {
 	fmt.Println("==========================================================")
@@ -56,25 +90,58 @@ func main() {
 	}
 
 	modelsProcessed := 0
+	failed := false
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
 		ext := strings.ToLower(filepath.Ext(name))
-		if ext == ".wmo" || ext == ".m2" || ext == ".mdx" {
-			modelsProcessed++
-			base := strings.TrimSuffix(name, filepath.Ext(name))
-			destFile := filepath.Join(dest, base+".vmtree")
+		if ext == ".wmo" || ext == ".m2" || ext == ".mdx" || ext == ".vmo" {
 			data, err := os.ReadFile(filepath.Join(src, name))
-			if err == nil && len(data) > 0 {
-				_ = os.WriteFile(destFile, data[:min(len(data), 64)], 0o644)
+			if err != nil {
+				failed = true
+				fmt.Fprintf(os.Stderr, "Failed to read raw model %q: %v\n", name, err)
+				continue
 			}
+			if len(data) < len(rawVMapMagic) || string(data[:len(rawVMapMagic)]) != rawVMapMagic {
+				failed = true
+				fmt.Fprintf(os.Stderr, "Model %q is not a VMAP047 raw model; run the reference-compatible extractor first.\n", name)
+				continue
+			}
+			model, err := readRawModel(bytes.NewReader(data))
+			if err != nil {
+				failed = true
+				fmt.Fprintf(os.Stderr, "Failed to parse raw model %q: %v\n", name, err)
+				continue
+			}
+			destFile := filepath.Join(dest, name+".vmo")
+			file, err := os.Create(destFile)
+			if err != nil {
+				failed = true
+				fmt.Fprintf(os.Stderr, "Failed to create %q: %v\n", destFile, err)
+				continue
+			}
+			err = writeVMO(file, model)
+			closeErr := file.Close()
+			if err != nil || closeErr != nil {
+				failed = true
+				if err == nil {
+					err = closeErr
+				}
+				fmt.Fprintf(os.Stderr, "Failed to write %q: %v\n", destFile, err)
+				continue
+			}
+			modelsProcessed++
 		}
 	}
 
 	elapsed := time.Since(start)
 	fmt.Printf("Assembled %d building model trees into '%s' in %v\n", modelsProcessed, dest, elapsed.Round(time.Millisecond))
+	if failed {
+		fmt.Fprintln(os.Stderr, "VMAP assembly completed with errors")
+		os.Exit(1)
+	}
 	fmt.Println("Ok, all done")
 }
 
@@ -83,4 +150,276 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func readRawModel(reader io.Reader) (rawModel, error) {
+	var model rawModel
+	magic := make([]byte, rawHeaderSize)
+	if _, err := io.ReadFull(reader, magic); err != nil {
+		return model, err
+	}
+	if string(magic[:len(rawVMapMagic)]) != rawVMapMagic || magic[len(rawVMapMagic)] != 0 {
+		return model, errors.New("invalid VMAP047 raw model header")
+	}
+	var ignored, groups uint32
+	if err := binary.Read(reader, binary.LittleEndian, &ignored); err != nil {
+		return model, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &groups); err != nil {
+		return model, err
+	}
+	if err := binary.Read(reader, binary.LittleEndian, &model.RootWMOID); err != nil {
+		return model, err
+	}
+	if groups > 65535 {
+		return model, errors.New("raw model group count is unreasonable")
+	}
+	model.Groups = make([]rawGroup, groups)
+	for i := range model.Groups {
+		group := &model.Groups[i]
+		if err := binary.Read(reader, binary.LittleEndian, &group.MogpFlags); err != nil {
+			return rawModel{}, err
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &group.GroupWMOID); err != nil {
+			return rawModel{}, err
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &group.Low); err != nil {
+			return rawModel{}, err
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &group.High); err != nil {
+			return rawModel{}, err
+		}
+		var liquidFlags, branches uint32
+		if err := binary.Read(reader, binary.LittleEndian, &liquidFlags); err != nil {
+			return rawModel{}, err
+		}
+		if err := readChunkHeader(reader, "GRP "); err != nil {
+			return rawModel{}, err
+		}
+		if err := binary.Read(reader, binary.LittleEndian, &branches); err != nil {
+			return rawModel{}, err
+		}
+		if branches > 1000000 || !discardUint32s(reader, branches) {
+			return rawModel{}, errors.New("invalid raw model GRP branch table")
+		}
+		if err := readChunkHeader(reader, "INDX"); err != nil {
+			return rawModel{}, err
+		}
+		var indexes uint32
+		if err := binary.Read(reader, binary.LittleEndian, &indexes); err != nil || indexes%3 != 0 || indexes > 100000000 {
+			return rawModel{}, errors.New("invalid raw model index count")
+		}
+		indexData := make([]uint16, indexes)
+		if err := binary.Read(reader, binary.LittleEndian, &indexData); err != nil {
+			return rawModel{}, err
+		}
+		group.Triangles = make([][3]uint16, indexes/3)
+		for j := range group.Triangles {
+			group.Triangles[j] = [3]uint16{indexData[j*3], indexData[j*3+1], indexData[j*3+2]}
+		}
+		if err := readChunkHeader(reader, "VERT"); err != nil {
+			return rawModel{}, err
+		}
+		var vertices uint32
+		if err := binary.Read(reader, binary.LittleEndian, &vertices); err != nil || vertices > 100000000 {
+			return rawModel{}, errors.New("invalid raw model vertex count")
+		}
+		group.Vertices = make([]vector3, vertices)
+		if err := binary.Read(reader, binary.LittleEndian, &group.Vertices); err != nil {
+			return rawModel{}, err
+		}
+		if liquidFlags&3 == 0 {
+			continue
+		}
+		if err := readChunkHeader(reader, "LIQU"); err != nil {
+			return rawModel{}, err
+		}
+		liquid := &rawLiquid{}
+		if err := binary.Read(reader, binary.LittleEndian, &liquid.Type); err != nil {
+			return rawModel{}, err
+		}
+		if liquidFlags&1 != 0 {
+			var xverts, yverts int32
+			var xtiles, ytiles int32
+			var material int16
+			if err := binary.Read(reader, binary.LittleEndian, &xverts); err != nil {
+				return rawModel{}, err
+			}
+			if err := binary.Read(reader, binary.LittleEndian, &yverts); err != nil {
+				return rawModel{}, err
+			}
+			if err := binary.Read(reader, binary.LittleEndian, &xtiles); err != nil {
+				return rawModel{}, err
+			}
+			if err := binary.Read(reader, binary.LittleEndian, &ytiles); err != nil {
+				return rawModel{}, err
+			}
+			if err := binary.Read(reader, binary.LittleEndian, &liquid.Corner); err != nil {
+				return rawModel{}, err
+			}
+			if err := binary.Read(reader, binary.LittleEndian, &material); err != nil {
+				return rawModel{}, err
+			}
+			if xverts < 0 || yverts < 0 || xtiles < 0 || ytiles < 0 {
+				return rawModel{}, errors.New("invalid raw model liquid header")
+			}
+			liquid.TilesX, liquid.TilesY = uint32(xtiles), uint32(ytiles)
+			heightCount := int64(xverts) * int64(yverts)
+			flagCount := int64(xtiles) * int64(ytiles)
+			if heightCount > 100000000 || flagCount > 100000000 {
+				return rawModel{}, errors.New("raw model liquid dimensions are unreasonable")
+			}
+			liquid.Heights = make([]float32, int(heightCount))
+			liquid.Flags = make([]byte, int(flagCount))
+			if err := binary.Read(reader, binary.LittleEndian, &liquid.Heights); err != nil {
+				return rawModel{}, err
+			}
+			if err := binary.Read(reader, binary.LittleEndian, &liquid.Flags); err != nil {
+				return rawModel{}, err
+			}
+		} else {
+			liquid.Heights = make([]float32, 1)
+			if err := binary.Read(reader, binary.LittleEndian, &liquid.Heights[0]); err != nil {
+				return rawModel{}, err
+			}
+		}
+		model.Groups[i].Liquid = liquid
+	}
+	return model, nil
+}
+
+func readChunkHeader(reader io.Reader, want string) error {
+	chunk := make([]byte, 4)
+	if _, err := io.ReadFull(reader, chunk); err != nil {
+		return err
+	}
+	if string(chunk) != want {
+		return fmt.Errorf("expected %q chunk, got %q", want, string(chunk))
+	}
+	var size uint32
+	return binary.Read(reader, binary.LittleEndian, &size)
+}
+
+func discardUint32s(reader io.Reader, count uint32) bool {
+	if count == 0 {
+		return true
+	}
+	_, err := io.CopyN(io.Discard, reader, int64(count)*4)
+	return err == nil
+}
+
+func writeVMO(writer io.Writer, model rawModel) error {
+	if _, err := io.WriteString(writer, vMapMagic); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(writer, "WMOD"); err != nil {
+		return err
+	}
+	if err := binary.Write(writer, binary.LittleEndian, uint32(8)); err != nil {
+		return err
+	}
+	if err := binary.Write(writer, binary.LittleEndian, model.RootWMOID); err != nil {
+		return err
+	}
+	if len(model.Groups) == 0 {
+		return nil
+	}
+	if _, err := io.WriteString(writer, "GMOD"); err != nil {
+		return err
+	}
+	if err := binary.Write(writer, binary.LittleEndian, uint32(len(model.Groups))); err != nil {
+		return err
+	}
+	for _, group := range model.Groups {
+		if err := binary.Write(writer, binary.LittleEndian, group.Low); err != nil || binary.Write(writer, binary.LittleEndian, group.High) != nil || binary.Write(writer, binary.LittleEndian, group.MogpFlags) != nil || binary.Write(writer, binary.LittleEndian, group.GroupWMOID) != nil {
+			return errors.New("failed to write VMAP group header")
+		}
+		if err := writeGroupGeometry(writer, group); err != nil {
+			return err
+		}
+	}
+	return writeBIH(writer, groupBounds(model.Groups), len(model.Groups))
+}
+
+func writeGroupGeometry(writer io.Writer, group rawGroup) error {
+	if _, err := io.WriteString(writer, "VERT"); err != nil {
+		return err
+	}
+	if err := binary.Write(writer, binary.LittleEndian, uint32(4+len(group.Vertices)*12)); err != nil || binary.Write(writer, binary.LittleEndian, uint32(len(group.Vertices))) != nil || binary.Write(writer, binary.LittleEndian, group.Vertices) != nil {
+		return errors.New("failed to write VMAP vertices")
+	}
+	if _, err := io.WriteString(writer, "TRIM"); err != nil {
+		return err
+	}
+	if err := binary.Write(writer, binary.LittleEndian, uint32(4+len(group.Triangles)*6)); err != nil || binary.Write(writer, binary.LittleEndian, uint32(len(group.Triangles))) != nil {
+		return errors.New("failed to write VMAP triangle header")
+	}
+	for _, triangle := range group.Triangles {
+		if err := binary.Write(writer, binary.LittleEndian, triangle); err != nil {
+			return err
+		}
+	}
+	if err := writeBIHForGroup(writer, group); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(writer, "LIQU"); err != nil {
+		return err
+	}
+	if group.Liquid == nil {
+		return binary.Write(writer, binary.LittleEndian, uint32(0))
+	}
+	liquidSize := uint32(16 + len(group.Liquid.Heights)*4 + len(group.Liquid.Flags))
+	if err := binary.Write(writer, binary.LittleEndian, liquidSize); err != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.TilesX) != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.TilesY) != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.Corner) != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.Type) != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.Heights) != nil || binary.Write(writer, binary.LittleEndian, group.Liquid.Flags) != nil {
+		return errors.New("failed to write VMAP liquid")
+	}
+	return nil
+}
+
+func writeBIHForGroup(writer io.Writer, group rawGroup) error {
+	return writeBIHChunk(writer, "MBIH", group.Low, group.High, len(group.Triangles))
+}
+
+func writeBIH(writer io.Writer, bounds [][2]vector3, count int) error {
+	low, high := vector3{}, vector3{}
+	if len(bounds) > 0 {
+		low, high = bounds[0][0], bounds[0][1]
+		for _, bound := range bounds[1:] {
+			low = minVector(low, bound[0])
+			high = maxVector(high, bound[1])
+		}
+	}
+	return writeBIHChunk(writer, "GBIH", low, high, count)
+}
+
+func writeBIHChunk(writer io.Writer, name string, low, high vector3, count int) error {
+	if _, err := io.WriteString(writer, name); err != nil {
+		return err
+	}
+	if count == -1 {
+		count = 0
+	}
+	if err := binary.Write(writer, binary.LittleEndian, low); err != nil || binary.Write(writer, binary.LittleEndian, high) != nil || binary.Write(writer, binary.LittleEndian, uint32(3)) != nil || binary.Write(writer, binary.LittleEndian, uint32(3<<30)) != nil || binary.Write(writer, binary.LittleEndian, uint32(count)) != nil || binary.Write(writer, binary.LittleEndian, uint32(count)) != nil {
+		return errors.New("failed to write BIH")
+	}
+	for i := 0; i < count; i++ {
+		if err := binary.Write(writer, binary.LittleEndian, uint32(i)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func groupBounds(groups []rawGroup) [][2]vector3 {
+	result := make([][2]vector3, len(groups))
+	for i, group := range groups {
+		result[i] = [2]vector3{group.Low, group.High}
+	}
+	return result
+}
+
+func minVector(a, b vector3) vector3 {
+	return vector3{X: float32(math.Min(float64(a.X), float64(b.X))), Y: float32(math.Min(float64(a.Y), float64(b.Y))), Z: float32(math.Min(float64(a.Z), float64(b.Z)))}
+}
+func maxVector(a, b vector3) vector3 {
+	return vector3{X: float32(math.Max(float64(a.X), float64(b.X))), Y: float32(math.Max(float64(a.Y), float64(b.Y))), Z: float32(math.Max(float64(a.Z), float64(b.Z)))}
 }
