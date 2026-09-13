@@ -234,6 +234,35 @@ func TestChatWithUnsetHealthMetadataStillBroadcasts(t *testing.T) {
 	}
 }
 
+func TestChatChannelLevelRequirementHonorsRBACSkipPermission(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE rbac_account_permissions (accountId INTEGER, permissionId INTEGER, granted INTEGER, realmId INTEGER)",
+		"CREATE TABLE rbac_default_permissions (secId INTEGER, permissionId INTEGER, realmId INTEGER)",
+		"CREATE TABLE rbac_linked_permissions (id INTEGER, linkedId INTEGER)",
+		"INSERT INTO rbac_default_permissions VALUES (3, 192, -1)",
+		"INSERT INTO rbac_linked_permissions VALUES (192, 194), (194, 19)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{AuthStore: &database.Store{Name: "auth", Backend: database.BackendSQLite, DB: db}, Config: config.Config{ChatChannelLevelReq: 10}, sessions: make(map[*session]struct{})}
+	state := &session{server: server, accountID: 15, security: 3, playerLoaded: true, player: &playerState{GUID: 1, Name: "Low", Level: 1, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	payload := protocol.NewBuffer(32)
+	payload.WriteU32(chatChannel)
+	payload.WriteU32(7)
+	payload.WriteCString("General")
+	payload.WriteCString("allowed")
+	if !state.handleMessageChat(context.Background(), payload.Bytes()) {
+		t.Fatal("channel chat with RBAC exemption closed the session")
+	}
+}
+
 func TestMalformedChatDoesNotCloseSession(t *testing.T) {
 	server := &Server{sessions: make(map[*session]struct{})}
 	state := &session{server: server, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Name: "Tester"}}
