@@ -34,6 +34,17 @@ type adtInfo struct {
 	LiquidExistsBytes int
 	LiquidVertexBytes int
 	MCLQBytes         int
+	Cells             []adtCellInfo
+}
+
+type adtCellInfo struct {
+	Flags      uint32
+	X          uint32
+	Y          uint32
+	Layers     uint32
+	DoodadRefs uint32
+	AreaID     uint32
+	Holes      uint32
 }
 
 func parseADT(data []byte) (adtInfo, error) {
@@ -154,6 +165,11 @@ func countADTSubchunks(chunk []byte, info *adtInfo) error {
 	if len(chunk) <= mcnkHeaderSize {
 		return nil
 	}
+	cell := adtCellInfo{Flags: binary.LittleEndian.Uint32(chunk[0:]), X: binary.LittleEndian.Uint32(chunk[4:]), Y: binary.LittleEndian.Uint32(chunk[8:]), Layers: binary.LittleEndian.Uint32(chunk[12:]), DoodadRefs: binary.LittleEndian.Uint32(chunk[16:]), AreaID: binary.LittleEndian.Uint32(chunk[52:]), Holes: binary.LittleEndian.Uint32(chunk[60:])}
+	if cell.X >= 16 || cell.Y >= 16 {
+		return fmt.Errorf("invalid ADT MCNK cell coordinates %d,%d", cell.X, cell.Y)
+	}
+	info.Cells = append(info.Cells, cell)
 	for offset := mcnkHeaderSize; offset+8 <= len(chunk); {
 		name := string(chunk[offset : offset+4])
 		size := int(binary.LittleEndian.Uint32(chunk[offset+4 : offset+8]))

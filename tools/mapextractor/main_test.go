@@ -54,6 +54,13 @@ func TestParseWDTRejectsTruncatedMain(t *testing.T) {
 
 func TestParseADTChunkInventory(t *testing.T) {
 	mcnk := make([]byte, 128)
+	binary.LittleEndian.PutUint32(mcnk[0:], 0x10)
+	binary.LittleEndian.PutUint32(mcnk[4:], 2)
+	binary.LittleEndian.PutUint32(mcnk[8:], 3)
+	binary.LittleEndian.PutUint32(mcnk[12:], 1)
+	binary.LittleEndian.PutUint32(mcnk[16:], 4)
+	binary.LittleEndian.PutUint32(mcnk[52:], 42)
+	binary.LittleEndian.PutUint32(mcnk[60:], 0x100)
 	heights := make([]byte, 145*4)
 	for index := 0; index < 145; index++ {
 		binary.LittleEndian.PutUint32(heights[index*4:], math.Float32bits(10))
@@ -78,7 +85,7 @@ func TestParseADTChunkInventory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MH2OHeaders != 256 || info.LiquidLayers != 1 || info.LiquidInstances != 1 || info.LiquidTiles != 1 || info.LiquidAttributes != 1 || info.LiquidExistsBytes != 1 || info.LiquidVertexBytes != 20 || info.MCNKCount != 1 || info.MCVTCount != 1 || info.MCVTHeights != 145 || info.HeightMin != 10 || info.HeightMax != 20 || info.MCLYCount != 1 || info.MCALCount != 1 || info.MCLQCount != 1 || info.MCLQBytes != 804 {
+	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MH2OHeaders != 256 || info.LiquidLayers != 1 || info.LiquidInstances != 1 || info.LiquidTiles != 1 || info.LiquidAttributes != 1 || info.LiquidExistsBytes != 1 || info.LiquidVertexBytes != 20 || info.MCNKCount != 1 || len(info.Cells) != 1 || info.Cells[0].X != 2 || info.Cells[0].Y != 3 || info.Cells[0].AreaID != 42 || info.Cells[0].Holes != 0x100 || info.MCVTCount != 1 || info.MCVTHeights != 145 || info.HeightMin != 10 || info.HeightMax != 20 || info.MCLYCount != 1 || info.MCALCount != 1 || info.MCLQCount != 1 || info.MCLQBytes != 804 {
 		t.Fatalf("unexpected ADT info: %+v", info)
 	}
 }
