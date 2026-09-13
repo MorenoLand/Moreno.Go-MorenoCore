@@ -4,27 +4,26 @@ This report is an inventory aid; matching counts do not prove behavioral parity.
 
 | Area | Reference | Go | Missing reference symbols |
 | --- | ---: | ---: | ---: |
-| Server source files / lines | 1410 / 710273 | 311 / 119692 | — |
+| Server source files / lines | 1410 / 710273 | 311 / 119707 | — |
 | Tool source files / lines | 38 / 8927 | — | — |
 | Client opcode registrations | 727 | 727 | 0 |
 | Client behavioral opcode bindings (reference, non-NULL) | 430 | — | — |
 | Go session handler definitions | — | 427 | — |
-| Go trivial session handlers (`return true/false`) | — | 3 | — |
+| Go trivial session handlers (`return true/false`) | — | 2 | — |
 | Go registered opcodes with static test references | — | 34 | — |
 | Achievement criteria types | 124 | 124 | 0 |
 | Prepared statement identifiers | 612 | 612 | 0 |
 | Prepared statement SQL mismatches | — | — | 0 |
 | Schema tables/views | 5 | 299 mysql / 299 sqlite | 0 mysql / 0 sqlite |
 | Script source files / lines | 707 / 316814 | 6 / 2681 | — |
-| Test source files / lines | 9 / 1390 | 159 / 42275 | — |
+| Test source files / lines | 9 / 1390 | 159 / 42284 | — |
 
 ## Missing behavioral client opcode handlers
 
 No missing symbols detected.
 ## Go session handlers with trivial return bodies
 
-- `handleChannelModerate (channels.go:966)`
-- `handleKeepAlive (server.go:3080)`
+- `handleKeepAlive (server.go:3082)`
 - `handlePlayerLogout (characters.go:1770)`
 
 ## Go registered opcodes without static test references
