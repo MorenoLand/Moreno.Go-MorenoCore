@@ -7,7 +7,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
@@ -322,34 +321,22 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.loadPlayerTalents(ctx, &state)
 	s.player = &state
 
-	// Rebuild the quest log slots, taxi masks, guild info, skills, and packet states concurrently
-	var wg sync.WaitGroup
-	wg.Add(5)
-	go func() {
-		defer wg.Done()
-		if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
-			qRows, qErr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest, status, explored, timer, mobcount1, mobcount2, mobcount3, mobcount4 FROM character_queststatus WHERE guid = ? AND status IN (1, 3) ORDER BY quest", guid)
-			if qErr == nil {
-				slot := 0
-				for qRows.Next() && slot < playerQuestLogSlots {
-					var questID, status, explored, timer, mob1, mob2, mob3, mob4 int64
-					if err := qRows.Scan(&questID, &status, &explored, &timer, &mob1, &mob2, &mob3, &mob4); err != nil {
-						continue
-					}
-					state.QuestLog[slot] = questLogEntry{
-						QuestID:  uint32(questID),
-						State:    questCompleteStateFlag(status),
-						Timer:    uint32(timer),
-						Counters: [4]uint16{uint16(mob1), uint16(mob2), uint16(mob3), uint16(mob4)},
-					}
-					slot++
+	// Rebuild login state in one owner sequence so packet fields and shared session
+	// maps cannot be observed half-written by timer, script, or network callbacks.
+	if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+		qRows, qErr := s.server.CharactersStore.DB.QueryContext(ctx, "SELECT quest, status, explored, timer, mobcount1, mobcount2, mobcount3, mobcount4 FROM character_queststatus WHERE guid = ? AND status IN (1, 3) ORDER BY quest", guid)
+		if qErr == nil {
+			slot := 0
+			for qRows.Next() && slot < playerQuestLogSlots {
+				var questID, status, explored, timer, mob1, mob2, mob3, mob4 int64
+				if err := qRows.Scan(&questID, &status, &explored, &timer, &mob1, &mob2, &mob3, &mob4); err != nil {
+					continue
 				}
-				qRows.Close()
+				state.QuestLog[slot] = questLogEntry{QuestID: uint32(questID), State: questCompleteStateFlag(status), Timer: uint32(timer), Counters: [4]uint16{uint16(mob1), uint16(mob2), uint16(mob3), uint16(mob4)}}
+				slot++
 			}
+			qRows.Close()
 		}
-	}()
-	go func() {
-		defer wg.Done()
 		var taximask sql.NullString
 		if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT taximask FROM characters WHERE guid = ?", guid).Scan(&taximask); err == nil {
 			s.loadTaxiMask(taximask)
@@ -358,20 +345,10 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 			// continent starting nodes for characters without saved masks.
 			s.initTaxiNodesForLevel()
 		}
-	}()
-	go func() {
-		defer wg.Done()
-		_ = s.CharGuild(ctx, &state)
-	}()
-	go func() {
-		defer wg.Done()
-		_ = s.loadPlayerSkills(ctx, &state)
-	}()
-	go func() {
-		defer wg.Done()
-		_ = s.loadPlayerPacketsState(ctx, &state)
-	}()
-	wg.Wait()
+	}
+	_ = s.CharGuild(ctx, &state)
+	_ = s.loadPlayerSkills(ctx, &state)
+	_ = s.loadPlayerPacketsState(ctx, &state)
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
 	_ = s.calculatePlayerStats(ctx, &state)
