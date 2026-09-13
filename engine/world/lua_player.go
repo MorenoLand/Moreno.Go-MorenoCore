@@ -50,7 +50,7 @@ func (s *session) luaPlayer() *scripting.Object {
 		return nil
 	}
 	state := s.player
-	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender}
+	fields := map[string]any{"Name": state.Name, "GUID": state.GUID, "GUIDLow": uint32(state.GUID), "MapId": state.Map, "Level": state.Level, "Race": state.Race, "Class": state.Class, "Gender": state.Gender, "Team": teamForRace(state.Race), "IsGM": s.security > 0}
 	methods := map[string]scripting.ObjectMethod{}
 	methods["GetName"] = luaNoArgs(func() any { return state.Name })
 	methods["GetGUID"] = luaNoArgs(func() any { return state.GUID })
@@ -317,6 +317,8 @@ func luaUint32Arg(args []any, index int) (uint32, error) {
 
 func luaUint64(value any) (uint64, error) {
 	switch value := value.(type) {
+	case scripting.UInt64:
+		return uint64(value), nil
 	case uint8:
 		return uint64(value), nil
 	case uint16:

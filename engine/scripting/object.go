@@ -71,7 +71,7 @@ func pushValue(state *lua.State, value any) error {
 	case uint32:
 		state.PushUnsigned(uint(value))
 	case uint64:
-		state.PushNumber(float64(value))
+		pushUInt64(state, value)
 	case float32:
 		state.PushNumber(float64(value))
 	case float64:

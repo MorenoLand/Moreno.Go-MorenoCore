@@ -124,3 +124,42 @@ func TestRuntimeServerEventAndLuaTimer(t *testing.T) {
 		t.Fatalf("server event values=%v", values)
 	}
 }
+
+func TestElunaGlobalFunctions(t *testing.T) {
+	players := []*Object{
+		{Fields: map[string]any{"GUID": uint64(7), "Name": "Alliance", "Team": uint32(0), "IsGM": false}},
+		{Fields: map[string]any{"GUID": uint64(8), "Name": "HordeGM", "Team": uint32(1), "IsGM": true}},
+	}
+	runtime := NewRuntime(Config{Enabled: true, CoreName: "MorenoCore", CoreVersion: "1.2.3+gabc", RealmID: 7, CoreExpansion: 2, PlayerProvider: func() []*Object { return players }})
+	source := `
+		assert(GetLuaEngine() == "ElunaEngine")
+		assert(GetCoreName() == "MorenoCore")
+		assert(GetCoreVersion() == "1.2.3+gabc")
+		assert(GetRealmID() == 7)
+		assert(GetCoreExpansion() == 2)
+		assert(GetPlayerCount() == 2)
+		assert(GetPlayerByGUID(GetPlayerGUID(7)).Name == "Alliance")
+		assert(GetGUIDLow(GetPlayerByName("hOrDeGm").GUID) == 8)
+		assert(#GetPlayersInWorld() == 2)
+		assert(#GetPlayersInWorld(1) == 1)
+		assert(#GetPlayersInWorld(1, true) == 1)
+		assert(#GetPlayersInWorld(0, true) == 0)
+		assert(GetGUIDLow(GetPlayerGUID(7)) == 7)
+		assert(GetGUIDLow(GetObjectGUID(7, 68)) == 7)
+		assert(GetGUIDEntry(GetObjectGUID(7, 68)) == 68)
+		assert(GetGUIDType(GetObjectGUID(7, 68)) == 0xF110)
+		assert(GetGUIDEntry(GetUnitGUID(7, 68)) == 68)
+		assert(GetGUIDType(GetUnitGUID(7, 68)) == 0xF130)
+		assert(bit_and(0xF0, 0x0F) == 0)
+		assert(bit_or(0xF0, 0x0F) == 0xFF)
+		assert(bit_xor(0xFF, 0x0F) == 0xF0)
+		assert(bit_lshift(1, 8) == 256)
+		assert(bit_rshift(256, 8) == 1)
+		assert(bit_not(0) == 0xFFFFFFFF)
+		local now = GetCurrTime()
+		assert(GetTimeDiff(now) < 1000)
+	`
+	if err := runtime.LoadString(source); err != nil {
+		t.Fatal(err)
+	}
+}

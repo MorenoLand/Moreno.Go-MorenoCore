@@ -24,6 +24,7 @@ import (
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/scripting"
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/version"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocoltrace"
 )
@@ -3184,7 +3185,7 @@ type Features struct {
 }
 
 func NewFeatures(c config.Config, stores *database.Set, logger *slog.Logger) *Features {
-	return &Features{Config: c, LFG: NewLFGManager(c.SoloLFGEnable), NPCBots: NewNPCBotManager(stores.Characters, stores.World, c.NPCBots), Scripts: scripting.NewRuntime(scripting.Config{Enabled: c.LuaEnabled, ScriptPath: c.LuaScriptPath, CoreExpansion: c.Expansion, AuthDatabase: stores.Auth.DB, CharacterDB: stores.Characters.DB, WorldDatabase: stores.World.DB, Logger: logger})}
+	return &Features{Config: c, LFG: NewLFGManager(c.SoloLFGEnable), NPCBots: NewNPCBotManager(stores.Characters, stores.World, c.NPCBots), Scripts: scripting.NewRuntime(scripting.Config{Enabled: c.LuaEnabled, ScriptPath: c.LuaScriptPath, CoreName: version.Product, CoreVersion: version.String(), RealmID: c.RealmID, CoreExpansion: c.Expansion, AuthDatabase: stores.Auth.DB, CharacterDB: stores.Characters.DB, WorldDatabase: stores.World.DB, Logger: logger})}
 }
 
 func (f *Features) Initialize(ctx context.Context) error {

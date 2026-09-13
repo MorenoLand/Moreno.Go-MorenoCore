@@ -41,6 +41,9 @@ type Object struct {
 type Config struct {
 	Enabled        bool
 	ScriptPath     string
+	CoreName       string
+	CoreVersion    string
+	RealmID        uint32
 	CoreExpansion  uint32
 	PlayerProvider func() []*Object
 	AuthDatabase   *sql.DB
@@ -276,8 +279,32 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("RegisterServerEvent", r.registerServerEvent)
 	r.state.Register("RegisterGlobalEvent", r.registerServerEvent)
 	r.state.Register("GetCoreExpansion", r.getCoreExpansion)
+	r.state.Register("GetLuaEngine", r.getLuaEngine)
+	r.state.Register("GetCoreName", r.getCoreName)
+	r.state.Register("GetRealmID", r.getRealmID)
+	r.state.Register("GetCoreVersion", r.getCoreVersion)
 	r.state.Register("GetPlayersInWorld", r.getPlayersInWorld)
+	r.state.Register("GetPlayerByGUID", r.getPlayerByGUID)
 	r.state.Register("GetPlayerByName", r.getPlayerByName)
+	r.state.Register("GetPlayerCount", r.getPlayerCount)
+	r.state.Register("GetPlayerGUID", r.getPlayerGUID)
+	r.state.Register("GetItemGUID", r.getItemGUID)
+	r.state.Register("GetObjectGUID", r.getObjectGUID)
+	r.state.Register("GetUnitGUID", r.getUnitGUID)
+	r.state.Register("GetGUIDLow", r.getGUIDLow)
+	r.state.Register("GetGUIDType", r.getGUIDType)
+	r.state.Register("GetGUIDEntry", r.getGUIDEntry)
+	r.state.Register("GetCurrTime", r.getCurrTime)
+	r.state.Register("GetTimeDiff", r.getTimeDiff)
+	r.state.Register("bit_and", luaBitAnd)
+	r.state.Register("bit_or", luaBitOr)
+	r.state.Register("bit_lshift", luaBitLShift)
+	r.state.Register("bit_rshift", luaBitRShift)
+	r.state.Register("bit_xor", luaBitXor)
+	r.state.Register("bit_not", luaBitNot)
+	r.state.Register("PrintInfo", r.printInfo)
+	r.state.Register("PrintError", r.printError)
+	r.state.Register("PrintDebug", r.printDebug)
 	r.state.Register("CreateLuaEvent", r.createLuaEvent)
 	r.state.Register("RemoveEventById", r.removeEvent)
 	r.state.Register("RemoveEvents", r.removeEvents)
@@ -293,6 +320,7 @@ func (r *Runtime) initializeLocked() {
 	lua.NewMetaTable(r.state, objectMetaTable)
 	lua.SetFunctions(r.state, []lua.RegistryFunction{{Name: "__index", Function: objectIndex}}, 0)
 	r.state.Pop(1)
+	installUInt64MetaTable(r.state)
 	setPackagePath(r.state, r.config.ScriptPath)
 }
 
@@ -302,18 +330,37 @@ func (r *Runtime) getCoreExpansion(state *lua.State) int {
 }
 
 func (r *Runtime) getPlayersInWorld(state *lua.State) int {
+	team := uint32(2)
+	if state.Top() >= 1 && !state.IsNil(1) {
+		team = uint32(lua.CheckUnsigned(state, 1))
+	}
+	onlyGM := state.Top() >= 2 && !state.IsNil(2) && state.ToBoolean(2)
 	state.NewTable()
 	if r.config.PlayerProvider == nil {
 		return 1
 	}
-	for index, player := range r.config.PlayerProvider() {
+	index := 0
+	for _, player := range r.config.PlayerProvider() {
 		if player == nil {
 			continue
+		}
+		if team != 2 {
+			playerTeam, ok := objectUint32(player, "Team")
+			if !ok || playerTeam != team {
+				continue
+			}
+		}
+		if onlyGM {
+			isGM, ok := player.Fields["IsGM"].(bool)
+			if !ok || !isGM {
+				continue
+			}
 		}
 		if err := pushValue(state, player); err != nil {
 			continue
 		}
-		state.RawSetInt(-2, index+1)
+		index++
+		state.RawSetInt(-2, index)
 	}
 	return 1
 }
