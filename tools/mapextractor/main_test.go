@@ -51,6 +51,30 @@ func TestParseWDTRejectsTruncatedMain(t *testing.T) {
 	}
 }
 
+func TestParseADTChunkInventory(t *testing.T) {
+	mcnk := make([]byte, 128)
+	mcnk = append(mcnk, wdtChunk("MCVT", make([]byte, 4))...)
+	mcnk = append(mcnk, wdtChunk("MCLY", make([]byte, 4))...)
+	mcnk = append(mcnk, wdtChunk("MCAL", make([]byte, 4))...)
+	data := append(wdtChunk("MHDR", make([]byte, 16)), wdtChunk("MCIN", make([]byte, 8))...)
+	data = append(data, wdtChunk("MTEX", []byte("texture.blp\x00"))...)
+	data = append(data, wdtChunk("MH2O", make([]byte, 8))...)
+	data = append(data, wdtChunk("MCNK", mcnk)...)
+	info, err := parseADT(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.HasMHDR || !info.HasMCIN || !info.HasMTEX || info.MH2OCount != 1 || info.MCNKCount != 1 || info.MCVTCount != 1 || info.MCLYCount != 1 || info.MCALCount != 1 {
+		t.Fatalf("unexpected ADT info: %+v", info)
+	}
+}
+
+func TestParseADTRejectsMissingMCNK(t *testing.T) {
+	if _, err := parseADT(wdtChunk("MHDR", make([]byte, 16))); err == nil {
+		t.Fatal("expected missing MCNK error")
+	}
+}
+
 func TestExtractDBCMissingDirectory(t *testing.T) {
 	tempDir := t.TempDir()
 	nonExistent := filepath.Join(tempDir, "does_not_exist")
