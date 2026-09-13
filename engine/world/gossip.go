@@ -43,7 +43,7 @@ type gossipQuestItem struct {
 
 func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	guid, err := reader.ReadU64()
+	guid, err := reader.ReadPackedGUID()
 	if err != nil {
 		s.debug("gossip hello rejected", "account", s.accountName, "error", err)
 		return true
@@ -134,7 +134,7 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 
 func (s *session) handleGossipSelectOption(ctx context.Context, payload []byte) bool {
 	reader := protocol.NewReader(payload)
-	guid, err := reader.ReadU64()
+	guid, err := reader.ReadPackedGUID()
 	if err != nil {
 		return false
 	}
