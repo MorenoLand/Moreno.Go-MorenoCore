@@ -43,6 +43,7 @@ const (
 	mailStationeryAuction uint32 = 62
 	mailAuctionType       uint8  = 2
 	defaultAuctionHouseID uint32 = 1
+	unitNPCFlagAuctioneer uint32 = 0x00200000
 )
 
 type auctionRecord struct {
@@ -69,6 +70,9 @@ func (s *session) handleAuctionHello(ctx context.Context, payload []byte) bool {
 	if err != nil {
 		return false
 	}
+	if !s.canInteractWithNPC(ctx, guid, uint64(unitNPCFlagAuctioneer)) {
+		return true
+	}
 	packet := protocol.NewBuffer(13)
 	packet.WriteU64(guid)
 	packet.WriteU32(defaultAuctionHouseID) // Neutral / Standard AH ID
@@ -84,7 +88,10 @@ func (s *session) handleAuctionListItems(ctx context.Context, payload []byte) bo
 	}
 	s.expireAuctions(ctx)
 	reader := protocol.NewReader(payload)
-	_, _ = reader.ReadU64()
+	auctioneer, _ := reader.ReadU64()
+	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
+		return true
+	}
 	listFrom, _ := reader.ReadU32()
 	searchedName, _ := reader.ReadCString()
 
@@ -213,7 +220,10 @@ func (s *session) handleAuctionSellItem(ctx context.Context, payload []byte) boo
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	_, _ = reader.ReadU64() // auctioneer
+	auctioneer, _ := reader.ReadU64() // auctioneer
+	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
+		return true
+	}
 	itemCount, err := reader.ReadU32()
 	if err != nil || itemCount == 0 {
 		return false
@@ -296,7 +306,10 @@ func (s *session) handleAuctionPlaceBid(ctx context.Context, payload []byte) boo
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	_, _ = reader.ReadU64()
+	auctioneer, _ := reader.ReadU64()
+	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
+		return true
+	}
 	auctionID, err := reader.ReadU32()
 	if err != nil {
 		return false
@@ -587,7 +600,10 @@ func (s *session) handleAuctionRemoveItem(ctx context.Context, payload []byte) b
 		return true
 	}
 	reader := protocol.NewReader(payload)
-	_, _ = reader.ReadU64()
+	auctioneer, _ := reader.ReadU64()
+	if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
+		return true
+	}
 	auctionID, err := reader.ReadU32()
 	if err != nil {
 		return false
@@ -837,7 +853,10 @@ func (s *session) handleAuctionListPendingSales(ctx context.Context, payload []b
 	}
 	if len(payload) >= 8 {
 		r := protocol.NewReader(payload)
-		_, _ = r.ReadU64() // auctioneer GUID (reference AuctionHouseHandler.cpp:816)
+		auctioneer, _ := r.ReadU64() // auctioneer GUID (reference AuctionHouseHandler.cpp:816)
+		if !s.canInteractWithNPC(ctx, auctioneer, uint64(unitNPCFlagAuctioneer)) {
+			return true
+		}
 	}
 
 	cdb := s.server.CharactersStore.DB

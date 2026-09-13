@@ -114,7 +114,7 @@ func TestSlice13Handlers(t *testing.T) {
 
 	// 5. CMSG_AUCTION_LIST_PENDING_SALES
 	ahBuf := protocol.NewBuffer(8)
-	ahBuf.WriteU64(666)
+	ahBuf.WriteU64(creatureWorldGUID(1, 900))
 	if !sess.handleAuctionListPendingSales(ctx, ahBuf.Bytes()) {
 		t.Fatal("handleAuctionListPendingSales failed")
 	}

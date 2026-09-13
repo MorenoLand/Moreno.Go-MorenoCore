@@ -45,13 +45,13 @@ func TestAuctionHouseListingSellingAndBidding(t *testing.T) {
 
 	// 1. Seller lists item 501 on auction
 	sellBuf := protocol.NewBuffer(64)
-	sellBuf.WriteU64(0)    // auctioneer
-	sellBuf.WriteU32(1)    // itemsCount
-	sellBuf.WriteU64(501)  // itemGUID
-	sellBuf.WriteU32(1)    // count
-	sellBuf.WriteU32(1000) // bid (10 silver)
-	sellBuf.WriteU32(5000) // buyout (50 silver)
-	sellBuf.WriteU32(1440) // duration 24h
+	sellBuf.WriteU64(creatureWorldGUID(1, 900)) // auctioneer
+	sellBuf.WriteU32(1)                         // itemsCount
+	sellBuf.WriteU64(501)                       // itemGUID
+	sellBuf.WriteU32(1)                         // count
+	sellBuf.WriteU32(1000)                      // bid (10 silver)
+	sellBuf.WriteU32(5000)                      // buyout (50 silver)
+	sellBuf.WriteU32(1440)                      // duration 24h
 	if !sessSeller.handleAuctionSellItem(ctx, sellBuf.Bytes()) {
 		t.Fatal("handleAuctionSellItem failed")
 	}
@@ -61,7 +61,7 @@ func TestAuctionHouseListingSellingAndBidding(t *testing.T) {
 
 	// 2. Buyer searches auction items
 	listBuf := protocol.NewBuffer(64)
-	listBuf.WriteU64(0)
+	listBuf.WriteU64(creatureWorldGUID(1, 900))
 	listBuf.WriteU32(0) // listFrom
 	listBuf.WriteCString("Iron")
 	if !sessBuyer.handleAuctionListItems(ctx, listBuf.Bytes()) {
@@ -70,7 +70,7 @@ func TestAuctionHouseListingSellingAndBidding(t *testing.T) {
 
 	// 3. Buyer buys out auction 1
 	bidBuf := protocol.NewBuffer(32)
-	bidBuf.WriteU64(0)
+	bidBuf.WriteU64(creatureWorldGUID(1, 900))
 	bidBuf.WriteU32(1)    // auction ID
 	bidBuf.WriteU32(5000) // price (buyout)
 	if !sessBuyer.handleAuctionPlaceBid(ctx, bidBuf.Bytes()) {
@@ -115,7 +115,7 @@ func TestAuctionCancellationRefundsActiveBidder(t *testing.T) {
 	}
 
 	charStore := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
-	srv := &Server{CharactersStore: charStore, sessions: make(map[*session]struct{})}
+	srv := &Server{CharactersStore: charStore, WorldStore: charStore, sessions: make(map[*session]struct{})}
 	sessSeller := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Money: 50000}}
 	sessBidder := &session{server: srv, playerGUID: 2, playerLoaded: true, player: &playerState{GUID: 2, Money: 40000}}
 	srv.sessions[sessSeller] = struct{}{}
@@ -125,7 +125,7 @@ func TestAuctionCancellationRefundsActiveBidder(t *testing.T) {
 
 	// Seller cancels auction 1
 	cancelBuf := protocol.NewBuffer(16)
-	cancelBuf.WriteU64(0)
+	cancelBuf.WriteU64(creatureWorldGUID(1, 900))
 	cancelBuf.WriteU32(1) // auction ID 1
 	if !sessSeller.handleAuctionRemoveItem(ctx, cancelBuf.Bytes()) {
 		t.Fatal("handleAuctionRemoveItem failed")
@@ -225,7 +225,7 @@ func TestAuctionHousePendingSalesParity(t *testing.T) {
 
 	// 1. Seller lists item
 	sellBuf := protocol.NewBuffer(64)
-	sellBuf.WriteU64(0)
+	sellBuf.WriteU64(creatureWorldGUID(1, 900))
 	sellBuf.WriteU32(1)
 	sellBuf.WriteU64(999)
 	sellBuf.WriteU32(1)
@@ -238,7 +238,7 @@ func TestAuctionHousePendingSalesParity(t *testing.T) {
 
 	// 2. Buyer buys out item
 	bidBuf := protocol.NewBuffer(32)
-	bidBuf.WriteU64(0)
+	bidBuf.WriteU64(creatureWorldGUID(1, 900))
 	bidBuf.WriteU32(1)
 	bidBuf.WriteU32(50000)
 	if !sessBuyer.handleAuctionPlaceBid(ctx, bidBuf.Bytes()) {
@@ -258,7 +258,7 @@ func TestAuctionHousePendingSalesParity(t *testing.T) {
 
 	// 4. Seller queries pending sales
 	qBuf := protocol.NewBuffer(8)
-	qBuf.WriteU64(0)
+	qBuf.WriteU64(creatureWorldGUID(1, 900))
 	if !sessSeller.handleAuctionListPendingSales(ctx, qBuf.Bytes()) {
 		t.Fatal("handleAuctionListPendingSales failed")
 	}
@@ -346,7 +346,7 @@ func TestAuctionHouseTrinityParity(t *testing.T) {
 	// 1. Seller lists Broadsword (SellPrice 2000, 24h = timeHr 2)
 	// Expected deposit: 2000 * 5% * 2 = 200 copper
 	sellBuf := protocol.NewBuffer(64)
-	sellBuf.WriteU64(0)
+	sellBuf.WriteU64(creatureWorldGUID(1, 900))
 	sellBuf.WriteU32(1)
 	sellBuf.WriteU64(501)
 	sellBuf.WriteU32(1)
@@ -362,7 +362,7 @@ func TestAuctionHouseTrinityParity(t *testing.T) {
 
 	// 2. Seller tries to bid on own auction -> must fail
 	bidBufOwn := protocol.NewBuffer(32)
-	bidBufOwn.WriteU64(0)
+	bidBufOwn.WriteU64(creatureWorldGUID(1, 900))
 	bidBufOwn.WriteU32(1)
 	bidBufOwn.WriteU32(2000)
 	// Calling handleAuctionPlaceBid by seller should not deduct money or succeed
@@ -374,7 +374,7 @@ func TestAuctionHouseTrinityParity(t *testing.T) {
 
 	// 3. BidderA bids below minimum increment (startbid is 1000, tries 900)
 	bidBufLow := protocol.NewBuffer(32)
-	bidBufLow.WriteU64(0)
+	bidBufLow.WriteU64(creatureWorldGUID(1, 900))
 	bidBufLow.WriteU32(1)
 	bidBufLow.WriteU32(900)
 	_ = sessBidderA.handleAuctionPlaceBid(ctx, bidBufLow.Bytes())
@@ -384,7 +384,7 @@ func TestAuctionHouseTrinityParity(t *testing.T) {
 
 	// 4. BidderA places valid bid of 1000
 	bidBufValid := protocol.NewBuffer(32)
-	bidBufValid.WriteU64(0)
+	bidBufValid.WriteU64(creatureWorldGUID(1, 900))
 	bidBufValid.WriteU32(1)
 	bidBufValid.WriteU32(1000)
 	if !sessBidderA.handleAuctionPlaceBid(ctx, bidBufValid.Bytes()) {
@@ -396,7 +396,7 @@ func TestAuctionHouseTrinityParity(t *testing.T) {
 
 	// 5. BidderB tries to outbid with 1020 (below 5% increment of 1000, which is min 1050)
 	bidBufUnderInc := protocol.NewBuffer(32)
-	bidBufUnderInc.WriteU64(0)
+	bidBufUnderInc.WriteU64(creatureWorldGUID(1, 900))
 	bidBufUnderInc.WriteU32(1)
 	bidBufUnderInc.WriteU32(1020)
 	_ = sessBidderB.handleAuctionPlaceBid(ctx, bidBufUnderInc.Bytes())
@@ -406,7 +406,7 @@ func TestAuctionHouseTrinityParity(t *testing.T) {
 
 	// 6. BidderB places valid outbid of 1200 -> BidderA should be refunded 1000 via mail
 	bidBufOutbid := protocol.NewBuffer(32)
-	bidBufOutbid.WriteU64(0)
+	bidBufOutbid.WriteU64(creatureWorldGUID(1, 900))
 	bidBufOutbid.WriteU32(1)
 	bidBufOutbid.WriteU32(1200)
 	if !sessBidderB.handleAuctionPlaceBid(ctx, bidBufOutbid.Bytes()) {
@@ -432,7 +432,7 @@ func TestAuctionHouseTrinityParity(t *testing.T) {
 	// BidderB is refunded 1200 via mail
 	sellerMoneyBeforeCancel := sessSeller.player.Money
 	cancelBuf := protocol.NewBuffer(16)
-	cancelBuf.WriteU64(0)
+	cancelBuf.WriteU64(creatureWorldGUID(1, 900))
 	cancelBuf.WriteU32(1)
 	if !sessSeller.handleAuctionRemoveItem(ctx, cancelBuf.Bytes()) {
 		t.Fatal("handleAuctionRemoveItem failed")
