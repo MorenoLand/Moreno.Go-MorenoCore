@@ -66,6 +66,11 @@ func (r *Runtime) getCoreVersion(state *lua.State) int {
 	return 1
 }
 
+func (r *Runtime) getGameTime(state *lua.State) int {
+	state.PushUnsigned(uint(time.Now().Unix()))
+	return 1
+}
+
 func (r *Runtime) getQuest(state *lua.State) int {
 	questID := checkLuaUint64(state, 1)
 	if r.config.WorldDatabase == nil || questID > math.MaxUint32 {

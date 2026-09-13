@@ -140,6 +140,7 @@ func TestElunaGlobalFunctions(t *testing.T) {
 		assert(GetLuaEngine() == "ElunaEngine")
 		assert(GetCoreName() == "MorenoCore")
 		assert(GetCoreVersion() == "1.2.3+gabc")
+		assert(GetGameTime() > 0)
 		assert(GetRealmID() == 7)
 		assert(GetCoreExpansion() == 2)
 		assert(GetPlayerCount() == 2)
