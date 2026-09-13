@@ -181,6 +181,15 @@ func (r *Runtime) createUint64(state *lua.State) int {
 	return 1
 }
 
+func (r *Runtime) createPacket(state *lua.State) int {
+	opcode := checkLuaUint64(state, 1)
+	if opcode > math.MaxUint32 {
+		lua.ArgumentError(state, 1, "opcode must be uint32")
+	}
+	pushPacket(state, &Packet{Opcode: uint32(opcode)})
+	return 1
+}
+
 func (r *Runtime) printInfo(state *lua.State) int {
 	r.printLua(state, "info")
 	return 0

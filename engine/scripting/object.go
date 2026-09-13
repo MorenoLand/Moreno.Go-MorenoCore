@@ -355,6 +355,8 @@ func pushValue(state *lua.State, value any) error {
 		state.PushNumber(value)
 	case *Query:
 		pushQuery(state, value)
+	case *Packet:
+		pushPacket(state, value)
 	case *Object:
 		PushObject(state, value)
 	default:

@@ -303,3 +303,24 @@ func TestElunaQueryMethods(t *testing.T) {
 		t.Fatalf("values=%v err=%v logs=%s", values, err, logs.String())
 	}
 }
+
+func TestElunaPacketMethods(t *testing.T) {
+	runtime := NewRuntime(Config{Enabled: true})
+	if err := runtime.LoadString(`
+		packet = CreatePacket(0x123)
+		assert(packet:GetOpcode() == 0x123 and packet:GetSize() == 0)
+		packet:WriteByte(-2); packet:WriteUByte(254); packet:WriteShort(-3); packet:WriteUShort(65530)
+		packet:WriteLong(-4); packet:WriteULong(4294967292); packet:WriteFloat(1.5); packet:WriteDouble(2.5)
+		packet:WriteGUID(CreateUint64("18446744073709551615")); packet:WriteString("hello")
+		assert(packet:GetSize() > 0)
+		assert(packet:ReadByte() == -2 and packet:ReadUByte() == 254)
+		assert(packet:ReadShort() == -3 and packet:ReadUShort() == 65530)
+		assert(packet:ReadLong() == -4 and packet:ReadULong() == 4294967292)
+		assert(packet:ReadFloat() == 1.5 and packet:ReadDouble() == 2.5)
+		assert(tostring(packet:ReadGUID()) == "18446744073709551615" and packet:ReadString() == "hello")
+		packet:SetOpcode(7)
+		assert(packet:GetOpcode() == 7)
+	`); err != nil {
+		t.Fatal(err)
+	}
+}

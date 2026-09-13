@@ -363,6 +363,7 @@ func (r *Runtime) initializeLocked() {
 	r.state.Register("GetTimeDiff", r.getTimeDiff)
 	r.state.Register("CreateInt64", r.createInt64)
 	r.state.Register("CreateUint64", r.createUint64)
+	r.state.Register("CreatePacket", r.createPacket)
 	r.state.Register("bit_and", luaBitAnd)
 	r.state.Register("bit_or", luaBitOr)
 	r.state.Register("bit_lshift", luaBitLShift)
@@ -388,6 +389,7 @@ func (r *Runtime) initializeLocked() {
 	lua.SetFunctions(r.state, []lua.RegistryFunction{{Name: "__index", Function: objectIndex}, {Name: "__eq", Function: objectEqual}}, 0)
 	r.state.Pop(1)
 	installUInt64MetaTable(r.state)
+	installPacketMetaTable(r.state)
 	setPackagePath(r.state, r.config.ScriptPath)
 }
 
