@@ -11,6 +11,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 )
@@ -106,6 +107,41 @@ func TestLogonAndRealmList(t *testing.T) {
 	}
 	if !bytes.Contains(realmBody, []byte("127.0.0.1:8085")) || bytes.Contains(realmBody, []byte("203.0.113.10:8085")) {
 		t.Fatalf("realm address: %x", realmBody)
+	}
+}
+
+func TestFailedLoginProtectionCountsAndBansAccount(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE account (id INTEGER PRIMARY KEY, username TEXT, failed_logins INTEGER NOT NULL DEFAULT 0)",
+		"CREATE TABLE account_banned (id INTEGER, bandate INTEGER, unbandate INTEGER, bannedby TEXT, banreason TEXT, active INTEGER)",
+		"CREATE TABLE ip_banned (ip TEXT, bandate INTEGER, unbandate INTEGER, bannedby TEXT, banreason TEXT)",
+		"INSERT INTO account (id, username, failed_logins) VALUES (7, 'TEST', 0)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &database.Store{Name: "auth", Backend: database.BackendSQLite, DB: db}
+	settings := config.Default()
+	settings.WrongPassMaxCount = 2
+	settings.WrongPassBanTime = 120
+	settings.WrongPassBanType = true
+	server := NewServer(store, slog.New(slog.NewTextHandler(io.Discard, nil)), 1, settings)
+	sess := &session{server: server, account: account{ID: 7, Login: "TEST"}, remoteIP: "127.0.0.1"}
+	sess.recordFailedLogin(context.Background())
+	sess.recordFailedLogin(context.Background())
+	var failed int
+	if err := db.QueryRow("SELECT failed_logins FROM account WHERE id = 7").Scan(&failed); err != nil || failed != 2 {
+		t.Fatalf("failed logins=%d err=%v", failed, err)
+	}
+	var bans int
+	if err := db.QueryRow("SELECT COUNT(*) FROM account_banned WHERE id = 7 AND active = 1").Scan(&bans); err != nil || bans != 1 {
+		t.Fatalf("account bans=%d err=%v", bans, err)
 	}
 }
 

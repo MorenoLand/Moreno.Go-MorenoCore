@@ -45,11 +45,15 @@ const (
 var versionChallenge = [16]byte{0xBA, 0xA3, 0x1E, 0x99, 0xA0, 0x0B, 0x21, 0x57, 0xFC, 0x37, 0x3F, 0xB3, 0x69, 0xCD, 0xD2, 0xF1}
 
 type Server struct {
-	Store         *database.Store
-	Logger        *slog.Logger
-	RealmID       uint32
-	RealmAddress  string
-	TraceRecorder *protocoltrace.Recorder
+	Store             *database.Store
+	Logger            *slog.Logger
+	RealmID           uint32
+	RealmAddress      string
+	WrongPassMaxCount uint32
+	WrongPassBanTime  uint32
+	WrongPassBanType  bool
+	WrongPassLogging  bool
+	TraceRecorder     *protocoltrace.Recorder
 }
 
 type account struct {
@@ -113,13 +117,19 @@ const (
 
 func NewServer(store *database.Store, logger *slog.Logger, realmID uint32, settings ...config.Config) *Server {
 	address := ""
+	server := &Server{Store: store, Logger: logger, RealmID: realmID, WrongPassBanTime: 600}
 	if len(settings) != 0 {
 		address = settings[0].RealmAddress
+		server.WrongPassMaxCount = settings[0].WrongPassMaxCount
+		server.WrongPassBanTime = settings[0].WrongPassBanTime
+		server.WrongPassBanType = settings[0].WrongPassBanType
+		server.WrongPassLogging = settings[0].WrongPassLogging
 	}
 	if address == "" && store.Backend == database.BackendSQLite {
 		address = "127.0.0.1"
 	}
-	return &Server{Store: store, Logger: logger, RealmID: realmID, RealmAddress: address}
+	server.RealmAddress = address
+	return server
 }
 
 func (s *Server) Handle(ctx context.Context, conn net.Conn) {
@@ -289,7 +299,7 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 	if !ok {
 		s.debug("logon proof rejected", "account", s.account.Login, "reason", "invalid srp6 proof")
 		_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
-		_, _ = s.server.Store.ExecStatement(ctx, "LOGIN_UPD_FAILEDLOGINS", s.account.Login)
+		s.recordFailedLogin(ctx)
 		return errors.New("invalid SRP6 proof")
 	}
 	s.sessionKey = key
@@ -310,6 +320,32 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 	s.status = statusAuthed
 	s.debug("logon authenticated", "account", s.account.Login, "remote", s.remoteIP)
 	return nil
+}
+
+func (s *session) recordFailedLogin(ctx context.Context) {
+	if s == nil || s.server == nil || s.server.Store == nil {
+		return
+	}
+	if s.server.WrongPassLogging {
+		_, _ = s.server.Store.ExecStatement(ctx, "LOGIN_INS_FALP_IP_LOGGING", s.account.ID, s.remoteIP, "Login to WoW Failed - Incorrect Password")
+	}
+	if s.server.WrongPassMaxCount == 0 {
+		return
+	}
+	_, _ = s.server.Store.ExecStatement(ctx, "LOGIN_UPD_FAILEDLOGINS", s.account.Login)
+	s.account.FailedLogins++
+	if s.account.FailedLogins < s.server.WrongPassMaxCount {
+		return
+	}
+	banTime := s.server.WrongPassBanTime
+	if banTime == 0 {
+		banTime = 600
+	}
+	if s.server.WrongPassBanType {
+		_, _ = s.server.Store.ExecStatement(ctx, "LOGIN_INS_ACCOUNT_AUTO_BANNED", s.account.ID, banTime)
+	} else {
+		_, _ = s.server.Store.ExecStatement(ctx, "LOGIN_INS_IP_AUTO_BANNED", s.remoteIP, banTime)
+	}
 }
 
 func (s *session) handleReconnectChallenge(ctx context.Context) error {

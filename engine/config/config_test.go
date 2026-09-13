@@ -72,3 +72,25 @@ func TestStartPlayerMoneyDefaultAndUnrecognizedKeys(t *testing.T) {
 		t.Fatalf("expected unrecognized key recorded, got %+v", c.UnrecognizedKeys)
 	}
 }
+
+func TestWrongPasswordProtectionConfiguration(t *testing.T) {
+	c := Default()
+	if c.WrongPassBanTime != 600 || c.WrongPassMaxCount != 0 || c.WrongPassBanType || c.WrongPassLogging {
+		t.Fatalf("unexpected wrong-password defaults: %+v", c)
+	}
+	for _, setting := range []struct {
+		key, value string
+	}{
+		{"WrongPass.MaxCount", "3"},
+		{"WrongPass.BanTime", "120"},
+		{"WrongPass.BanType", "1"},
+		{"WrongPass.Logging", "1"},
+	} {
+		if err := c.Set(setting.key, setting.value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.WrongPassMaxCount != 3 || c.WrongPassBanTime != 120 || !c.WrongPassBanType || !c.WrongPassLogging {
+		t.Fatalf("wrong-password settings were not applied: %+v", c)
+	}
+}
