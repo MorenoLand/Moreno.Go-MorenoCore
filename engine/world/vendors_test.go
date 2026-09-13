@@ -3,13 +3,38 @@ package world
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
+
+func writeVendorExtendedCostDBC(t *testing.T, dir string) {
+	t.Helper()
+	const fieldCount = 15
+	record := make([]uint32, fieldCount)
+	record[0], record[1], record[2], record[3] = 7, 10, 5, 0
+	record[4], record[9] = 6001, 2
+	recordBytes := make([]byte, fieldCount*4)
+	for i, value := range record {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:(i+1)*4], value)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dir, "ItemExtendedCost.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestVendorBuyingAndSelling(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
@@ -22,10 +47,10 @@ func TestVendorBuyingAndSelling(t *testing.T) {
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
-		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER)",
 		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
 		"INSERT INTO characters VALUES (1, 1000, '')",
-		"INSERT INTO item_template VALUES (5001, 100, 50, 10, 100, 1)",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 10, 100, 1, 0)",
 		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 0)",
 	} {
 		if _, err := db.Exec(stmt); err != nil {
@@ -122,6 +147,50 @@ func TestVendorStockSeparatesSlotsAndExtendedCosts(t *testing.T) {
 	}
 }
 
+func TestVendorExtendedCostPurchase(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	for _, statement := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, arenaPoints INTEGER, totalHonorPoints INTEGER, equipmentCache TEXT)",
+		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
+		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER, stackable INTEGER, ContainerSlots INTEGER)",
+		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
+		"INSERT INTO characters VALUES (1, 1000, 20, 30, '')",
+		"INSERT INTO item_template VALUES (5001, 100, 75, 10, 100, 1, 0, 1, 0)",
+		"INSERT INTO item_template VALUES (6001, 101, 1, 1, 100, 1, 0, 20, 0)",
+		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 7)",
+		"INSERT INTO item_instance VALUES (700, 6001, 1, 0, 4, 0, '', 0, '', 0, 100, 0, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 23, 700)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dbcDir := t.TempDir()
+	writeVendorExtendedCostDBC(t, dbcDir)
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	sess := &session{server: &Server{AuthStore: store, CharactersStore: store, WorldStore: store, Data: wotlk.NewStore(dbcDir)}, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Money: 1000, ArenaPoints: 20, TotalHonorPoints: 30}}
+	if !sess.processBuyItem(context.Background(), creatureWorldGUID(1, 101), 5001, 1, 1) {
+		t.Fatal("processBuyItem failed")
+	}
+	if sess.player.Money != 1000 || sess.player.ArenaPoints != 15 || sess.player.TotalHonorPoints != 20 {
+		t.Fatalf("unexpected balances: money=%d arena=%d honor=%d", sess.player.Money, sess.player.ArenaPoints, sess.player.TotalHonorPoints)
+	}
+	var reagentCount int
+	if err := db.QueryRow("SELECT count FROM item_instance WHERE guid = 700").Scan(&reagentCount); err != nil || reagentCount != 2 {
+		t.Fatalf("reagent count=%d err=%v", reagentCount, err)
+	}
+	var productCount int
+	if err := db.QueryRow("SELECT COALESCE(SUM(ii.count), 0) FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item WHERE ci.guid = 1 AND ii.itemEntry = 5001").Scan(&productCount); err != nil || productCount != 1 {
+		t.Fatalf("product count=%d err=%v", productCount, err)
+	}
+}
+
 func TestVendorListEncodesUnlimitedStockAsFFFFFFFF(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -130,9 +199,9 @@ func TestVendorListEncodesUnlimitedStockAsFFFFFFFF(t *testing.T) {
 	defer db.Close()
 	for _, statement := range []string{
 		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
-		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER)",
 		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 0)",
-		"INSERT INTO item_template VALUES (5001, 100, 50, 100, 1)",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 100, 1, 0)",
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -179,10 +248,10 @@ func TestBuyItemSendsItemCreate(t *testing.T) {
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
-		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, FlagsExtra INTEGER)",
 		"CREATE TABLE npc_vendor (entry INTEGER, slot INTEGER, item INTEGER, maxcount INTEGER, incrtime INTEGER, ExtendedCost INTEGER)",
 		"INSERT INTO characters VALUES (1, 1000, '')",
-		"INSERT INTO item_template VALUES (5001, 100, 50, 10, 100, 1)",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 10, 100, 1, 0)",
 		"INSERT INTO npc_vendor VALUES (101, 1, 5001, 0, 0, 0)",
 	} {
 		if _, err := db.Exec(stmt); err != nil {
@@ -234,9 +303,9 @@ func TestVendorBuybackFullParityAndFields(t *testing.T) {
 		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER, PRIMARY KEY (guid, bag, slot))",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
-		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, ContainerSlots INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, BuyPrice INTEGER, SellPrice INTEGER, MaxDurability INTEGER, BuyCount INTEGER, ContainerSlots INTEGER, FlagsExtra INTEGER)",
 		"INSERT INTO characters VALUES (1, 1000, '')",
-		"INSERT INTO item_template VALUES (5001, 100, 50, 25, 100, 1, 0)",
+		"INSERT INTO item_template VALUES (5001, 100, 50, 25, 100, 1, 0, 0)",
 		"INSERT INTO item_instance (guid, itemEntry, owner_guid, count, durability) VALUES (500, 5001, 1, 1, 100)",
 		"INSERT INTO character_inventory VALUES (1, 0, 23, 500)",
 	} {

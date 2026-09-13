@@ -18,6 +18,44 @@ func TestPlayableRaceAndMountSpeedRules(t *testing.T) {
 	}
 }
 
+func TestItemExtendedCost(t *testing.T) {
+	dbcDir := t.TempDir()
+	const fieldCount = 15
+	record := make([]uint32, fieldCount)
+	record[0] = 7
+	record[1] = 100
+	record[2] = 200
+	record[3] = 1
+	for i := 0; i < MaxItemExtendedCostRequirements; i++ {
+		record[4+i] = uint32(5000 + i)
+		record[9+i] = uint32(2 + i)
+	}
+	record[14] = 1800
+	recordBytes := make([]byte, fieldCount*4)
+	for i, value := range record {
+		binary.LittleEndian.PutUint32(recordBytes[i*4:(i+1)*4], value)
+	}
+	header := make([]byte, 20)
+	copy(header, "WDBC")
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], fieldCount)
+	binary.LittleEndian.PutUint32(header[12:16], fieldCount*4)
+	binary.LittleEndian.PutUint32(header[16:20], 1)
+	if err := os.WriteFile(filepath.Join(dbcDir, "ItemExtendedCost.dbc"), append(header, append(recordBytes, 0)...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	entry, found, err := NewStore(dbcDir).ItemExtendedCost(7)
+	if err != nil || !found {
+		t.Fatalf("entry found=%v err=%v", found, err)
+	}
+	if entry.HonorPoints != 100 || entry.ArenaPoints != 200 || entry.ArenaBracket != 1 || entry.RequiredArenaRating != 1800 {
+		t.Fatalf("unexpected extended cost entry: %+v", entry)
+	}
+	if entry.ItemIDs[4] != 5004 || entry.ItemCounts[4] != 6 {
+		t.Fatalf("unexpected item requirements: ids=%v counts=%v", entry.ItemIDs, entry.ItemCounts)
+	}
+}
+
 func TestSpellRadius(t *testing.T) {
 	dbcDir := t.TempDir()
 	const fieldCount = 4

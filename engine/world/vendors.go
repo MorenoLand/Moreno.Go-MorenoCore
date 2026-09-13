@@ -2,8 +2,11 @@ package world
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -16,6 +19,15 @@ type vendorItemRecord struct {
 	MaxDurability uint32
 	BuyCount      uint32
 	ExtendedCost  uint32
+}
+
+const itemFlag2DontIgnoreBuyPrice uint32 = 0x00000004
+
+type vendorInventoryStack struct {
+	GUID  int64
+	Bag   int64
+	Slot  int64
+	Count uint64
 }
 
 type vendorStockKey struct {
@@ -113,7 +125,7 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 	}
 	creatureEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
 	rows, err := s.server.WorldStore.DB.QueryContext(ctx, `SELECT v.slot, v.item, v.maxcount, v.incrtime, v.ExtendedCost,
-		COALESCE(t.displayid, 0), COALESCE(t.BuyPrice, 0), COALESCE(t.MaxDurability, 0), COALESCE(t.BuyCount, 1)
+		COALESCE(t.displayid, 0), COALESCE(t.BuyPrice, 0), COALESCE(t.MaxDurability, 0), COALESCE(t.BuyCount, 1), COALESCE(t.FlagsExtra, 0)
 		FROM npc_vendor AS v
 		LEFT JOIN item_template AS t ON t.entry = v.item
 		WHERE v.entry = ? ORDER BY v.slot LIMIT 150`, creatureEntry)
@@ -125,9 +137,20 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 	var fallbackSlot uint32 = 1
 	isGM := s.player != nil && (s.player.PlayerFlags&playerFlagGM != 0 || s.player.ExtraFlags&playerExtraGMOn != 0)
 	for rows.Next() {
-		var slot, item, maxCount, incrTime, extCost, display, buyPrice, maxDur, buyCount int64
-		if err := rows.Scan(&slot, &item, &maxCount, &incrTime, &extCost, &display, &buyPrice, &maxDur, &buyCount); err != nil {
+		var slot, item, maxCount, incrTime, extCost, display, buyPrice, maxDur, buyCount, flagsExtra int64
+		if err := rows.Scan(&slot, &item, &maxCount, &incrTime, &extCost, &display, &buyPrice, &maxDur, &buyCount, &flagsExtra); err != nil {
 			continue
+		}
+		if extCost != 0 {
+			if s.server.Data == nil {
+				continue
+			}
+			if _, found, err := s.server.Data.ItemExtendedCost(uint32(extCost)); err != nil || !found {
+				continue
+			}
+			if flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) == 0 {
+				buyPrice = 0
+			}
 		}
 		itemSlot := uint32(slot)
 		if itemSlot == 0 {
@@ -213,8 +236,8 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		return true
 	}
 	vendorEntry := uint32((vendorGUID >> 24) & 0xFFFFFF)
-	var maxCount, incrTime, extCost, buyPrice, buyCount int64
-	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT v.maxcount, v.incrtime, v.ExtendedCost, t.BuyPrice, t.BuyCount FROM npc_vendor AS v JOIN item_template AS t ON t.entry = v.item WHERE v.entry = ? AND v.item = ? AND v.slot = ? LIMIT 1", vendorEntry, itemEntry, slot).Scan(&maxCount, &incrTime, &extCost, &buyPrice, &buyCount); err != nil {
+	var maxCount, incrTime, extCost, buyPrice, buyCount, flagsExtra int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT v.maxcount, v.incrtime, v.ExtendedCost, t.BuyPrice, t.BuyCount, COALESCE(t.FlagsExtra, 0) FROM npc_vendor AS v JOIN item_template AS t ON t.entry = v.item WHERE v.entry = ? AND v.item = ? AND v.slot = ? LIMIT 1", vendorEntry, itemEntry, slot).Scan(&maxCount, &incrTime, &extCost, &buyPrice, &buyCount, &flagsExtra); err != nil {
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 0), true)
 		return true
 	}
@@ -225,6 +248,12 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	if amount > uint64(^uint32(0)) {
 		return true
 	}
+	if extCost != 0 && flagsExtra&int64(itemFlag2DontIgnoreBuyPrice) == 0 {
+		buyPrice = 0
+	}
+	if uint64(buyPrice) > uint64(^uint32(0))/uint64(count) {
+		return true
+	}
 	totalCost := uint32(buyPrice) * count
 	remainingStock := int32(-1)
 	if maxCount > 0 {
@@ -233,16 +262,27 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 5), true)
 			return true
 		}
+	}
+	extendedCost, extendedCostResult, ok := s.vendorExtendedCost(ctx, uint32(extCost), count)
+	if !ok {
+		if extendedCostResult != equipErrOk {
+			s.sendEquipError(extendedCostResult, 0)
+		} else {
+			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 0), true)
+		}
+		return true
+	}
+	if s.player.Money < totalCost {
+		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 2), true)
+		return true
+	}
+	if maxCount > 0 {
 		var ok bool
 		remainingStock, ok = s.server.consumeVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), uint32(amount))
 		if !ok {
 			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 5), true)
 			return true
 		}
-	}
-	if s.player.Money < totalCost {
-		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 2), true) // BUY_ERR_NOT_ENOUGHT_MONEY = 2
-		return true
 	}
 	res, err := s.storeOrStackItem(ctx, s.playerGUID, itemEntry, uint32(amount))
 	if err != nil {
@@ -252,10 +292,24 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 1), true) // BUY_ERR_CANT_CARRY_MORE = 1
 		return true
 	}
+	if extendedCost.ID != 0 {
+		if err := s.destroyVendorExtendedCostItems(ctx, extendedCost, count); err != nil {
+			s.rollbackVendorStoredItem(ctx, res, uint32(amount))
+			if maxCount > 0 {
+				s.server.restoreVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), uint32(amount))
+			}
+			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, 0), true)
+			return true
+		}
+	}
 	s.player.Money -= totalCost
+	if extendedCost.ID != 0 {
+		s.player.TotalHonorPoints -= extendedCost.HonorPoints * count
+		s.player.ArenaPoints -= extendedCost.ArenaPoints * count
+	}
 	cdb := s.server.CharactersStore.DB
 	if cdb != nil {
-		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ? WHERE guid = ?", s.player.Money, s.playerGUID)
+		_, _ = cdb.ExecContext(ctx, "UPDATE characters SET money = ?, arenaPoints = ?, totalHonorPoints = ? WHERE guid = ?", s.player.Money, s.player.ArenaPoints, s.player.TotalHonorPoints, s.playerGUID)
 	}
 	newCount := uint32(remainingStock)
 	if maxCount <= 0 {
@@ -264,8 +318,189 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	_ = s.write(uint16(protocol.OpcodeSMSG_BUY_ITEM), buildBuySucceeded(vendorGUID, slot, newCount, count), true)
 	_ = s.sendInventoryItems(ctx)
 	s.sendPlayerUpdate()
-	s.debug("item bought from vendor", "account", s.accountName, "item", itemEntry, "count", count, "cost", totalCost, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
+	s.debug("item bought from vendor", "account", s.accountName, "item", itemEntry, "count", count, "cost", totalCost, "extended_cost", extCost, "slot", res.Slot, "bag", res.ClientBag, "stacked", res.IsStack)
 	return true
+}
+
+func (s *session) vendorExtendedCost(ctx context.Context, id, count uint32) (wotlk.ItemExtendedCostEntry, uint8, bool) {
+	if id == 0 {
+		return wotlk.ItemExtendedCostEntry{}, equipErrOk, true
+	}
+	if s.server == nil || s.server.Data == nil {
+		return wotlk.ItemExtendedCostEntry{}, equipErrOk, false
+	}
+	entry, found, err := s.server.Data.ItemExtendedCost(id)
+	if err != nil || !found {
+		return wotlk.ItemExtendedCostEntry{}, equipErrOk, false
+	}
+	if uint64(entry.HonorPoints)*uint64(count) > uint64(s.player.TotalHonorPoints) {
+		return entry, equipErrNotEnoughHonorPoints, false
+	}
+	if uint64(entry.ArenaPoints)*uint64(count) > uint64(s.player.ArenaPoints) {
+		return entry, equipErrNotEnoughArenaPoints, false
+	}
+	for i := 0; i < len(entry.ItemIDs); i++ {
+		if entry.ItemIDs[i] == 0 || entry.ItemCounts[i] == 0 {
+			continue
+		}
+		required := uint64(entry.ItemCounts[i]) * uint64(count)
+		available, err := s.vendorInventoryItemCount(ctx, entry.ItemIDs[i])
+		if err != nil || available < required {
+			return entry, equipErrVendorMissingTurnins, false
+		}
+	}
+	if entry.RequiredArenaRating != 0 && s.maxPersonalArenaRating(ctx, entry.ArenaBracket) < entry.RequiredArenaRating {
+		return entry, equipErrCantEquipRank, false
+	}
+	return entry, equipErrOk, true
+}
+
+func (s *session) vendorInventoryItemCount(ctx context.Context, itemEntry uint32) (uint64, error) {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0, errors.New("characters database not available")
+	}
+	var count int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, `SELECT COALESCE(SUM(ii.count), 0)
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ((ci.bag = 0 AND ci.slot BETWEEN 0 AND 38) OR ci.bag IN
+			(SELECT bag.item FROM character_inventory AS bag WHERE bag.guid = ? AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))
+		AND ii.itemEntry = ?`, s.playerGUID, s.playerGUID, itemEntry).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	if count < 0 {
+		return 0, errors.New("negative inventory count")
+	}
+	return uint64(count), nil
+}
+
+func (s *session) destroyVendorExtendedCostItems(ctx context.Context, entry wotlk.ItemExtendedCostEntry, count uint32) error {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return errors.New("characters database not available")
+	}
+	tx, err := s.server.CharactersStore.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < len(entry.ItemIDs); i++ {
+		if entry.ItemIDs[i] == 0 || entry.ItemCounts[i] == 0 {
+			continue
+		}
+		required := uint64(entry.ItemCounts[i]) * uint64(count)
+		if required > uint64(^uint32(0)) {
+			_ = tx.Rollback()
+			return errors.New("extended item cost overflow")
+		}
+		if err := s.destroyVendorInventoryItemCountTx(ctx, tx, entry.ItemIDs[i], uint32(required)); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *session) destroyVendorInventoryItemCountTx(ctx context.Context, tx *sql.Tx, itemEntry, count uint32) error {
+	if count == 0 {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT ci.item, ci.bag, ci.slot, ii.count
+		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
+		WHERE ci.guid = ? AND ((ci.bag = 0 AND ci.slot BETWEEN 0 AND 38) OR ci.bag IN
+			(SELECT bag.item FROM character_inventory AS bag WHERE bag.guid = ? AND bag.bag = 0 AND bag.slot BETWEEN 19 AND 22))
+		AND ii.itemEntry = ? ORDER BY ci.bag, ci.slot`, s.playerGUID, s.playerGUID, itemEntry)
+	if err != nil {
+		return err
+	}
+	stacks := make([]vendorInventoryStack, 0)
+	for rows.Next() {
+		var stack vendorInventoryStack
+		if err := rows.Scan(&stack.GUID, &stack.Bag, &stack.Slot, &stack.Count); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		stacks = append(stacks, stack)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	remaining := uint64(count)
+	for _, stack := range stacks {
+		if remaining == 0 {
+			break
+		}
+		used := stack.Count
+		if used > remaining {
+			used = remaining
+		}
+		if used == stack.Count {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, stack.GUID); err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", stack.GUID); err != nil {
+				return err
+			}
+		} else if _, err := tx.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ?", used, stack.GUID); err != nil {
+			return err
+		}
+		remaining -= used
+	}
+	if remaining != 0 {
+		return errors.New("extended item cost inventory changed")
+	}
+	return nil
+}
+
+func (s *session) rollbackVendorStoredItem(ctx context.Context, result *inventoryStoreResult, count uint32) {
+	if result == nil || count == 0 || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	cdb := s.server.CharactersStore.DB
+	if result.IsStack {
+		_, _ = cdb.ExecContext(ctx, "UPDATE item_instance SET count = count - ? WHERE guid = ? AND count >= ?", count, result.ItemGUID, count)
+		return
+	}
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM character_inventory WHERE guid = ? AND item = ?", s.playerGUID, result.ItemGUID)
+	_, _ = cdb.ExecContext(ctx, "DELETE FROM item_instance WHERE guid = ?", result.ItemGUID)
+}
+
+func (s *session) maxPersonalArenaRating(ctx context.Context, minSlot uint32) uint32 {
+	if s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return 0
+	}
+	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT t.type, t.rating, m.personalRating
+		FROM arena_team_member AS m JOIN arena_team AS t ON t.arenaTeamId = m.arenaTeamId WHERE m.guid = ?`, s.playerGUID)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	var maxRating uint32
+	for rows.Next() {
+		var teamType, teamRating, personalRating uint32
+		if rows.Scan(&teamType, &teamRating, &personalRating) != nil {
+			continue
+		}
+		slot := uint32(3)
+		switch teamType {
+		case 2:
+			slot = 0
+		case 3:
+			slot = 1
+		case 5:
+			slot = 2
+		}
+		if slot < minSlot {
+			continue
+		}
+		if teamRating < personalRating {
+			personalRating = teamRating
+		}
+		if personalRating > maxRating {
+			maxRating = personalRating
+		}
+	}
+	return maxRating
 }
 
 func (s *session) handleSellItem(ctx context.Context, payload []byte) bool {

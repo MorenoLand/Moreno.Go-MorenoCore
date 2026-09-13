@@ -985,6 +985,10 @@ const (
 	equipErrUniqueCantBeWrapped     = 47
 	equipErrBagsCantBeWrapped       = 48
 	equipErrInvFull                 = 50
+	equipErrCantEquipRank           = 63
+	equipErrVendorMissingTurnins    = 68
+	equipErrNotEnoughHonorPoints    = 69
+	equipErrNotEnoughArenaPoints    = 70
 )
 
 func (s *session) sendEquipError(errCode uint8, itemGUID uint64) {
