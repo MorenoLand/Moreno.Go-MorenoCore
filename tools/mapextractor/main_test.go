@@ -32,7 +32,7 @@ func TestParseWDTMainTiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Version != 18 || !info.HasMain || !info.HasGlobalWMO || info.TileCount != 2 || info.MPHD[0] != 0x1234 {
+	if info.Version != 18 || !info.HasMain || !info.HasGlobalWMO || info.GlobalWMO != "World\\Map.wmo" || info.TileCount != 2 || info.MPHD[0] != 0x1234 {
 		t.Fatalf("unexpected WDT info: %+v", info)
 	}
 	if info.Tiles[3][2].Exists != 1 || info.Tiles[3][2].Data != 7 || info.Tiles[63][63].Exists != 2 {

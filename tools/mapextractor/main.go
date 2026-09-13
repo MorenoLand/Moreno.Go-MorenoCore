@@ -43,7 +43,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "WDT parse failed: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Parsed %s: version=%d active_tiles=%d global_wmo=%t\n", filepath.Base(*wdtFile), info.Version, info.TileCount, info.HasGlobalWMO)
+		fmt.Printf("Parsed %s: version=%d active_tiles=%d global_wmo=%t name=%s\n", filepath.Base(*wdtFile), info.Version, info.TileCount, info.HasGlobalWMO, info.GlobalWMO)
 		if *input == "" {
 			return
 		}

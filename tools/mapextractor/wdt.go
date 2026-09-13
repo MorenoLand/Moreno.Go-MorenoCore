@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 const wdtMapSize = 64
@@ -20,6 +21,7 @@ type wdtInfo struct {
 	TileCount    int
 	HasMain      bool
 	HasGlobalWMO bool
+	GlobalWMO    string
 }
 
 func parseWDT(data []byte) (wdtInfo, error) {
@@ -65,6 +67,9 @@ func parseWDT(data []byte) (wdtInfo, error) {
 			info.HasMain = true
 		case "MWMO":
 			info.HasGlobalWMO = size > 0
+			if size > 0 {
+				info.GlobalWMO = strings.TrimRight(string(chunk), "\x00")
+			}
 		}
 		offset += size
 	}
