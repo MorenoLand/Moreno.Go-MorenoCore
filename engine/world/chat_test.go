@@ -87,6 +87,34 @@ func TestChatWithoutScriptingRuntimeDoesNotPanic(t *testing.T) {
 	}
 }
 
+func TestChatLanguageRejectionSendsReferenceNotification(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Name: "Tester", Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	payload := protocol.NewBuffer(16)
+	payload.WriteU32(chatSay)
+	payload.WriteU32(languageUniversal)
+	payload.WriteCString("hello")
+	done := make(chan bool, 1)
+	go func() { done <- state.handleMessageChat(context.Background(), payload.Bytes()) }()
+	opcode, response, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_NOTIFICATION) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(response)
+	if message, err := reader.ReadCString(); err != nil || message != "Unknown language" {
+		t.Fatalf("notification=%q err=%v", message, err)
+	}
+	if !<-done {
+		t.Fatal("chat rejection closed the session")
+	}
+}
+
 func TestHandleMessageChatBroadcastsSayToSender(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()

@@ -2,6 +2,7 @@ package world
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -52,6 +53,11 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if s.muteTime > time.Now().Unix() {
+		remaining := s.muteTime - time.Now().Unix()
+		if remaining < 1 {
+			remaining = 1
+		}
+		s.sendNotification(fmt.Sprintf("You must wait %d seconds before speaking again.", remaining))
 		s.debug("chat rejected", "account", s.accountName, "reason", "account muted", "mute_until", s.muteTime)
 		return true
 	}
@@ -78,15 +84,18 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	}
 	if language != languageAddon && typeID != chatAFK && typeID != chatDND {
 		if language == languageUniversal {
+			s.sendNotification("Unknown language")
 			s.debug("chat rejected", "account", s.accountName, "reason", "universal language")
 			return true
 		}
 		skill, known := languageSkill(language)
 		if !known {
+			s.sendNotification("Unknown language")
 			s.debug("chat rejected", "account", s.accountName, "reason", "unknown language", "language", language)
 			return true
 		}
 		if skill != 0 && !s.hasLanguageSkill(skill) && !s.hasLanguageAura(language) {
+			s.sendNotification("You don't know that language")
 			s.debug("chat rejected", "account", s.accountName, "reason", "language not learned", "language", language, "skill", skill)
 			return true
 		}
@@ -123,6 +132,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		return true
 	}
 	if typeID != chatWhisper && s.hasAura(1852) {
+		s.sendNotification(fmt.Sprintf("Silence is ON for %s", s.player.Name))
 		s.debug("chat rejected", "account", s.accountName, "reason", "GM silence aura", "spell", 1852)
 		return true
 	}
@@ -169,6 +179,11 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			return true
 		}
 		if required > 0 && uint32(s.player.Level) < required && !skipLevelRequirement {
+			message := "You cannot write to channels until you become level %d."
+			if typeID != chatChannel {
+				message = "You cannot say, yell or emote until you become level %d."
+			}
+			s.sendNotification(fmt.Sprintf(message, required))
 			s.debug("chat rejected", "account", s.accountName, "reason", "level requirement", "type", typeID, "required", required, "level", s.player.Level)
 			return true
 		}
@@ -221,6 +236,7 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 			return true
 		}
 		if !chatGMMode(s) && s.player != nil && uint32(s.player.Level) < s.server.Config.ChatWhisperLevelReq {
+			s.sendNotification(fmt.Sprintf("You cannot whisper until you become level %d.", s.server.Config.ChatWhisperLevelReq))
 			s.debug("chat rejected", "account", s.accountName, "reason", "whisper level requirement", "required", s.server.Config.ChatWhisperLevelReq, "level", s.player.Level)
 			return true
 		}
