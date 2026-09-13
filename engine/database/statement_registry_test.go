@@ -103,6 +103,45 @@ func TestSQLiteDialectOverridesExecuteGuildAndChannelUpserts(t *testing.T) {
 	}
 }
 
+func TestSQLiteDialectOverridesExecuteRBACAndCharacterBanStatements(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := &Store{Name: "auth", Backend: BackendSQLite, DB: db}
+	for _, statement := range []string{
+		"CREATE TABLE rbac_account_permissions (accountId INTEGER, permissionId INTEGER, granted INTEGER, realmId INTEGER, PRIMARY KEY (accountId, permissionId, realmId))",
+		"CREATE TABLE character_banned (guid INTEGER, bandate INTEGER, unbandate INTEGER, bannedby TEXT, banreason TEXT, active INTEGER)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	if _, err := store.ExecStatement(ctx, "LOGIN_INS_RBAC_ACCOUNT_PERMISSION", 7, 100, 1, -1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ExecStatement(ctx, "LOGIN_INS_RBAC_ACCOUNT_PERMISSION", 7, 100, 0, -1); err != nil {
+		t.Fatal(err)
+	}
+	var granted int
+	if err := db.QueryRow("SELECT granted FROM rbac_account_permissions WHERE accountId = 7 AND permissionId = 100 AND realmId = -1").Scan(&granted); err != nil || granted != 0 {
+		t.Fatalf("rbac granted=%d err=%v", granted, err)
+	}
+	if _, err := store.ExecStatement(ctx, "CHAR_INS_CHARACTER_BAN", 99, 60, "test", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	var bandate, unbandate int64
+	var bannedBy, reason string
+	if err := db.QueryRow("SELECT bandate, unbandate, bannedby, banreason FROM character_banned WHERE guid = 99").Scan(&bandate, &unbandate, &bannedBy, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if bandate <= 0 || unbandate-bandate != 60 || bannedBy != "test" || reason != "fixture" {
+		t.Fatalf("ban bandate=%d unbandate=%d bannedby=%q reason=%q", bandate, unbandate, bannedBy, reason)
+	}
+}
+
 func TestAllGeneratedStatementsResolveForConfiguredDialects(t *testing.T) {
 	backends := []Backend{BackendSQLite, BackendMySQL, BackendMariaDB}
 	for _, definition := range AllStatements() {
