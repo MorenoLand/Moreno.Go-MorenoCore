@@ -8,29 +8,31 @@ import (
 )
 
 type adtInfo struct {
-	HasMHDR          bool
-	HasMCIN          bool
-	HasMTEX          bool
-	HasMMDX          bool
-	HasMMID          bool
-	HasMWMO          bool
-	HasMWID          bool
-	HasMDDF          bool
-	HasMODF          bool
-	MCNKCount        int
-	MH2OCount        int
-	MCLQCount        int
-	MCVTCount        int
-	MCLYCount        int
-	MCALCount        int
-	MCVTHeights      int
-	HeightMin        float32
-	HeightMax        float32
-	MH2OHeaders      int
-	LiquidLayers     int
-	LiquidAttributes int
-	LiquidInstances  int
-	LiquidTiles      int
+	HasMHDR           bool
+	HasMCIN           bool
+	HasMTEX           bool
+	HasMMDX           bool
+	HasMMID           bool
+	HasMWMO           bool
+	HasMWID           bool
+	HasMDDF           bool
+	HasMODF           bool
+	MCNKCount         int
+	MH2OCount         int
+	MCLQCount         int
+	MCVTCount         int
+	MCLYCount         int
+	MCALCount         int
+	MCVTHeights       int
+	HeightMin         float32
+	HeightMax         float32
+	MH2OHeaders       int
+	LiquidLayers      int
+	LiquidAttributes  int
+	LiquidInstances   int
+	LiquidTiles       int
+	LiquidExistsBytes int
+	LiquidVertexBytes int
 }
 
 func parseADT(data []byte) (adtInfo, error) {
@@ -108,6 +110,7 @@ func parseMH2O(chunk []byte, info *adtInfo) error {
 		}
 		for layer := uint32(0); layer < layers; layer++ {
 			base := int(offsetInstances + layer*24)
+			lvf := binary.LittleEndian.Uint16(chunk[base+2:])
 			width, height := chunk[base+14], chunk[base+15]
 			if width == 0 || height == 0 || width > 8 || height > 8 {
 				return fmt.Errorf("invalid ADT MH2O liquid dimensions %d x %d", width, height)
@@ -120,10 +123,19 @@ func parseMH2O(chunk []byte, info *adtInfo) error {
 				if uint64(existsOffset)+uint64(bitmapBytes) > uint64(len(chunk)) {
 					return fmt.Errorf("invalid ADT MH2O exists bitmap offset %d", existsOffset)
 				}
+				info.LiquidExistsBytes += int(bitmapBytes)
 			}
 			vertexOffset := binary.LittleEndian.Uint32(chunk[base+20:])
-			if vertexOffset != 0 && uint64(vertexOffset) >= uint64(len(chunk)) {
-				return fmt.Errorf("invalid ADT MH2O vertex offset %d", vertexOffset)
+			if vertexOffset != 0 {
+				bytesPerVertex := map[uint16]uint64{0: 5, 1: 8, 2: 1, 3: 9}[lvf]
+				if bytesPerVertex == 0 {
+					return fmt.Errorf("unsupported ADT MH2O liquid vertex format %d", lvf)
+				}
+				vertexBytes := uint64(width+1) * uint64(height+1) * bytesPerVertex
+				if uint64(vertexOffset)+vertexBytes > uint64(len(chunk)) {
+					return fmt.Errorf("invalid ADT MH2O vertex offset %d", vertexOffset)
+				}
+				info.LiquidVertexBytes += int(vertexBytes)
 			}
 		}
 		if offsetAttributes != 0 {
