@@ -96,11 +96,14 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		if s.executeCommand(ctx, command) {
 			return true
 		}
-		values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, 42, scripting.PlayerEventCommand, s.luaPlayer(), command)
-		if hookErr != nil {
-			s.debug("lua command hook failed", "account", s.accountName, "error", hookErr)
+		if s.server.Features != nil && s.server.Features.Scripts != nil {
+			values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, 42, scripting.PlayerEventCommand, s.luaPlayer(), command)
+			if hookErr != nil {
+				s.debug("lua command hook failed", "account", s.accountName, "error", hookErr)
+			}
+			return !luaCancelled(values)
 		}
-		return !luaCancelled(values)
+		return true
 	}
 	if message == "" && typeID != chatAFK && typeID != chatDND {
 		return true
@@ -124,12 +127,14 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 	if (typeID == chatGuild || typeID == chatOfficer) && !s.guildChatSpeakAllowed(typeID == chatOfficer) {
 		return true
 	}
-	values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, scripting.PlayerEventChat, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
-	if hookErr != nil {
-		s.debug("lua chat hook failed", "account", s.accountName, "error", hookErr)
-	}
-	if luaCancelled(values) {
-		return true
+	if s.server.Features != nil && s.server.Features.Scripts != nil {
+		values, hookErr := s.server.Features.Scripts.TriggerPlayerEvent(ctx, scripting.PlayerEventChat, scripting.PlayerEventChat, s.luaPlayer(), message, typeID, language)
+		if hookErr != nil {
+			s.debug("lua chat hook failed", "account", s.accountName, "error", hookErr)
+		}
+		if luaCancelled(values) {
+			return true
+		}
 	}
 	var receiver *session
 	if typeID == chatWhisper {

@@ -71,6 +71,18 @@ func TestLuaChatHookCanCancelMessage(t *testing.T) {
 	}
 }
 
+func TestChatWithoutScriptingRuntimeDoesNotPanic(t *testing.T) {
+	server := &Server{sessions: make(map[*session]struct{})}
+	state := &session{server: server, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Name: "Tester"}}
+	payload := protocol.NewBuffer(16)
+	payload.WriteU32(chatSay)
+	payload.WriteU32(languageUniversal)
+	payload.WriteCString("hello")
+	if !state.handleMessageChat(context.Background(), payload.Bytes()) {
+		t.Fatal("chat without scripting runtime should remain handled")
+	}
+}
+
 func TestBroadcastSayUsesSenderReceiverGUID(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
