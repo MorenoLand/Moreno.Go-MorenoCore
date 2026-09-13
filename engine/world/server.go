@@ -287,6 +287,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 }
 
 func (s *Server) Initialize(ctx context.Context) error {
+	s.clearOnlineState(ctx)
 	if err := s.Features.Initialize(ctx); err != nil {
 		return err
 	}
@@ -301,6 +302,25 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadContinentTransports(ctx)
 	go s.runWorldTick(ctx)
 	return nil
+}
+
+func (s *Server) clearOnlineState(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	if s.AuthStore != nil && s.AuthStore.DB != nil {
+		if _, err := s.AuthStore.DB.ExecContext(ctx, "UPDATE account SET online = 0 WHERE online > 0 AND id IN (SELECT acctid FROM realmcharacters WHERE realmid = ?)", s.RealmID); err != nil && s.Logger != nil {
+			s.Logger.Warn("failed to clear online account state", "error", err)
+		}
+	}
+	if s.CharactersStore != nil && s.CharactersStore.DB != nil {
+		if _, err := s.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET online = 0 WHERE online <> 0"); err != nil && s.Logger != nil {
+			s.Logger.Warn("failed to clear online character state", "error", err)
+		}
+		if _, err := s.CharactersStore.DB.ExecContext(ctx, "UPDATE character_battleground_data SET instanceId = 0"); err != nil && s.Logger != nil {
+			s.Logger.Warn("failed to reset battleground instance state", "error", err)
+		}
+	}
 }
 
 func (s *Server) Stop() {
