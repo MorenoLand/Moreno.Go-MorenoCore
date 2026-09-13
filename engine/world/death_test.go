@@ -290,6 +290,39 @@ func TestResurrectPersistsLiveCharacterState(t *testing.T) {
 	}
 }
 
+func TestSendLoadedCorpseReplaysGhostPackets(t *testing.T) {
+	player := &playerState{GUID: 9, Health: 1, MaxHealth: 100, PlayerFlags: playerFlagGhost}
+	state, clientConn, server := newDeathTestSession(t, player)
+	if _, err := server.CharactersStore.DB.Exec("INSERT INTO corpse (guid, posX, posY, posZ, orientation, mapId, displayId, itemCache, flags, dynFlags, time, corpseType) VALUES (9, 100, 200, 30, 0.75, 0, 42, '', 4, 0, ?, 1)", time.Now().Unix()-3600); err != nil {
+		t.Fatal(err)
+	}
+	frames := make(chan uint16, 3)
+	go func() {
+		for i := 0; i < 3; i++ {
+			op, _, err := readServerFrame(clientConn, nil)
+			if err != nil {
+				return
+			}
+			frames <- op
+		}
+	}()
+	state.sendLoadedCorpse(context.Background())
+	want := []uint16{uint16(protocol.OpcodeSMSG_UPDATE_OBJECT), uint16(protocol.OpcodeSMSG_CORPSE_RECLAIM_DELAY), uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK)}
+	for _, expected := range want {
+		select {
+		case got := <-frames:
+			if expected == uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && got != expected && got != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+				t.Fatalf("expected corpse update opcode, got %x", got)
+			}
+			if expected != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && got != expected {
+				t.Fatalf("expected opcode %x, got %x", expected, got)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timeout waiting for opcode %x", expected)
+		}
+	}
+}
+
 // drainServerFrames consumes everything the session writes so synchronous
 // net.Pipe writes cannot deadlock tests that do not assert packet order.
 func drainServerFrames(t *testing.T, conn net.Conn) {

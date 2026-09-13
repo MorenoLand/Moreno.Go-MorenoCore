@@ -33,6 +33,7 @@ const (
 
 	corpseTypeBones     uint32 = 0
 	corpseTypePvE       uint32 = 1 // CORPSE_RESURRECTABLE_PVE
+	corpseTypePvP       uint32 = 2 // CORPSE_RESURRECTABLE_PVP
 	corpseFlagBones     uint32 = 0x01
 	corpseFlagUnk2      uint32 = 0x04
 	playerFlagHideHelm  uint32 = 0x00000400
@@ -548,6 +549,8 @@ func (s *Server) updateSpiritHealerResurrectWaves(ctx context.Context, now time.
 type corpseObjectState struct {
 	MapID, DisplayID, Bytes1, Bytes2, Flags, DynamicFlags uint32
 	GuildID                                               uint32
+	CorpseType                                            uint32
+	GhostTime                                             int64
 	X, Y, Z, Orientation                                  float32
 }
 
@@ -566,11 +569,35 @@ func (s *session) loadCorpseObject(ctx context.Context) (corpseObjectState, bool
 	corpse.Bytes2 = uint32(bytes2)
 	corpse.Flags = uint32(flags)
 	corpse.DynamicFlags = uint32(dynamicFlags)
+	corpse.CorpseType = uint32(corpseType)
+	corpse.GhostTime = ghostTime
 	var guildID int64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT guildId FROM corpse WHERE guid = ?", s.playerGUID).Scan(&guildID); err == nil {
 		corpse.GuildID = uint32(guildID)
 	}
 	return corpse, true
+}
+
+func (s *session) sendLoadedCorpse(ctx context.Context) {
+	corpse, ok := s.loadCorpseObject(ctx)
+	if !ok {
+		return
+	}
+	flags := corpse.Flags
+	if flags == 0 {
+		flags = corpseFlagUnk2
+	}
+	corpseGUID := s.playerGUID | (uint64(0xF101) << 48)
+	fields := corpseObjectFields{OwnerGUID: s.playerGUID, DisplayID: corpse.DisplayID, Bytes1: corpse.Bytes1, Bytes2: corpse.Bytes2, GuildID: corpse.GuildID, Flags: flags, DynamicFlags: corpse.DynamicFlags}
+	block := buildCorpseCreateBlockWithFields(corpseGUID, fields, corpse.X, corpse.Y, corpse.Z, corpse.Orientation)
+	updates := protocol.NewUpdateData()
+	updates.AddUpdateBlock(block)
+	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
+		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		s.server.broadcastToNearby(packet.Opcode, packet.Payload.Bytes(), s)
+	}
+	s.sendCorpseReclaimDelay(s.corpseReclaimDelaySeconds(corpse.CorpseType == corpseTypePvP))
+	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK))
 }
 
 func battlegroundMap(mapID uint32) bool {
