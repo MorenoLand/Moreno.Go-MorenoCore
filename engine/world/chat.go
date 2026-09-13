@@ -66,6 +66,8 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat rejected", "account", s.accountName, "reason", "malformed language", "error", err)
 		return true
 	}
+	languageSkillID, languageKnown := languageSkill(language)
+	s.debug("chat packet received", "account", s.accountName, "guid", s.playerGUID, "character", s.player.Name, "type", typeID, "language", language, "language_skill", languageSkillID, "language_known", languageKnown, "loaded_skill_count", len(s.player.Skills))
 	if typeID >= maxChatMessageType {
 		s.debug("chat rejected", "account", s.accountName, "reason", "invalid message type", "type", typeID)
 		return true
