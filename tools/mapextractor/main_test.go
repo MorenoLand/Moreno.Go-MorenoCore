@@ -1,12 +1,55 @@
 package main
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/tools/wowdata"
 )
+
+func wdtChunk(name string, payload []byte) []byte {
+	chunk := make([]byte, 8+len(payload))
+	copy(chunk, name)
+	binary.LittleEndian.PutUint32(chunk[4:8], uint32(len(payload)))
+	copy(chunk[8:], payload)
+	return chunk
+}
+
+func TestParseWDTMainTiles(t *testing.T) {
+	mphd := make([]byte, 32)
+	binary.LittleEndian.PutUint32(mphd, 0x1234)
+	main := make([]byte, 64*64*8)
+	binary.LittleEndian.PutUint32(main[(3*64+2)*8:], 1)
+	binary.LittleEndian.PutUint32(main[(3*64+2)*8+4:], 7)
+	binary.LittleEndian.PutUint32(main[(63*64+63)*8:], 2)
+	data := append(wdtChunk("MVER", func() []byte { b := make([]byte, 4); binary.LittleEndian.PutUint32(b, 18); return b }()), wdtChunk("MPHD", mphd)...)
+	data = append(data, wdtChunk("MAIN", main)...)
+	data = append(data, wdtChunk("MWMO", []byte("World\\Map.wmo\x00"))...)
+	info, err := parseWDT(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Version != 18 || !info.HasMain || !info.HasGlobalWMO || info.TileCount != 2 || info.MPHD[0] != 0x1234 {
+		t.Fatalf("unexpected WDT info: %+v", info)
+	}
+	if info.Tiles[3][2].Exists != 1 || info.Tiles[3][2].Data != 7 || info.Tiles[63][63].Exists != 2 {
+		t.Fatalf("unexpected WDT tile data: %+v", info.Tiles[3][2])
+	}
+}
+
+func TestParseWDTRejectsMissingMain(t *testing.T) {
+	if _, err := parseWDT(wdtChunk("MVER", []byte{18, 0, 0, 0})); err == nil {
+		t.Fatal("expected missing MAIN error")
+	}
+}
+
+func TestParseWDTRejectsTruncatedMain(t *testing.T) {
+	if _, err := parseWDT(wdtChunk("MAIN", make([]byte, 8))); err == nil {
+		t.Fatal("expected truncated MAIN error")
+	}
+}
 
 func TestExtractDBCMissingDirectory(t *testing.T) {
 	tempDir := t.TempDir()
