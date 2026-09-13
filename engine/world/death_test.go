@@ -132,6 +132,39 @@ func floatBits(value float32) uint32 {
 	return math.Float32bits(value)
 }
 
+func TestBuildCorpseCreateBlockMatchesReferencePositionLayout(t *testing.T) {
+	guid := uint64(9) | uint64(0xF101)<<48
+	block := buildCorpseCreateBlock(guid, 9, 1234, 1.5, 2.5, 3.5, 0.75, false)
+	r := protocol.NewReader(block)
+	if value, err := r.ReadU8(); err != nil || value != protocol.UpdateCreateObject2 {
+		t.Fatalf("update type=%d err=%v", value, err)
+	}
+	if value, err := r.ReadPackedGUID(); err != nil || value != guid {
+		t.Fatalf("guid=%x err=%v", value, err)
+	}
+	if value, err := r.ReadU8(); err != nil || value != 7 {
+		t.Fatalf("object type=%d err=%v", value, err)
+	}
+	if value, err := r.ReadU16(); err != nil || value != 0x0150 {
+		t.Fatalf("update flags=%x err=%v", value, err)
+	}
+	if value, err := r.ReadU8(); err != nil || value != 0 {
+		t.Fatalf("transport guid marker=%d err=%v", value, err)
+	}
+	for _, want := range []float32{1.5, 2.5, 3.5, 1.5, 2.5, 3.5, 0.75, 0.75} {
+		value, err := r.ReadF32()
+		if err != nil || value != want {
+			t.Fatalf("position value=%v want=%v err=%v", value, want, err)
+		}
+	}
+	if value, err := r.ReadU32(); err != nil || value != uint32(guid) {
+		t.Fatalf("low guid=%x want=%x err=%v", value, uint32(guid), err)
+	}
+	if blocks, err := r.ReadU8(); err != nil || blocks != 2 {
+		t.Fatalf("mask blocks=%d err=%v", blocks, err)
+	}
+}
+
 // drainServerFrames consumes everything the session writes so synchronous
 // net.Pipe writes cannot deadlock tests that do not assert packet order.
 func drainServerFrames(t *testing.T, conn net.Conn) {

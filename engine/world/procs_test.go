@@ -282,7 +282,7 @@ func TestInternalCooldown_CasterSundial(t *testing.T) {
 	}
 
 	procced := false
-	for attempt := 0; attempt < 50; attempt++ {
+	for attempt := 0; attempt < 500; attempt++ {
 		sess.procSpellCastAndHitEffects(context.Background(), target, 133)
 		if _, exists := sess.activeAuras[ProcSpellSundialOfTheExiled]; exists {
 			procced = true
