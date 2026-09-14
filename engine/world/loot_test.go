@@ -549,6 +549,17 @@ func TestFishingNodeUsesFishingLootTemplate(t *testing.T) {
 	}
 }
 
+func TestFishingHoleBypassesLowSkillChance(t *testing.T) {
+	server := &Server{dynamicGameObjects: map[uint64]*dynamicGameObjectState{
+		2: {GUID: 2, Map: 0, X: 20, Y: 20, Z: 0, Type: GameObjectTypeFishingHole},
+	}}
+	sess := &session{server: server}
+	bobber := &dynamicGameObjectState{GUID: 1, Map: 0, X: 20, Y: 20, Z: 0, Type: GameObjectTypeFishingNode}
+	if !sess.fishingHoleNearby(context.Background(), bobber) {
+		t.Fatal("nearby dynamic fishing hole was not detected")
+	}
+}
+
 func TestGroupLootRollState_NeedWon(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

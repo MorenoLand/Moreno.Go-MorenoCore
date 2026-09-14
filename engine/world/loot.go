@@ -433,7 +433,7 @@ func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goSt
 			chance = 1
 		}
 	}
-	success := rand.Intn(100)+1 <= chance
+	success := s.fishingHoleNearby(ctx, goState) || rand.Intn(100)+1 <= chance
 	loadRows := func(entry uint32, lootMode uint32) error {
 		rows, queryErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0)
 			FROM fishing_loot_template AS l LEFT JOIN item_template AS t ON t.entry = l.Item
@@ -485,6 +485,29 @@ func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goSt
 	s.activeLoot = loot
 	s.interruptCurrentCast()
 	return s.sendLootResponse(loot) == nil
+}
+
+func (s *session) fishingHoleNearby(ctx context.Context, bobber *dynamicGameObjectState) bool {
+	if s == nil || s.server == nil || bobber == nil {
+		return false
+	}
+	s.server.objectsMu.RLock()
+	for _, object := range s.server.dynamicGameObjects {
+		if object != nil && object.Type == GameObjectTypeFishingHole && object.Map == bobber.Map && distance3D(object.X, object.Y, object.Z, bobber.X, bobber.Y, bobber.Z) <= 20.0 {
+			s.server.objectsMu.RUnlock()
+			return true
+		}
+	}
+	s.server.objectsMu.RUnlock()
+	if s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return false
+	}
+	var found int
+	err := s.server.WorldStore.DB.QueryRowContext(ctx, `SELECT 1
+		FROM gameobject AS g JOIN gameobject_template AS t ON t.entry = g.id
+		WHERE g.map = ? AND t.type = ? AND g.position_x BETWEEN ? AND ? AND g.position_y BETWEEN ? AND ?
+		LIMIT 1`, bobber.Map, GameObjectTypeFishingHole, bobber.X-20, bobber.X+20, bobber.Y-20, bobber.Y+20).Scan(&found)
+	return err == nil && found == 1
 }
 
 func (s *session) sendLootResponse(loot *activeLootState) error {
