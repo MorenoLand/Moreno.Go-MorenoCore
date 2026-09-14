@@ -187,7 +187,7 @@ func TestSendLoginMovementStatesUsesReferenceCompoundPacket(t *testing.T) {
 	if err != nil || int(size) != reader.Remaining() {
 		t.Fatalf("compound size=%d remaining=%d err=%v", size, reader.Remaining(), err)
 	}
-	want := []uint16{uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT), uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK), uint16(protocol.OpcodeSMSG_MOVE_FEATHER_FALL), uint16(protocol.OpcodeSMSG_MOVE_SET_HOVER)}
+	want := []uint16{uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT), uint16(protocol.OpcodeSMSG_MOVE_FEATHER_FALL), uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK), uint16(protocol.OpcodeSMSG_MOVE_SET_HOVER)}
 	for _, expected := range want {
 		length, err := reader.ReadU8()
 		if err != nil || length != uint8(2+packedGUIDSize(9)+4) {

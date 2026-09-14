@@ -630,24 +630,28 @@ func (s *session) sendLoginMovementStates() error {
 	)
 	auras := s.loadedAuras()
 	state := protocol.NewBuffer(64)
-	for _, aura := range auras {
+	for _, auraType := range []uint32{auraRoot, auraFeatherFall, auraWaterWalk, auraHover} {
 		var opcode protocol.Opcode
-		switch aura.AuraType {
+		switch auraType {
 		case auraRoot:
 			opcode = protocol.OpcodeSMSG_FORCE_MOVE_ROOT
-		case auraWaterWalk:
-			opcode = protocol.OpcodeSMSG_MOVE_WATER_WALK
 		case auraFeatherFall:
 			opcode = protocol.OpcodeSMSG_MOVE_FEATHER_FALL
+		case auraWaterWalk:
+			opcode = protocol.OpcodeSMSG_MOVE_WATER_WALK
 		case auraHover:
 			opcode = protocol.OpcodeSMSG_MOVE_SET_HOVER
-		default:
-			continue
 		}
-		state.WriteU8(uint8(2 + packedGUIDSize(s.playerGUID) + 4))
-		state.WriteU16(uint16(opcode))
-		state.WritePackedGUID(s.playerGUID)
-		state.WriteU32(0)
+		for _, aura := range auras {
+			if aura == nil || aura.AuraType != auraType {
+				continue
+			}
+			state.WriteU8(uint8(2 + packedGUIDSize(s.playerGUID) + 4))
+			state.WriteU16(uint16(opcode))
+			state.WritePackedGUID(s.playerGUID)
+			state.WriteU32(0)
+			break
+		}
 	}
 	if state.Len() == 0 {
 		return nil

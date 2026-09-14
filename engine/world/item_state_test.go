@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"net"
 	"testing"
-	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -101,28 +100,38 @@ func TestSendInventoryItemsIncludesPersistedState(t *testing.T) {
 		playerLoaded: true,
 		player:       &playerState{GUID: 1},
 	}
-	packetCh := make(chan []byte, 1)
+	sendDone := make(chan error, 1)
 	go func() {
-		opcode, payload, readErr := readServerFrame(client, nil)
+		sendDone <- sess.sendInventoryItems(context.Background())
+		_ = serverConn.Close()
+	}()
+	var payload []byte
+	var firstOpcode uint16
+	for {
+		opcode, framePayload, readErr := readServerFrame(client, nil)
 		if readErr != nil {
-			return
+			break
 		}
+		if payload != nil {
+			continue
+		}
+		firstOpcode = opcode
+		payload = framePayload
 		if opcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
 			payload, readErr = protocol.DecompressUpdatePayload(payload)
 			if readErr != nil {
-				return
+				t.Fatal(readErr)
 			}
 		}
-		packetCh <- payload
-	}()
-	if err := sess.sendInventoryItems(context.Background()); err != nil {
+	}
+	if err := <-sendDone; err != nil {
 		t.Fatal(err)
 	}
-	var payload []byte
-	select {
-	case payload = <-packetCh:
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting for inventory update")
+	if firstOpcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && firstOpcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("first inventory opcode=%x", firstOpcode)
+	}
+	if payload == nil {
+		t.Fatal("inventory update was not sent")
 	}
 	r := protocol.NewReader(payload)
 	blocks, err := r.ReadU32()
