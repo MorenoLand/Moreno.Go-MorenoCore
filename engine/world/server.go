@@ -2892,6 +2892,11 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		_ = s.write(opcodeAuthResponse, []byte{authUnknownAccount}, false)
 		return false
 	}
+	if s.server.Config.WardenEnabled && !wardenOSAllowed(account.OS) {
+		s.debug("world authentication rejected", "account", debugAccount, "reason", "invalid client OS", "os", account.OS)
+		_ = s.write(opcodeAuthResponse, []byte{authReject}, false)
+		return false
+	}
 	if realmID != s.server.RealmID {
 		s.debug("world authentication rejected", "account", debugAccount, "reason", "realm mismatch", "realm", realmID)
 		_ = s.write(opcodeAuthResponse, []byte{loginServerNotFound}, false)
@@ -2923,6 +2928,7 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		_ = s.write(opcodeAuthResponse, []byte{authFailed}, false)
 		return false
 	}
+	account.MuteTime = normalizeLoginMuteTime(ctx, s.server.AuthStore.DB, account.ID, account.MuteTime)
 	s.server.kickDuplicateAccountSessions(account.ID, s)
 	if _, err := s.server.AuthStore.ExecStatement(ctx, "LOGIN_UPD_ACCOUNT_ONLINE", account.ID); err != nil {
 		return false
@@ -2988,6 +2994,19 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		}
 	}
 	return true
+}
+
+func wardenOSAllowed(osName string) bool { return osName == "Win" || osName == "OSX" }
+
+func normalizeLoginMuteTime(ctx context.Context, db *sql.DB, accountID uint32, muteTime int64) int64 {
+	if muteTime >= 0 {
+		return muteTime
+	}
+	absolute := time.Now().Unix() - muteTime
+	if db != nil {
+		_, _ = db.ExecContext(ctx, "UPDATE account SET mutetime = ? WHERE id = ?", absolute, accountID)
+	}
+	return absolute
 }
 
 func (s *Server) kickDuplicateAccountSessions(accountID uint32, current *session) {
