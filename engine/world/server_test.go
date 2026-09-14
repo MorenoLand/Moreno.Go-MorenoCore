@@ -107,6 +107,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if addonOpcode != uint16(protocol.OpcodeSMSG_ADDON_INFO) || !bytes.Equal(addonPayload, []byte{0, 0, 0, 0}) {
 		t.Fatalf("addon info opcode=%x payload=%x", addonOpcode, addonPayload)
 	}
+	tutorialOpcode, tutorialPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tutorialOpcode != uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS) || len(tutorialPayload) != 32 {
+		t.Fatalf("tutorial opcode=%x payload=%d", tutorialOpcode, len(tutorialPayload))
+	}
 	ping := protocol.NewBuffer(8)
 	ping.WriteU32(123)
 	ping.WriteU32(45)
@@ -238,22 +245,8 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if reputationOpcode != uint16(protocol.OpcodeSMSG_INITIALIZE_FACTIONS) || len(reputationPayload) != 644 {
 		t.Fatalf("reputation opcode=%x payload=%d", reputationOpcode, len(reputationPayload))
 	}
-	forcedOpcode, forcedPayload, err := readServerFrame(clientConn, clientCrypt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if forcedOpcode != uint16(protocol.OpcodeSMSG_SET_FORCED_REACTIONS) || len(forcedPayload) != 4 {
-		t.Fatalf("forced reactions opcode=%x payload=%d", forcedOpcode, len(forcedPayload))
-	}
-	tutOpcode, tutPayload, err := readServerFrame(clientConn, clientCrypt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tutOpcode != uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS) || len(tutPayload) != 32 {
-		t.Fatalf("tutorial opcode=%x payload=%d", tutOpcode, len(tutPayload))
-	}
 	// Reference login order sends the achievement dump right after the
-	// tutorial flags (AchievementMgr::SendAllAchievementData).
+	// faction state (AchievementMgr::SendAllAchievementData).
 	achOpcode, achPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
@@ -270,6 +263,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	}
 	if timeOpcode != uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED) || len(timePayload) != 12 {
 		t.Fatalf("time opcode=%x payload=%d", timeOpcode, len(timePayload))
+	}
+	forcedOpcode, forcedPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forcedOpcode != uint16(protocol.OpcodeSMSG_SET_FORCED_REACTIONS) || len(forcedPayload) != 4 {
+		t.Fatalf("forced reactions opcode=%x payload=%d", forcedOpcode, len(forcedPayload))
 	}
 	chatOpcode, chatPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {

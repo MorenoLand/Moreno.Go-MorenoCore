@@ -2948,6 +2948,9 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	if err := s.write(uint16(protocol.OpcodeSMSG_ADDON_INFO), buildAddonInfoResponse(b.Bytes()[b.Position():]), true); err != nil {
 		return false
 	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS), buildTutorialFlags(s.tutorials), true); err != nil {
+		return false
+	}
 
 	if s.server.Config.WardenEnabled && len(account.SessionKey) == crypto.SRP6SessionKeyLength {
 		w, err := newWardenSession(s, account.SessionKey)

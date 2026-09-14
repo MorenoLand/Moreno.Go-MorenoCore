@@ -452,15 +452,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_INITIALIZE_FACTIONS), buildInitialReputations(state), true); err != nil {
 		return false
 	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_SET_FORCED_REACTIONS), buildForcedReactions(), true); err != nil {
-		return false
-	}
-	if err := s.sendResyncRunes(); err != nil {
-		return false
-	}
-	if err := s.write(uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS), buildTutorialFlags(s.tutorials), true); err != nil {
-		return false
-	}
 	s.loadAchievementState(ctx)
 	s.loadExploredZones(ctx)
 	// Reference Player::LoadFromDB: AT_LOGIN_RESET_TALENTS resets talents
@@ -481,6 +472,15 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.debug("world login stage", "stage", "equipment-set-list-start", "guid", guid)
 	s.sendEquipmentSetList(ctx)
 	s.debug("world login stage", "stage", "equipment-set-list-complete", "guid", guid)
+	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), buildLoginSetTimeSpeed(time.Now()), true); err != nil {
+		return false
+	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_SET_FORCED_REACTIONS), buildForcedReactions(), true); err != nil {
+		return false
+	}
+	if err := s.sendResyncRunes(); err != nil {
+		return false
+	}
 	// Persist cinematic state before spawning into world (TC: CharacterHandler.cpp)
 	// The actual SMSG_TRIGGER_CINEMATIC is sent after SMSG_UPDATE_OBJECT (player spawn)
 	// so the client world is loaded when the cinematic begins.
@@ -509,10 +509,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
 	s.debug("world login stage", "stage", "player-login-hooks-complete", "guid", guid)
-	timePacket := buildLoginSetTimeSpeed(time.Now())
-	if err := s.write(uint16(protocol.OpcodeSMSG_LOGIN_SET_TIME_SPEED), timePacket, true); err != nil {
-		return false
-	}
 	s.server.Features.OnPlayerLogin()
 	if s.server.Config.SoloLFGAnnounce {
 		message := protocol.BuildSystemChatMessage("This server is running |cff4CFF00Solo Dungeon Finder|r module.")
