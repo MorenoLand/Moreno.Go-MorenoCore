@@ -271,6 +271,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if forcedOpcode != uint16(protocol.OpcodeSMSG_SET_FORCED_REACTIONS) || len(forcedPayload) != 4 {
 		t.Fatalf("forced reactions opcode=%x payload=%d", forcedOpcode, len(forcedPayload))
 	}
+	cinOpcode, cinPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cinOpcode != uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC) || len(cinPayload) != 4 {
+		t.Fatalf("cinematic opcode=%x payload=%d", cinOpcode, len(cinPayload))
+	}
 	chatOpcode, chatPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
@@ -313,13 +320,6 @@ func TestAuthSessionAndPing(t *testing.T) {
 	}
 	if timeSyncOpcode != uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ) || len(timeSyncPayload) != 4 {
 		t.Fatalf("time sync opcode=%x payload=%d", timeSyncOpcode, len(timeSyncPayload))
-	}
-	cinOpcode, cinPayload, err := readServerFrame(clientConn, clientCrypt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cinOpcode != uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC) || len(cinPayload) != 4 {
-		t.Fatalf("cinematic opcode=%x payload=%d", cinOpcode, len(cinPayload))
 	}
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_TIME_SYNC_RESP), []byte{0, 0, 0, 0, 0, 0, 0, 0}, clientCrypt); err != nil {
 		t.Fatal(err)

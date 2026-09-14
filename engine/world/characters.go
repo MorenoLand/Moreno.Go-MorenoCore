@@ -481,9 +481,8 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.sendResyncRunes(); err != nil {
 		return false
 	}
-	// Persist cinematic state before spawning into world (TC: CharacterHandler.cpp)
-	// The actual SMSG_TRIGGER_CINEMATIC is sent after SMSG_UPDATE_OBJECT (player spawn)
-	// so the client world is loaded when the cinematic begins.
+	// TrinityCore sends the first-login cinematic after the pre-map packet set and
+	// before the player is added to the map.
 	sendCinematic := false
 	if state.Cinematic == 0 {
 		cinematicID := s.getStartingCinematicID(state.Race, state.Class)
@@ -494,6 +493,16 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET cinematic = 1 WHERE guid = ?", guid); err != nil {
 			s.debug("cinematic state save failed", "account", s.accountName, "guid", guid, "error", err)
 			return false
+		}
+	}
+	if sendCinematic {
+		cinematicID := s.getStartingCinematicID(state.Race, state.Class)
+		if cinematicID > 0 {
+			cinematicBuf := protocol.NewBuffer(4)
+			cinematicBuf.WriteU32(cinematicID)
+			if err := s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), cinematicBuf.Bytes(), true); err != nil {
+				return false
+			}
 		}
 	}
 	if _, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHAR_ONLINE", guid); err != nil {
@@ -572,15 +581,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = state.X, state.Y, state.Z
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
-	}
-	// Send starting cinematic AFTER player is fully spawned (TC: SendInitialPacketsAfterAddToMap)
-	if sendCinematic {
-		cinematicID := s.getStartingCinematicID(state.Race, state.Class)
-		if cinematicID > 0 {
-			cinematicBuf := protocol.NewBuffer(4)
-			cinematicBuf.WriteU32(cinematicID)
-			_ = s.write(uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC), cinematicBuf.Bytes(), true)
-		}
 	}
 	// Spawn active pet if one was active at logout (slot 0)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
