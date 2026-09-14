@@ -264,10 +264,12 @@ func TestOpenReadsEmbeddedVersionOneArchive(t *testing.T) {
 	binary.LittleEndian.PutUint32(blocks[0:], uint32(fileOffset))
 	binary.LittleEndian.PutUint32(blocks[4:], uint32(len(listfile)))
 	binary.LittleEndian.PutUint32(blocks[8:], uint32(len(listfile)))
-	binary.LittleEndian.PutUint32(blocks[12:], fileExists|fileSingle)
+	binary.LittleEndian.PutUint32(blocks[12:], fileExists|fileSingle|fileEncrypt)
 	encryptMPQFixture(blocks, hashString("(block table)", 3))
 	copy(data[archiveOffset+extendedOffset:], []byte{0, 0})
-	copy(data[archiveOffset+fileOffset:], listfile)
+	encryptedListfile := append([]byte(nil), listfile...)
+	encryptMPQFixture(encryptedListfile, hashString("(listfile)", 3))
+	copy(data[archiveOffset+fileOffset:], encryptedListfile)
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
