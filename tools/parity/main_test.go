@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -90,6 +92,42 @@ func TestClientOpcodesFilter(t *testing.T) {
 	for _, op := range filtered {
 		if !strings.HasPrefix(op, "CMSG_") && !strings.HasPrefix(op, "MSG_") {
 			t.Fatalf("unexpected non-client opcode: %s", op)
+		}
+	}
+}
+
+func TestGeneratedHandleNullAuditHasEvidenceAndGoDispatchCoverage(t *testing.T) {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not locate parity package")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
+	report, err := os.ReadFile(filepath.Join(root, "docs", "PARITY_COVERAGE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := os.ReadFile(filepath.Join(root, "engine", "world", "server.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(report)
+	start := strings.Index(text, "## Handle_NULL status audit")
+	end := strings.Index(text[start:], "## Missing prepared statements")
+	if start < 0 || end < 0 {
+		t.Fatal("generated Handle_NULL audit section is missing")
+	}
+	section := text[start : start+end]
+	rowPattern := regexp.MustCompile(`(?m)^\| \x60((?:CMSG|MSG)_[A-Z0-9_]+)\x60 \| \x60(STATUS_[A-Z0-9_]+)\x60 \| ([^|]+) \| ([^|]+) \|$`)
+	rows := rowPattern.FindAllStringSubmatch(section, -1)
+	if len(rows) < 290 {
+		t.Fatalf("Handle_NULL audit rows=%d, want at least 290", len(rows))
+	}
+	for _, row := range rows {
+		if strings.TrimSpace(row[3]) == "" || strings.TrimSpace(row[4]) == "" {
+			t.Fatalf("Handle_NULL row lacks classification/evidence: %v", row)
+		}
+		if !strings.Contains(string(server), "protocol.Opcode"+row[1]) {
+			t.Fatalf("Handle_NULL opcode %s has no Go dispatch reference", row[1])
 		}
 	}
 }
