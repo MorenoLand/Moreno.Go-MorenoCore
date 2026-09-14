@@ -230,7 +230,10 @@ func vendorStockValue(maxCount int64) int32 {
 }
 
 func vendorPacketStock(current int32) uint32 {
-	if current <= 0 {
+	if current < 0 {
+		return ^uint32(0)
+	}
+	if current == 0 {
 		return 0
 	}
 	return uint32(current)
