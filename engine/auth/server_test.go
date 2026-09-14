@@ -243,6 +243,22 @@ func TestReconnectChallengeAndProof(t *testing.T) {
 	}
 }
 
+func TestReconnectProofRejectsInvalidChecksum(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{server: &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}, conn: serverConn, status: statusReconnectProof, account: account{Login: "TEST"}, sessionKey: [crypto.SRP6SessionKeyLength]byte{0x42}, reconnectProof: [16]byte{0x11}}
+	proof := make([]byte, 57)
+	done := make(chan error, 1)
+	go func() { done <- sess.handleReconnectProof(context.Background()) }()
+	if _, err := clientConn.Write(proof); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err == nil || err.Error() != "invalid reconnect proof" {
+		t.Fatalf("invalid reconnect proof error=%v", err)
+	}
+}
+
 func buildChallenge(login string) []byte {
 	var b bytes.Buffer
 	b.WriteByte(logonChallenge)
