@@ -66,6 +66,7 @@ type dynamicGameObjectState struct {
 	LowGUID        uint32
 	Entry          uint32
 	OwnerGUID      uint64
+	FishingHandled bool
 	Map            uint32
 	X              float32
 	Y              float32
@@ -707,8 +708,12 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	}
 	s.objectsMu.Lock()
 	var mapID uint32
+	var ownerGUID uint64
+	var fishingHandled bool
 	if dyn, ok := s.dynamicGameObjects[guid]; ok && dyn != nil {
 		mapID = dyn.Map
+		ownerGUID = dyn.OwnerGUID
+		fishingHandled = dyn.FishingHandled
 		if dyn.AutoCloseTimer != nil {
 			dyn.AutoCloseTimer.Stop()
 		}
@@ -719,9 +724,12 @@ func (s *Server) despawnDynamicGameObject(guid uint64) {
 	}
 	s.objectsMu.Unlock()
 
-	if mapID != 0 {
-		s.broadcastGameObjectDespawn(mapID, guid)
+	if ownerGUID != 0 && !fishingHandled {
+		if owner := s.findSessionByGUID(ownerGUID); owner != nil {
+			_ = owner.write(uint16(protocol.OpcodeSMSG_FISH_ESCAPED), nil, true)
+		}
 	}
+	s.broadcastGameObjectDespawn(mapID, guid)
 }
 
 func (s *Server) setGameObjectHidden(guid uint64, hidden bool) {

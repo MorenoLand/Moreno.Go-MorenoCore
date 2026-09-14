@@ -398,6 +398,7 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	if goState.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
 		return s.sendLootError(targetGUID, 4) == nil
 	}
+	goState.FishingHandled = true
 	loot := &activeLootState{TargetGUID: targetGUID, MapID: goState.Map, LootType: 3, Items: make(map[uint8]lootItem)}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return s.sendLootResponse(loot) == nil
@@ -496,7 +497,11 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	loot.addViewer(s)
 	s.activeLoot = loot
 	s.interruptCurrentCast()
-	return s.sendLootResponse(loot) == nil
+	if err := s.sendLootResponse(loot); err != nil {
+		return false
+	}
+	s.server.despawnDynamicGameObject(targetGUID)
+	return true
 }
 
 func (s *session) fishingHoleNearby(ctx context.Context, bobber *dynamicGameObjectState) bool {
