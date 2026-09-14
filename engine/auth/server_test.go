@@ -3,6 +3,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
 	"database/sql"
 	"encoding/binary"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/crypto"
@@ -166,6 +168,78 @@ func TestBannedIPIsRejectedBeforeAuthenticationChallenge(t *testing.T) {
 	}
 	if packet[0] != logonChallenge || packet[2] != wowBanned {
 		t.Fatalf("banned IP response=%x", packet)
+	}
+}
+
+func TestReconnectChallengeAndProof(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	key := bytes.Repeat([]byte{0x42}, crypto.SRP6SessionKeyLength)
+	for _, statement := range []string{
+		"CREATE TABLE account (id INTEGER PRIMARY KEY, username TEXT NOT NULL, locked INTEGER NOT NULL, lock_country TEXT NOT NULL, last_ip TEXT NOT NULL, failed_logins INTEGER NOT NULL, session_key_auth BLOB, expansion INTEGER NOT NULL DEFAULT 2, mutetime INTEGER NOT NULL DEFAULT 0, locale INTEGER NOT NULL DEFAULT 0, recruiter INTEGER NOT NULL DEFAULT 0, os TEXT NOT NULL DEFAULT '', last_login TEXT)",
+		"CREATE TABLE account_access (AccountID INTEGER, SecurityLevel INTEGER, RealmID INTEGER)",
+		"CREATE TABLE account_banned (id INTEGER, bandate INTEGER, unbandate INTEGER, active INTEGER)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec("INSERT INTO account (id, username, locked, lock_country, last_ip, failed_logins, session_key_auth) VALUES (7, 'TEST', 0, '00', '127.0.0.1', 0, ?)", key); err != nil {
+		t.Fatal(err)
+	}
+	store := &database.Store{Name: "auth", Backend: database.BackendSQLite, DB: db}
+	server := NewServer(store, slog.New(slog.NewTextHandler(io.Discard, nil)), 1)
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{server: server, conn: serverConn, status: statusChallenge, remoteIP: "127.0.0.1"}
+	challenge := buildChallenge("TEST")
+	challenge[0] = reconnectChallenge
+	done := make(chan error, 1)
+	go func() { done <- sess.handleReconnectChallenge(context.Background()) }()
+	if _, err := clientConn.Write(challenge[1:]); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, 34)
+	if _, err := io.ReadFull(clientConn, response); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if response[0] != reconnectChallenge || response[1] != wowSuccess {
+		t.Fatalf("reconnect challenge response=%x", response[:2])
+	}
+	proofSeed := bytes.Repeat([]byte{0x11}, 16)
+	h := sha1.New()
+	_, _ = h.Write([]byte("TEST"))
+	_, _ = h.Write(proofSeed)
+	_, _ = h.Write(response[2:18])
+	_, _ = h.Write(key)
+	proof := make([]byte, 57)
+	copy(proof[:16], proofSeed)
+	copy(proof[16:36], h.Sum(nil))
+	done = make(chan error, 1)
+	go func() { done <- sess.handleReconnectProof(context.Background()) }()
+	if _, err := clientConn.Write(proof); err != nil {
+		t.Fatal(err)
+	}
+	proofResponse := make([]byte, 4)
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadFull(clientConn, proofResponse); err != nil {
+		if proofErr := <-done; proofErr != nil {
+			t.Fatal(proofErr)
+		}
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(proofResponse, []byte{reconnectProof, wowSuccess, 0, 0}) || sess.status != statusAuthed {
+		t.Fatalf("reconnect proof response=%x status=%d", proofResponse, sess.status)
 	}
 }
 
