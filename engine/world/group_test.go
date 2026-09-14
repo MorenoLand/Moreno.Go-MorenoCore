@@ -34,6 +34,74 @@ func addSess(srv *Server, guid uint64, name string) *session {
 // nilWrite satisfies write without a real net.Conn.
 func (s *session) testWrite(_ uint16, _ []byte, _ bool) error { return nil }
 
+func TestLoadPlayerGroupRestoresPersistedMembersAndLoginList(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+		"CREATE TABLE `groups` (guid INTEGER PRIMARY KEY, leaderGuid INTEGER NOT NULL, lootMethod INTEGER NOT NULL, looterGuid INTEGER NOT NULL, lootThreshold INTEGER NOT NULL, icon1 INTEGER NOT NULL, icon2 INTEGER NOT NULL, icon3 INTEGER NOT NULL, icon4 INTEGER NOT NULL, icon5 INTEGER NOT NULL, icon6 INTEGER NOT NULL, icon7 INTEGER NOT NULL, icon8 INTEGER NOT NULL, groupType INTEGER NOT NULL, difficulty INTEGER NOT NULL, raidDifficulty INTEGER NOT NULL, masterLooterGuid INTEGER NOT NULL)",
+		"CREATE TABLE group_member (guid INTEGER NOT NULL, memberGuid INTEGER PRIMARY KEY, memberFlags INTEGER NOT NULL, subgroup INTEGER NOT NULL, roles INTEGER NOT NULL)",
+		"INSERT INTO characters VALUES (1, 'Alice'), (2, 'Bob')",
+		"INSERT INTO `groups` VALUES (55, 1, 3, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 0)",
+		"INSERT INTO group_member VALUES (55, 1, 0, 0, 0), (55, 2, 1, 0, 4)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := newGroupTestServer()
+	server.CharactersStore = &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
+	sess := &session{server: server, conn: serverConn, playerGUID: 1, playerLoaded: true, player: &playerState{GUID: 1, Name: "Alice"}}
+	server.sessionsMu.Lock()
+	server.sessions[sess] = struct{}{}
+	server.sessionsMu.Unlock()
+	sess.loadPlayerGroup(context.Background(), 1)
+	if sess.groupID != 55 {
+		t.Fatalf("groupID=%d", sess.groupID)
+	}
+	group := server.findGroupByID(55)
+	if group == nil || len(group.Members) != 2 || group.LeaderGUID != 1 || group.Members[1].Name != "Bob" || group.Members[1].Roles != 4 {
+		t.Fatalf("group=%+v", group)
+	}
+	done := make(chan struct{})
+	go func() {
+		sess.sendLoadedGroup()
+		close(done)
+	}()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_GROUP_LIST) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	for i := 0; i < 4; i++ {
+		if _, err := reader.ReadU8(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if id, err := reader.ReadU64(); err != nil || id != 55 {
+		t.Fatalf("group id=%d err=%v", id, err)
+	}
+	if _, err := reader.ReadU32(); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := reader.ReadU32(); err != nil || count != 1 {
+		t.Fatalf("member count=%d err=%v", count, err)
+	}
+	if name, err := reader.ReadCString(); err != nil || name != "Bob" {
+		t.Fatalf("member name=%q err=%v", name, err)
+	}
+	<-done
+}
+
 func TestGroupInviteAcceptLeave(t *testing.T) {
 	srv := newGroupTestServer()
 	alice := addSess(srv, 1, "Alice")

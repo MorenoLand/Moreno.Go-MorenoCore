@@ -584,6 +584,7 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if !s.sendQuestgiverStatusMultiple(ctx) || !s.sendTaxiNodeStatusMultiple(ctx) {
 		return false
 	}
+	s.sendLoadedGroup()
 	// Spawn active pet if one was active at logout (slot 0)
 	if cdb := s.server.CharactersStore.DB; cdb != nil {
 		var petID, entry, modelID, level, reactState, curHealth, curMana int64

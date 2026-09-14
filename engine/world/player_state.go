@@ -351,6 +351,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 		}
 	}
 	_ = s.CharGuild(ctx, &state)
+	s.loadPlayerGroup(ctx, guid)
 	_ = s.loadPlayerSkills(ctx, &state)
 	_ = s.loadPlayerPacketsState(ctx, &state)
 

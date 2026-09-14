@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -95,6 +96,66 @@ type groupMember struct {
 	SubGroup uint8 // 0-7 for raids, always 0 for 5-man
 	Flags    uint8 // member flags (assistant etc)
 	Roles    uint8 // LFG roles (unused at group level)
+}
+
+func (s *session) loadPlayerGroup(ctx context.Context, guid uint64) {
+	if s == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return
+	}
+	db := s.server.CharactersStore.DB
+	var groupID int64
+	if err := db.QueryRowContext(ctx, "SELECT guid FROM group_member WHERE memberGuid = ? LIMIT 1", guid).Scan(&groupID); err != nil {
+		return
+	}
+	var leaderGUID, lootMethod, looterGUID, lootThreshold, groupType, dungeonDiff, raidDiff, masterLooterGUID int64
+	var icons [8]int64
+	err := db.QueryRowContext(ctx, "SELECT leaderGuid, lootMethod, looterGuid, lootThreshold, icon1, icon2, icon3, icon4, icon5, icon6, icon7, icon8, groupType, difficulty, raidDifficulty, masterLooterGuid FROM `groups` WHERE guid = ?", groupID).Scan(&leaderGUID, &lootMethod, &looterGUID, &lootThreshold, &icons[0], &icons[1], &icons[2], &icons[3], &icons[4], &icons[5], &icons[6], &icons[7], &groupType, &dungeonDiff, &raidDiff, &masterLooterGUID)
+	if err != nil {
+		return
+	}
+	rows, err := db.QueryContext(ctx, "SELECT gm.memberGuid, gm.memberFlags, gm.subgroup, gm.roles, c.name FROM group_member gm JOIN characters c ON c.guid = gm.memberGuid WHERE gm.guid = ? ORDER BY gm.memberGuid", groupID)
+	if err != nil {
+		return
+	}
+	members := make([]groupMember, 0, maxGroupSize)
+	for rows.Next() {
+		var memberGUID, memberFlags, subgroup, roles int64
+		var name string
+		if err := rows.Scan(&memberGUID, &memberFlags, &subgroup, &roles, &name); err != nil || name == "" {
+			continue
+		}
+		members = append(members, groupMember{GUID: uint64(memberGUID), Name: name, SubGroup: uint8(subgroup), Flags: uint8(memberFlags), Roles: uint8(roles)})
+	}
+	rows.Close()
+	if len(members) < 2 {
+		return
+	}
+	sort.SliceStable(members, func(i, j int) bool {
+		if members[i].GUID == uint64(leaderGUID) {
+			return true
+		}
+		return members[j].GUID != uint64(leaderGUID) && members[i].GUID < members[j].GUID
+	})
+	g := &groupState{ID: uint64(groupID), LeaderGUID: uint64(leaderGUID), Members: members, LootMethod: uint8(lootMethod), LooterGUID: uint64(looterGUID), LootThreshold: uint8(lootThreshold), MasterLooter: uint64(masterLooterGUID), DungeonDiff: uint8(dungeonDiff), RaidDiff: uint8(raidDiff), IsRaid: uint8(groupType)&0x02 != 0, IsLFG: uint8(groupType)&0x08 != 0}
+	for index, icon := range icons {
+		g.TargetIcons[index] = uint64(icon)
+	}
+	s.server.groupsMu.Lock()
+	if s.server.groups == nil {
+		s.server.groups = make(map[uint64]*groupState)
+	}
+	s.server.groups[g.ID] = g
+	s.server.groupsMu.Unlock()
+	s.groupID = g.ID
+}
+
+func (s *session) sendLoadedGroup() {
+	if s == nil || s.server == nil || s.groupID == 0 {
+		return
+	}
+	if group := s.server.findGroupByID(s.groupID); group != nil {
+		s.server.broadcastGroupList(group)
+	}
 }
 
 // groupNextID is a monotonic group ID counter.
