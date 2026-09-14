@@ -461,7 +461,7 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 		if goState.Type == GameObjectTypeFishingNode {
 			return s.handleFishingNodeUse(ctx, payload, goState)
 		}
-		s.handleLoot(ctx, payload)
+		return s.handleFishingHoleUse(ctx, payload, goState)
 
 	case GameObjectTypeGoober:
 		s.server.setGameObjectState(guid, GameObjectStateActive)

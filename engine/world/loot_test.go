@@ -580,6 +580,31 @@ func TestFishingNodeRejectsPrematureUse(t *testing.T) {
 	}
 }
 
+func TestFishingHoleUseDoesNotRequireBobberOwner(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	sess := &session{server: &Server{}, conn: serverConn, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Map: 0, X: 10, Y: 20, Z: 30}}
+	state := &dynamicGameObjectState{GUID: 8, Map: 0, X: 10, Y: 20, Z: 30, Type: GameObjectTypeFishingHole}
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(8)
+	done := make(chan bool, 1)
+	go func() { done <- sess.handleFishingHoleUse(context.Background(), payload.Bytes(), state) }()
+	opcode, data, err := readServerFrame(clientConn, nil)
+	if err != nil || opcode != uint16(protocol.OpcodeSMSG_LOOT_RESPONSE) {
+		t.Fatalf("opcode=%x err=%v", opcode, err)
+	}
+	r := protocol.NewReader(data)
+	_, _ = r.ReadU64()
+	lootType, _ := r.ReadU8()
+	if lootType != 3 {
+		t.Fatalf("loot type=%d", lootType)
+	}
+	if !<-done {
+		t.Fatal("fishing-hole use failed")
+	}
+}
+
 func TestGroupLootRollState_NeedWon(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

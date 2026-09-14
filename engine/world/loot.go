@@ -375,7 +375,15 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 }
 
 func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goState *dynamicGameObjectState) bool {
-	if !s.playerLoaded || s.player == nil || goState == nil || goState.OwnerGUID != s.playerGUID {
+	return s.handleFishingUse(ctx, payload, goState, true, false)
+}
+
+func (s *session) handleFishingHoleUse(ctx context.Context, payload []byte, goState *dynamicGameObjectState) bool {
+	return s.handleFishingUse(ctx, payload, goState, false, true)
+}
+
+func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState *dynamicGameObjectState, requireOwner, forceSuccess bool) bool {
+	if !s.playerLoaded || s.player == nil || goState == nil || (requireOwner && goState.OwnerGUID != s.playerGUID) {
 		return true
 	}
 	reader := protocol.NewReader(payload)
@@ -383,7 +391,7 @@ func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goSt
 	if err != nil || targetGUID != goState.GUID {
 		return true
 	}
-	if goState.State != GameObjectStateReady {
+	if !forceSuccess && goState.State != GameObjectStateReady {
 		_ = s.write(uint16(protocol.OpcodeSMSG_FISH_NOT_HOOKED), nil, true)
 		return true
 	}
@@ -406,7 +414,7 @@ func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goSt
 			break
 		}
 	}
-	if fishingMax > fishingSkill && fishingSkill > 0 {
+	if !forceSuccess && fishingMax > fishingSkill && fishingSkill > 0 {
 		stepsNeeded := uint16(1)
 		if fishingSkill >= 75 && fishingSkill <= 300 {
 			stepsNeeded = fishingSkill / 44
@@ -437,7 +445,7 @@ func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goSt
 			chance = 1
 		}
 	}
-	success := s.fishingHoleNearby(ctx, goState) || rand.Intn(100)+1 <= chance
+	success := forceSuccess || s.fishingHoleNearby(ctx, goState) || rand.Intn(100)+1 <= chance
 	loadRows := func(entry uint32, lootMode uint32) error {
 		rows, queryErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0)
 			FROM fishing_loot_template AS l LEFT JOIN item_template AS t ON t.entry = l.Item
