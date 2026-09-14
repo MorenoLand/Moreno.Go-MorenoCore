@@ -259,6 +259,41 @@ func TestReconnectProofRejectsInvalidChecksum(t *testing.T) {
 	}
 }
 
+func TestReconnectProofRejectsInvalidVersionWhenStrict(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	key := [crypto.SRP6SessionKeyLength]byte{0x42}
+	challenge := [16]byte{0x11}
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), StrictVersionCheck: true}
+	sess := &session{server: server, conn: serverConn, status: statusReconnectProof, account: account{Login: "TEST"}, sessionKey: key, reconnectProof: challenge}
+	r1 := bytes.Repeat([]byte{0x22}, 16)
+	h := sha1.New()
+	_, _ = h.Write([]byte("TEST"))
+	_, _ = h.Write(r1)
+	_, _ = h.Write(challenge[:])
+	_, _ = h.Write(key[:])
+	proof := make([]byte, 57)
+	copy(proof[:16], r1)
+	copy(proof[16:36], h.Sum(nil))
+	done := make(chan error, 1)
+	go func() { done <- sess.handleReconnectProof(context.Background()) }()
+	if _, err := clientConn.Write(proof); err != nil {
+		t.Fatal(err)
+	}
+	response := make([]byte, 2)
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadFull(clientConn, response); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err == nil || err.Error() != "invalid reconnect version proof" {
+		t.Fatalf("strict version error=%v", err)
+	}
+	if !bytes.Equal(response, []byte{reconnectProof, wowVersionInvalid}) {
+		t.Fatalf("strict version response=%x", response)
+	}
+}
+
 func buildChallenge(login string) []byte {
 	var b bytes.Buffer
 	b.WriteByte(logonChallenge)

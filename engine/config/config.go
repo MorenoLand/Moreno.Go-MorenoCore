@@ -26,6 +26,7 @@ type Config struct {
 	WrongPassBanTime                        uint32
 	WrongPassBanType                        bool
 	WrongPassLogging                        bool
+	StrictVersionCheck                      bool
 	CharactersDatabaseFile                  string
 	WorldDatabaseFile                       string
 	LoginDatabaseInfo                       string
@@ -171,6 +172,7 @@ func (c *Config) ApplyEnv() {
 	values["MORENOCORE_WRONGPASS_BAN_TIME"] = "WrongPass.BanTime"
 	values["MORENOCORE_WRONGPASS_BAN_TYPE"] = "WrongPass.BanType"
 	values["MORENOCORE_WRONGPASS_LOGGING"] = "WrongPass.Logging"
+	values["MORENOCORE_STRICT_VERSION_CHECK"] = "StrictVersionCheck"
 	values["MORENOCORE_UPDATES_ENABLE_DATABASES"] = "Updates.EnableDatabases"
 	values["MORENOCORE_UPDATES_AUTO_SETUP"] = "Updates.AutoSetup"
 	values["MORENOCORE_UPDATES_REDUNDANCY"] = "Updates.Redundancy"
@@ -347,6 +349,8 @@ func (c *Config) set(key, value string) error {
 		return setBool(&c.WrongPassBanType, key, value)
 	case "WrongPass.Logging":
 		return setBool(&c.WrongPassLogging, key, value)
+	case "StrictVersionCheck":
+		return setBool(&c.StrictVersionCheck, key, value)
 	case "CharactersDatabaseFile":
 		c.CharactersDatabaseFile = value
 	case "WorldDatabaseFile":

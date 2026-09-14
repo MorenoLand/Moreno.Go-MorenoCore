@@ -45,15 +45,16 @@ const (
 var versionChallenge = [16]byte{0xBA, 0xA3, 0x1E, 0x99, 0xA0, 0x0B, 0x21, 0x57, 0xFC, 0x37, 0x3F, 0xB3, 0x69, 0xCD, 0xD2, 0xF1}
 
 type Server struct {
-	Store             *database.Store
-	Logger            *slog.Logger
-	RealmID           uint32
-	RealmAddress      string
-	WrongPassMaxCount uint32
-	WrongPassBanTime  uint32
-	WrongPassBanType  bool
-	WrongPassLogging  bool
-	TraceRecorder     *protocoltrace.Recorder
+	Store              *database.Store
+	Logger             *slog.Logger
+	RealmID            uint32
+	RealmAddress       string
+	WrongPassMaxCount  uint32
+	WrongPassBanTime   uint32
+	WrongPassBanType   bool
+	WrongPassLogging   bool
+	StrictVersionCheck bool
+	TraceRecorder      *protocoltrace.Recorder
 }
 
 type account struct {
@@ -124,6 +125,7 @@ func NewServer(store *database.Store, logger *slog.Logger, realmID uint32, setti
 		server.WrongPassBanTime = settings[0].WrongPassBanTime
 		server.WrongPassBanType = settings[0].WrongPassBanType
 		server.WrongPassLogging = settings[0].WrongPassLogging
+		server.StrictVersionCheck = settings[0].StrictVersionCheck
 	}
 	if address == "" && store.Backend == database.BackendSQLite {
 		address = "127.0.0.1"
@@ -448,6 +450,16 @@ func (s *session) handleReconnectProof(ctx context.Context) error {
 	if subtle.ConstantTimeCompare(h.Sum(nil), r2[:]) != 1 {
 		s.debug("reconnect proof rejected", "account", s.account.Login, "reason", "invalid proof")
 		return errors.New("invalid reconnect proof")
+	}
+	if s.server.StrictVersionCheck {
+		version := sha1.New()
+		_, _ = version.Write(r1[:])
+		_, _ = version.Write(make([]byte, sha1.Size))
+		if subtle.ConstantTimeCompare(version.Sum(nil), data[36:56]) != 1 {
+			s.debug("reconnect proof rejected", "account", s.account.Login, "reason", "invalid version proof")
+			_ = writePacket(s.conn, []byte{reconnectProof, wowVersionInvalid})
+			return errors.New("invalid reconnect version proof")
+		}
 	}
 	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
 		return err
