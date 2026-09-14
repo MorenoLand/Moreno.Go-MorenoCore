@@ -25,6 +25,37 @@ func TestDynamicSpellObjectCreateAndDespawn(t *testing.T) {
 	if opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
 		t.Fatalf("create opcode=%x", opcode)
 	}
+	if opcode == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		payload, err = protocol.DecompressUpdatePayload(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	reader := protocol.NewReader(payload)
+	if blocks, err := reader.ReadU32(); err != nil || blocks != 1 {
+		t.Fatalf("create blocks=%d err=%v", blocks, err)
+	}
+	if updateType, err := reader.ReadU8(); err != nil || updateType != protocol.UpdateCreateObject2 {
+		t.Fatalf("create update type=%d err=%v", updateType, err)
+	}
+	if guid, err := reader.ReadPackedGUID(); err != nil || guid != object.GUID {
+		t.Fatalf("create guid=%x err=%v", guid, err)
+	}
+	if objectType, err := reader.ReadU8(); err != nil || objectType != 6 {
+		t.Fatalf("create object type=%d err=%v", objectType, err)
+	}
+	if flags, err := reader.ReadU16(); err != nil || flags != dynamicObjectFlags {
+		t.Fatalf("create flags=%x err=%v", flags, err)
+	}
+	if transport, err := reader.ReadPackedGUID(); err != nil || transport != 0 {
+		t.Fatalf("create transport=%x err=%v", transport, err)
+	}
+	for index, expected := range []float32{10, 20, 30, 10, 20, 30, 0, 0} {
+		value, err := reader.ReadF32()
+		if err != nil || value != expected {
+			t.Fatalf("create position[%d]=%f err=%v want=%f", index, value, err, expected)
+		}
+	}
 	opcode, payload, err = readServerFrame(clientConn, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +63,7 @@ func TestDynamicSpellObjectCreateAndDespawn(t *testing.T) {
 	if opcode != uint16(protocol.OpcodeSMSG_DESTROY_OBJECT) || len(payload) != 9 {
 		t.Fatalf("destroy opcode=%x payload=%x", opcode, payload)
 	}
-	reader := protocol.NewReader(payload)
+	reader = protocol.NewReader(payload)
 	guid, err := reader.ReadU64()
 	if err != nil || guid != object.GUID {
 		t.Fatalf("destroy guid=%x err=%v", guid, err)
