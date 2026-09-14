@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -104,6 +105,52 @@ func TestCreatureGossipLuaHookWritesClientMenu(t *testing.T) {
 	}
 	if result := <-selectDone; !result {
 		t.Fatalf("gossip selection failed")
+	}
+}
+
+func TestGossipHelloSpiritGuideQueuesDeadBattlegroundPlayer(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER NOT NULL, map INTEGER NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, position_z REAL NOT NULL, modelid INTEGER NOT NULL, curhealth INTEGER NOT NULL, npcflag INTEGER NOT NULL DEFAULT 0)",
+		"CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, name TEXT NOT NULL, modelid1 INTEGER NOT NULL, maxlevel INTEGER NOT NULL, gossip_menu_id INTEGER NOT NULL, npcflag INTEGER NOT NULL)",
+		"INSERT INTO creature VALUES (321, 68, 529, 10, 20, 30, 0, 100, 0)",
+		"INSERT INTO creature_template VALUES (68, 'Spirit Guide', 3167, 80, 0, 32768)",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	guid := uint64(321) | uint64(68)<<24 | uint64(0xF130)<<48
+	server := &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}, Config: config.Default(), spiritReviveQueue: make(map[uint64]uint64)}
+	state := &session{server: server, conn: serverConn, playerLoaded: true, playerGUID: 99, player: &playerState{GUID: 99, Map: 529, X: 10, Y: 20, Z: 30, Health: 1, MaxHealth: 100, PlayerFlags: playerFlagGhost}, auras: make(map[uint32]struct{}), auraSlots: make(map[uint32]uint8)}
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(guid)
+	done := make(chan bool, 1)
+	go func() { done <- state.handleGossipHello(context.Background(), payload.Bytes()) }()
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	seenHealerTime := false
+	for !seenHealerTime {
+		opcode, _, readErr := readServerFrame(clientConn, nil)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		seenHealerTime = opcode == uint16(protocol.OpcodeSMSG_AREA_SPIRIT_HEALER_TIME)
+	}
+	if !<-done {
+		t.Fatal("spirit-guide gossip was not handled")
+	}
+	if server.spiritReviveQueue[99] != guid {
+		t.Fatalf("queued spirit=%x want=%x", server.spiritReviveQueue[99], guid)
+	}
+	if _, ok := state.auras[2584]; !ok {
+		t.Fatal("waiting-for-resurrect aura was not applied")
 	}
 }
 

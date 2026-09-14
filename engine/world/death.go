@@ -46,6 +46,15 @@ const (
 	defaultGraveyardHorde    uint32 = 10 // Crossroads (ObjectMgr.cpp:6853)
 )
 
+func isBattlegroundMap(mapID uint32) bool {
+	switch mapID {
+	case 30, 489, 529, 559, 562, 566, 572, 607, 617, 618, 628:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *session) isDeadOrGhost() bool {
 	return s == nil || s.player == nil || (s.player.Health == 0 && s.player.MaxHealth > 0) || s.player.PlayerFlags&playerFlagGhost != 0
 }

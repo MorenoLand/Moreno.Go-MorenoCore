@@ -57,6 +57,9 @@ func (s *session) handleGossipHello(ctx context.Context, payload []byte) bool {
 		s.debug("gossip hello out of interaction range", "account", s.accountName, "guid", guid)
 		return true
 	}
+	if s.isDeadOrGhost() && isBattlegroundMap(s.player.Map) && objectUint32OrZero(creature, "NPCFlags")&npcFlagSpiritGuide != 0 {
+		return s.handleAreaSpiritHealerQueue(ctx, payload)
+	}
 	entry, ok := objectUint32Field(creature, "Entry")
 	if !ok {
 		return true
