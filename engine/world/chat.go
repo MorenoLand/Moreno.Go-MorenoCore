@@ -561,7 +561,7 @@ func (s *Server) broadcastChat(source, receiver *session, chatType uint8, langua
 			}
 		}
 		tag := source.chatTag()
-		isGM := tag&0x04 != 0
+		isGM := source.gmMessage
 		opcode := uint16(protocol.OpcodeSMSG_MESSAGECHAT)
 		senderName := ""
 		if isGM && source.player != nil {

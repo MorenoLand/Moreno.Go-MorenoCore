@@ -88,3 +88,15 @@ func TestContinentTransportLoadsRouteAndMoves(t *testing.T) {
 		t.Fatalf("movement update=%x", movement)
 	}
 }
+
+func TestContinentTransportMovesPassengerFromOffsets(t *testing.T) {
+	server := &Server{Config: config.Default(), sessions: make(map[*session]struct{})}
+	sess := &session{server: server, authed: true, playerLoaded: true, player: &playerState{GUID: 9, Map: 0, TransportGUID: gameObjectGUID(7, 9000), TransportX: 1, TransportY: 2, TransportZ: 3, TransportO: 0.5}}
+	server.sessions[sess] = struct{}{}
+	change := continentTransportMovement{OldSpawn: gameObjectSpawn{GUID: 7, Entry: 9000, Map: 0, X: 10, Y: 10, Z: 20, Orientation: 0}, Spawn: gameObjectSpawn{GUID: 7, Entry: 9000, Map: 0, X: 20, Y: 30, Z: 40, Orientation: math.Pi / 2}}
+	server.broadcastTransportMovement(change)
+	x, y, z, o := CalculatePassengerPosition(change.Spawn.X, change.Spawn.Y, change.Spawn.Z, change.Spawn.Orientation, 1, 2, 3, 0.5)
+	if sess.player.X != x || sess.player.Y != y || sess.player.Z != z || sess.player.Orientation != o {
+		t.Fatalf("passenger position=(%v,%v,%v,%v) want=(%v,%v,%v,%v)", sess.player.X, sess.player.Y, sess.player.Z, sess.player.Orientation, x, y, z, o)
+	}
+}

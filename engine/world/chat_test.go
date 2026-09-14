@@ -600,6 +600,40 @@ func TestBroadcastGMChatIncludesChatTag(t *testing.T) {
 	<-done
 }
 
+func TestGMChatPermissionUsesSeparateReferencePacket(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
+	state := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, gmMessage: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Map: 0}}
+	server.sessions[state] = struct{}{}
+	done := make(chan struct{})
+	go func() {
+		server.broadcastChat(state, nil, chatSay, 1, "hello", "")
+		close(done)
+	}()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_GM_MESSAGECHAT) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	for _, read := range []func() error{func() error { _, err := reader.ReadU8(); return err }, func() error { _, err := reader.ReadU32(); return err }, func() error { _, err := reader.ReadU64(); return err }, func() error { _, err := reader.ReadU32(); return err }} {
+		if err := read(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if length, err := reader.ReadU32(); err != nil || length != 7 {
+		t.Fatalf("sender name length=%d err=%v", length, err)
+	}
+	if name, err := reader.ReadCString(); err != nil || name != "Tester" {
+		t.Fatalf("sender name=%q err=%v", name, err)
+	}
+	<-done
+}
+
 func TestSecurityLevelDoesNotForceGMChatPacket(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()

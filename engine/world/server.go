@@ -140,6 +140,7 @@ type session struct {
 	speakTime             int64
 	speakCount            uint32
 	gmChat                bool
+	gmMessage             bool
 	twoSideChat           bool
 	legitimate            map[uint64]struct{}
 	mounts                *MountState
@@ -2946,6 +2947,11 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 	s.security = account.Security
 	s.muteTime = account.MuteTime
 	s.gmChat = false
+	s.gmMessage = false
+	if s.gmMessage, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionCommandGMChat); err != nil {
+		s.gmMessage = false
+		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionCommandGMChat, "error", err)
+	}
 	if s.twoSideChat, err = accountHasPermission(ctx, s.server.AuthStore.DB, account.ID, s.server.RealmID, account.Security, permissionTwoSideInteractionChat); err != nil {
 		s.twoSideChat = false
 		s.debug("RBAC permission lookup failed", "account", accountName, "permission", permissionTwoSideInteractionChat, "error", err)
