@@ -499,9 +499,11 @@ func TestFishingNodeUsesFishingLootTemplate(t *testing.T) {
 	}
 	defer db.Close()
 	for _, stmt := range []string{
-		"CREATE TABLE fishing_loot_template (Entry INTEGER, Item INTEGER, Chance REAL, MinCount INTEGER, MaxCount INTEGER)",
+		"CREATE TABLE fishing_loot_template (Entry INTEGER, Item INTEGER, Chance REAL, LootMode INTEGER, MinCount INTEGER, MaxCount INTEGER)",
 		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, Quality INTEGER)",
-		"INSERT INTO fishing_loot_template VALUES (40, 7002, 100.0, 1, 1)",
+		"CREATE TABLE skill_fishing_base_level (entry INTEGER PRIMARY KEY, skill INTEGER)",
+		"INSERT INTO skill_fishing_base_level VALUES (40, 1)",
+		"INSERT INTO fishing_loot_template VALUES (40, 7002, 100.0, 1, 1, 1)",
 		"INSERT INTO item_template VALUES (7002, 201, 1)",
 	} {
 		if _, err := db.Exec(stmt); err != nil {
@@ -511,8 +513,9 @@ func TestFishingNodeUsesFishingLootTemplate(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
 	defer serverConn.Close()
-	server := &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}, creatureLoot: make(map[uint64]*activeLootState), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState)}
-	sess := &session{server: server, conn: serverConn, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Map: 0, Zone: 40, X: 10, Y: 20, Z: 30}}
+	store := &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}
+	server := &Server{WorldStore: store, CharactersStore: store, creatureLoot: make(map[uint64]*activeLootState), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState)}
+	sess := &session{server: server, conn: serverConn, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Map: 0, Zone: 40, X: 10, Y: 20, Z: 30, Skills: []playerSkill{{Skill: 356, Value: 1, Max: 100}}}}
 	guid := gameObjectGUID(500, 35591)
 	state := &dynamicGameObjectState{GUID: guid, Entry: 35591, LowGUID: 500, Map: 0, X: 10, Y: 20, Z: 30, OwnerGUID: 1, Type: GameObjectTypeFishingNode}
 	payload := protocol.NewBuffer(8)

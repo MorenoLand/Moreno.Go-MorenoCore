@@ -390,10 +390,54 @@ func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goSt
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
 		return s.sendLootResponse(loot) == nil
 	}
-	loadRows := func(entry uint32) error {
+	var zoneSkill int64
+	if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT skill FROM skill_fishing_base_level WHERE entry = ?", s.player.Zone).Scan(&zoneSkill); err != nil && !missingTable(err) {
+		zoneSkill = 0
+	}
+	fishingSkill := uint16(0)
+	fishingMax := uint16(0)
+	for _, skill := range s.player.Skills {
+		if skill.Skill == 356 {
+			fishingSkill, fishingMax = skill.Value, skill.Max
+			break
+		}
+	}
+	if fishingMax > fishingSkill && fishingSkill > 0 {
+		stepsNeeded := uint16(1)
+		if fishingSkill >= 75 && fishingSkill <= 300 {
+			stepsNeeded = fishingSkill / 44
+		} else if fishingSkill > 300 {
+			stepsNeeded = fishingSkill / 31
+		}
+		if stepsNeeded == 0 {
+			stepsNeeded = 1
+		}
+		s.player.FishingSteps++
+		if uint16(s.player.FishingSteps) >= stepsNeeded {
+			s.player.FishingSteps = 0
+			for index := range s.player.Skills {
+				if s.player.Skills[index].Skill == 356 && s.player.Skills[index].Value < fishingMax {
+					s.player.Skills[index].Value++
+					if s.server.CharactersStore != nil && s.server.CharactersStore.DB != nil {
+						_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE character_skills SET value = ? WHERE guid = ? AND skill = 356", s.player.Skills[index].Value, s.playerGUID)
+					}
+					break
+				}
+			}
+		}
+	}
+	chance := 100
+	if zoneSkill > 0 && int64(fishingSkill) < zoneSkill {
+		chance = int(float64(fishingSkill) / float64(zoneSkill) * 100)
+		if chance < 1 {
+			chance = 1
+		}
+	}
+	success := rand.Intn(100)+1 <= chance
+	loadRows := func(entry uint32, lootMode uint32) error {
 		rows, queryErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0)
 			FROM fishing_loot_template AS l LEFT JOIN item_template AS t ON t.entry = l.Item
-			WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, entry)
+			WHERE l.Entry = ? AND (COALESCE(l.LootMode, 1) & ?) <> 0 ORDER BY l.Item LIMIT 16`, entry, lootMode)
 		if queryErr != nil {
 			return queryErr
 		}
@@ -421,11 +465,15 @@ func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goSt
 		}
 		return rows.Err()
 	}
-	if err := loadRows(s.player.Zone); err != nil && !missingTable(err) {
+	lootMode := uint32(1)
+	if !success {
+		lootMode = 0x8000
+	}
+	if err := loadRows(s.player.Zone, lootMode); err != nil && !missingTable(err) {
 		return true
 	}
 	if len(loot.Items) == 0 && s.player.Zone != 1 {
-		_ = loadRows(1)
+		_ = loadRows(1, lootMode)
 	}
 	s.server.lootMu.Lock()
 	if s.server.creatureLoot == nil {
