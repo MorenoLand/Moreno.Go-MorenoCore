@@ -15,7 +15,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dbtool schema|schema-audit|import-sql|verify|statement-audit")
+		fmt.Fprintln(os.Stderr, "usage: dbtool schema|schema-audit|import-sql|verify|statement-audit|statement-exercise")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -29,6 +29,8 @@ func main() {
 		os.Exit(verify(os.Args[2:]))
 	case "statement-audit":
 		os.Exit(statementAudit(os.Args[2:]))
+	case "statement-exercise":
+		os.Exit(statementExercise(os.Args[2:]))
 	default:
 		fmt.Fprintf(os.Stderr, "unknown dbtool command %q\n", os.Args[1])
 		os.Exit(2)

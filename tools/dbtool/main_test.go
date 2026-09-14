@@ -99,3 +99,22 @@ func TestSchemaIndexComparisonIgnoresDialectIndexNames(t *testing.T) {
 		t.Fatalf("missing=%v extra=%v mismatched=%v", missing, extra, mismatched)
 	}
 }
+
+func TestExerciseStatementRollsBackAndReportsResultShape(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE account (id INTEGER, username TEXT); INSERT INTO account VALUES (7, 'Tester')"); err != nil {
+		t.Fatal(err)
+	}
+	fields, queried, err := exerciseStatement(context.Background(), db, database.StatementDefinition{ID: "LOGIN_SEL_ACCOUNT_ID_BY_NAME"})
+	if err != nil || !queried || fields != 1 {
+		t.Fatalf("fields=%d queried=%v err=%v", fields, queried, err)
+	}
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM account").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("rollback changed fixture count=%d err=%v", count, err)
+	}
+}
