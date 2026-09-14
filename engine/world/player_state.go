@@ -188,6 +188,7 @@ type playerState struct {
 	ChosenTitle          uint32
 	KnownTitles          [6]uint32
 	ActionBars           uint32
+	GrantableLevels      uint8
 	PassOnGroupLoot      bool
 	Skills               []playerSkill
 	Spells               []learnedSpell
@@ -786,6 +787,13 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		state.MaxPowers[i] = uint32(power)
 	}
 	state.Cinematic, state.KnownCurrency, state.WatchedFaction, state.AmmoID, state.ActionBars = uint32(cinematic), uint32(knownCurrency), uint32(watchedFaction), uint32(ammoID), uint32(actionBars)
+	var grantableLevels int64
+	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(CAST(grantableLevels AS INTEGER), 0) FROM characters WHERE guid = ?", state.GUID).Scan(&grantableLevels); err == nil && grantableLevels > 0 {
+		if grantableLevels > 255 {
+			grantableLevels = 255
+		}
+		state.GrantableLevels = uint8(grantableLevels)
+	}
 	var restState, drunk int64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(restState, 0) FROM characters WHERE guid = ?", state.GUID).Scan(&restState); err == nil && restState >= 0 {
 		state.RestState = uint8(restState)
@@ -1151,7 +1159,7 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 		values[unitFieldMountDisplayID] = state.MountDisplayID
 	}
 	values[unitFieldPlayerFlags] = state.PlayerFlags
-	values[unitFieldPlayerFieldBytes] = state.PlayerFieldBytes
+	values[unitFieldPlayerFieldBytes] = playerFieldBytesValue(state)
 	values[unitFieldPlayerSelfResSpell] = state.SelfResSpell
 	for i := 0; i < playerExploredZonesCount; i++ {
 		values[playerExploredZonesStart+i] = state.ExploredZones[i]
@@ -1363,6 +1371,14 @@ func (s *Server) buildPlayerUpdate(state playerState) (*protocol.Packet, error) 
 	updates := protocol.NewUpdateData()
 	updates.AddUpdateBlock(block.Bytes())
 	return updates.BuildPacket(0)
+}
+
+func playerFieldBytesValue(state playerState) uint32 {
+	value := state.PlayerFieldBytes &^ 0x00000100
+	if state.GrantableLevels > 0 {
+		value |= 0x00000100
+	}
+	return value
 }
 
 func (s *Server) raceFaction(race uint8) uint32 {

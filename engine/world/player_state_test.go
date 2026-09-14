@@ -84,6 +84,16 @@ func TestBuildInitialReputations(t *testing.T) {
 	}
 }
 
+func TestPlayerFieldBytesExposeGrantableLevels(t *testing.T) {
+	base := uint32(0xA5000008)
+	if got := playerFieldBytesValue(playerState{PlayerFieldBytes: base, GrantableLevels: 2}); got != base|0x00000100 {
+		t.Fatalf("grantable flag=%x", got)
+	}
+	if got := playerFieldBytesValue(playerState{PlayerFieldBytes: base | 0x00000100}); got != base {
+		t.Fatalf("cleared grantable flag=%x", got)
+	}
+}
+
 func TestBuildBagCreateBlockIncludesContentsAndContainer(t *testing.T) {
 	bagGUID := uint64(0x4000000000000019)
 	itemGUID := uint64(0x4000000000000020)

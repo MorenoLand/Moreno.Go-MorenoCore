@@ -37,7 +37,7 @@ func (s *session) sendPlayerUpdate() {
 		unitFieldFlags:             unitFlagPlayerControlled | s.player.UnitFlags,
 		unitFieldBytes1:            uint32(s.player.StandState),
 		unitFieldPlayerFlags:       s.player.PlayerFlags,
-		unitFieldPlayerFieldBytes:  s.player.PlayerFieldBytes,
+		unitFieldPlayerFieldBytes:  playerFieldBytesValue(*s.player),
 		unitFieldBytes2:            uint32(s.player.SheathState),
 		unitFieldPlayerBytes2:      uint32(s.player.FacialStyle) | uint32(s.player.BankBagSlots)<<16 | uint32(s.player.RestState)<<24,
 		unitFieldPlayerBytes3:      uint32(s.player.Gender) | uint32(uint8(s.player.DrunkenState))<<8,
