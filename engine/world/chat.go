@@ -52,8 +52,15 @@ func (s *session) handleMessageChat(ctx context.Context, payload []byte) bool {
 		s.debug("chat ignored", "account", s.accountName, "reason", "player not loaded")
 		return true
 	}
-	if s.muteTime > time.Now().Unix() {
-		remaining := s.muteTime - time.Now().Unix()
+	now := time.Now().Unix()
+	if s.muteTime > 0 && s.muteTime <= now {
+		s.muteTime = 0
+		if s.server != nil && s.server.AuthStore != nil && s.server.AuthStore.DB != nil && s.accountID != 0 {
+			_, _ = s.server.AuthStore.DB.ExecContext(ctx, "UPDATE account SET mutetime = 0 WHERE id = ?", s.accountID)
+		}
+	}
+	if s.muteTime > now {
+		remaining := s.muteTime - now
 		if remaining < 1 {
 			remaining = 1
 		}

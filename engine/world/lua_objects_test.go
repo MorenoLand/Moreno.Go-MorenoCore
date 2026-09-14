@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/database"
@@ -92,6 +93,34 @@ func TestLuaWorldObjectBindings(t *testing.T) {
 	}
 	if !server.isGameObjectHidden(object.Fields["GUID"].(uint64)) {
 		t.Fatalf("object was not hidden")
+	}
+}
+
+func TestLuaPlayerMuteStoresAbsoluteExpiry(t *testing.T) {
+	auth, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer auth.Close()
+	if _, err := auth.Exec("CREATE TABLE account (id INTEGER PRIMARY KEY, mutetime INTEGER NOT NULL DEFAULT 0)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.Exec("INSERT INTO account (id, mutetime) VALUES (7, 0)"); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{AuthStore: &database.Store{Name: "auth", Backend: database.BackendSQLite, DB: auth}}
+	session := &session{server: server, accountID: 7, playerLoaded: true, player: &playerState{GUID: 99, Name: "Tester"}}
+	seconds := uint32(60)
+	before := time.Now().Unix()
+	if _, err := session.luaPlayer().Methods["Mute"](context.Background(), []any{float64(seconds)}); err != nil {
+		t.Fatal(err)
+	}
+	var stored int64
+	if err := auth.QueryRow("SELECT mutetime FROM account WHERE id = 7").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored < before+int64(seconds) || session.muteTime != stored {
+		t.Fatalf("stored mute expiry=%d session=%d before=%d", stored, session.muteTime, before)
 	}
 }
 
