@@ -492,6 +492,60 @@ func TestGameObjectLooting(t *testing.T) {
 	}
 }
 
+func TestFishingNodeUsesFishingLootTemplate(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		"CREATE TABLE fishing_loot_template (Entry INTEGER, Item INTEGER, Chance REAL, MinCount INTEGER, MaxCount INTEGER)",
+		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, displayid INTEGER, Quality INTEGER)",
+		"INSERT INTO fishing_loot_template VALUES (40, 7002, 100.0, 1, 1)",
+		"INSERT INTO item_template VALUES (7002, 201, 1)",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	server := &Server{WorldStore: &database.Store{Name: "world", Backend: database.BackendSQLite, DB: db}, creatureLoot: make(map[uint64]*activeLootState), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState)}
+	sess := &session{server: server, conn: serverConn, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Map: 0, Zone: 40, X: 10, Y: 20, Z: 30}}
+	guid := gameObjectGUID(500, 35591)
+	state := &dynamicGameObjectState{GUID: guid, Entry: 35591, LowGUID: 500, Map: 0, X: 10, Y: 20, Z: 30, OwnerGUID: 1, Type: GameObjectTypeFishingNode}
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(guid)
+	done := make(chan bool, 1)
+	go func() { done <- sess.handleFishingNodeUse(context.Background(), payload.Bytes(), state) }()
+	opcode, data, err := readServerFrame(clientConn, nil)
+	if err != nil || opcode != uint16(protocol.OpcodeSMSG_LOOT_RESPONSE) {
+		t.Fatalf("opcode=%x err=%v", opcode, err)
+	}
+	if !<-done {
+		t.Fatal("fishing node handler failed")
+	}
+	r := protocol.NewReader(data)
+	if target, err := r.ReadU64(); err != nil || target != guid {
+		t.Fatalf("target=%x err=%v", target, err)
+	}
+	lootType, err := r.ReadU8()
+	if err != nil || lootType != 3 {
+		t.Fatalf("loot type=%d err=%v", lootType, err)
+	}
+	_, _ = r.ReadU32()
+	count, err := r.ReadU8()
+	if err != nil || count != 1 {
+		t.Fatalf("item count=%d err=%v", count, err)
+	}
+	_, _ = r.ReadU8()
+	item, _ := r.ReadU32()
+	if item != 7002 {
+		t.Fatalf("item=%d", item)
+	}
+}
+
 func TestGroupLootRollState_NeedWon(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

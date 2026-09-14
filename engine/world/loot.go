@@ -374,6 +374,71 @@ func (s *session) handleLoot(ctx context.Context, payload []byte) bool {
 	return s.sendLootResponse(loot) == nil
 }
 
+func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goState *dynamicGameObjectState) bool {
+	if !s.playerLoaded || s.player == nil || goState == nil || goState.OwnerGUID != s.playerGUID {
+		return true
+	}
+	reader := protocol.NewReader(payload)
+	targetGUID, err := reader.ReadU64()
+	if err != nil || targetGUID != goState.GUID {
+		return true
+	}
+	if goState.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
+		return s.sendLootError(targetGUID, 4) == nil
+	}
+	loot := &activeLootState{TargetGUID: targetGUID, MapID: goState.Map, LootType: 3, Items: make(map[uint8]lootItem)}
+	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return s.sendLootResponse(loot) == nil
+	}
+	loadRows := func(entry uint32) error {
+		rows, queryErr := s.server.WorldStore.DB.QueryContext(ctx, `SELECT l.Item, l.Chance, l.MinCount, l.MaxCount, COALESCE(t.displayid, 0), COALESCE(t.Quality, 0)
+			FROM fishing_loot_template AS l LEFT JOIN item_template AS t ON t.entry = l.Item
+			WHERE l.Entry = ? ORDER BY l.Item LIMIT 16`, entry)
+		if queryErr != nil {
+			return queryErr
+		}
+		defer rows.Close()
+		var slot uint8
+		for rows.Next() && slot < 16 {
+			var itemID int64
+			var chance float64
+			var minCount, maxCount, displayID, quality int64
+			if scanErr := rows.Scan(&itemID, &chance, &minCount, &maxCount, &displayID, &quality); scanErr != nil {
+				continue
+			}
+			if chance > 0 && rand.Float64()*100 > chance {
+				continue
+			}
+			count := uint32(minCount)
+			if maxCount > minCount {
+				count += uint32(rand.Intn(int(maxCount - minCount + 1)))
+			}
+			if count == 0 {
+				count = 1
+			}
+			loot.Items[slot] = lootItem{Slot: slot, ItemEntry: uint32(itemID), Count: count, DisplayInfoID: uint32(displayID), Quality: uint32(quality)}
+			slot++
+		}
+		return rows.Err()
+	}
+	if err := loadRows(s.player.Zone); err != nil && !missingTable(err) {
+		return true
+	}
+	if len(loot.Items) == 0 && s.player.Zone != 1 {
+		_ = loadRows(1)
+	}
+	s.server.lootMu.Lock()
+	if s.server.creatureLoot == nil {
+		s.server.creatureLoot = make(map[uint64]*activeLootState)
+	}
+	s.server.creatureLoot[targetGUID] = loot
+	s.server.lootMu.Unlock()
+	loot.addViewer(s)
+	s.activeLoot = loot
+	s.interruptCurrentCast()
+	return s.sendLootResponse(loot) == nil
+}
+
 func (s *session) sendLootResponse(loot *activeLootState) error {
 	var grp *groupState
 	if s.server != nil && s.groupID != 0 {

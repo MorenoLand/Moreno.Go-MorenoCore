@@ -65,6 +65,7 @@ type dynamicGameObjectState struct {
 	GUID           uint64
 	LowGUID        uint32
 	Entry          uint32
+	OwnerGUID      uint64
 	Map            uint32
 	X              float32
 	Y              float32
@@ -457,6 +458,9 @@ func (s *session) handleGameObjectUse(ctx context.Context, payload []byte) bool 
 
 	case GameObjectTypeFishingNode, GameObjectTypeFishingHole:
 		s.updateAchievementCriteria(criteriaTypeFishInGameObject, entry, 1)
+		if goState.Type == GameObjectTypeFishingNode {
+			return s.handleFishingNodeUse(ctx, payload, goState)
+		}
 		s.handleLoot(ctx, payload)
 
 	case GameObjectTypeGoober:
@@ -660,6 +664,37 @@ func (s *Server) spawnDynamicGameObject(dyn *dynamicGameObjectState) {
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		s.broadcastToMap(dyn.Map, packet.Opcode, packet.Payload.Bytes())
 	}
+}
+
+func isFishingSpell(spellID uint32) bool {
+	switch spellID {
+	case 7620, 7731, 7732, 18248, 33095, 51294:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellTargetData) {
+	if s == nil || s.server == nil || s.player == nil || target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+		return
+	}
+	entry := uint32(35591)
+	displayID := uint32(0)
+	size := float32(1)
+	if s.server.WorldStore != nil && s.server.WorldStore.DB != nil {
+		var display, sizeValue int64
+		if err := s.server.WorldStore.DB.QueryRowContext(ctx, "SELECT displayId, size FROM gameobject_template WHERE entry = ? LIMIT 1", entry).Scan(&display, &sizeValue); err == nil {
+			displayID = uint32(display)
+			if sizeValue > 0 {
+				size = float32(sizeValue)
+			}
+		}
+	}
+	lowGUID := s.server.nextDynamicGameObjectLowGUID()
+	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, Map: s.player.Map, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: GameObjectTypeFishingNode, DisplayID: displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	dyn.DespawnTimer = time.AfterFunc(30*time.Second, func() { s.server.despawnDynamicGameObject(dyn.GUID) })
+	s.server.spawnDynamicGameObject(dyn)
 }
 
 func (s *Server) despawnDynamicGameObject(guid uint64) {

@@ -28,6 +28,7 @@ const (
 	spellFailedNotReady                  uint8 = 67  // SPELL_FAILED_NOT_READY (SharedDefines.h:1049)
 	spellFailedSilenced                  uint8 = 104 // SPELL_FAILED_SILENCED (SharedDefines.h:1086)
 	spellFailedCasterDead                uint8 = 23  // SPELL_FAILED_CASTER_DEAD (SharedDefines.h:1003)
+	spellFailedNotFishable               uint8 = 58  // SPELL_FAILED_NOT_FISHABLE (SharedDefines.h:1040)
 
 	itemClassWeapon = 2
 	itemClassArmor  = 4
@@ -275,6 +276,10 @@ func (s *session) handleCastSpell(ctx context.Context, payload []byte) bool {
 		}
 		target.UnitGUID = s.playerGUID
 		target.Flags = protocol.SpellTargetFlagUnit
+	}
+	if isFishingSpell(spellID) && target.Flags&protocol.SpellTargetFlagDestLocation == 0 {
+		_ = s.write(uint16(protocol.OpcodeSMSG_CAST_FAILED), buildCastFailed(castID, spellID, spellFailedNotFishable), true)
+		return true
 	}
 	cost := s.calculateSpellPowerCost(spell)
 	pType := spell.PowerType
@@ -580,6 +585,10 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 		}
 	}
 	_ = s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), protocol.BuildSpellGo(s.playerGUID, s.playerGUID, castID, spellID, spellCastFlagGo, castTimeStamp, hitTargets, missStatus, target), true)
+	if isFishingSpell(spellID) {
+		s.spawnFishingBobber(ctx, target)
+		return
+	}
 
 	if len(hitTargets) == 0 {
 		// Spell missed, do not trigger channel, cooldown, or effects
