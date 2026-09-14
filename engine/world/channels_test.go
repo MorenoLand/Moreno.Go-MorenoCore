@@ -47,6 +47,71 @@ func TestTradeChannelKeepsCityRestrictionForLocalizedNames(t *testing.T) {
 	}
 }
 
+func TestTradeJoinOutsideCityUsesReferenceAreaNotice(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{}
+	state := &session{server: server, conn: serverConn, playerLoaded: true, player: &playerState{GUID: 26, Zone: 0}, playerGUID: 26, accountName: "TEST"}
+	join := protocol.NewBuffer(32)
+	join.WriteU32(2)
+	join.WriteU8(0)
+	join.WriteU8(0)
+	join.WriteCString("Trade - Stormwind")
+	join.WriteCString("")
+	done := make(chan bool, 1)
+	go func() { done <- state.handleJoinChannel(join.Bytes()) }()
+	opcode, response, err := readServerFrame(clientConn, nil)
+	if err != nil || opcode != uint16(protocol.OpcodeSMSG_CHANNEL_NOTIFY) {
+		t.Fatalf("opcode=%x err=%v", opcode, err)
+	}
+	reader := protocol.NewReader(response)
+	if notice, err := reader.ReadU8(); err != nil || notice != channelNotInAreaNotice {
+		t.Fatalf("notice=%d err=%v", notice, err)
+	}
+	if name, err := reader.ReadCString(); err != nil || name != "Trade - Stormwind" {
+		t.Fatalf("name=%q err=%v", name, err)
+	}
+	if !<-done || state.channels != nil {
+		t.Fatal("outside-city trade join created a channel")
+	}
+}
+
+func TestLeavingCitySendsConstantChannelIdentity(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	state := &session{conn: serverConn, playerLoaded: true, player: &playerState{GUID: 26, Zone: 1519}, playerGUID: 26, channels: map[string]struct{}{"trade - stormwind": {}}}
+	server := &Server{channels: map[string]*worldChannel{"trade - stormwind": {ID: 2, Name: "Trade - Stormwind", Flags: channelFlagGeneral | channelFlagNotLFG | channelFlagTrade | channelFlagCity, Members: map[*session]struct{}{state: {}}}}}
+	state.server = server
+	done := make(chan struct{})
+	go func() {
+		state.updateLocalChannels(0)
+		close(done)
+	}()
+	opcode, response, err := readServerFrame(clientConn, nil)
+	if err != nil || opcode != uint16(protocol.OpcodeSMSG_CHANNEL_NOTIFY) {
+		t.Fatalf("opcode=%x err=%v", opcode, err)
+	}
+	reader := protocol.NewReader(response)
+	if notice, err := reader.ReadU8(); err != nil || notice != channelYouLeftNotice {
+		t.Fatalf("notice=%d err=%v", notice, err)
+	}
+	if _, err := reader.ReadCString(); err != nil {
+		t.Fatal(err)
+	}
+	if id, err := reader.ReadU32(); err != nil || id != 2 {
+		t.Fatalf("id=%d err=%v", id, err)
+	}
+	if constant, err := reader.ReadU8(); err != nil || constant != 1 {
+		t.Fatalf("constant=%d err=%v", constant, err)
+	}
+	<-done
+	if len(state.channels) != 0 || len(server.channels) != 0 {
+		t.Fatal("city channel membership was not removed")
+	}
+}
+
 func TestHandleJoinAndLeaveChannel(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
