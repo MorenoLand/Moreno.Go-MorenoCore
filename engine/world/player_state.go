@@ -189,6 +189,7 @@ type playerState struct {
 	KnownTitles          [6]uint32
 	ActionBars           uint32
 	GrantableLevels      uint8
+	FishingSteps         uint8
 	PassOnGroupLoot      bool
 	Skills               []playerSkill
 	Spells               []learnedSpell
@@ -352,6 +353,7 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	_ = s.loadPlayerPacketsState(ctx, &state)
 
 	_ = s.loadOptionalPlayerState(ctx, &state)
+	_ = s.loadFishingSteps(ctx, &state)
 	_ = s.calculatePlayerStats(ctx, &state)
 	_ = s.loadPlayerReputations(ctx, &state)
 	_ = s.loadPlayerAuras(ctx, &state)
@@ -359,6 +361,27 @@ func (s *session) loadPlayerState(ctx context.Context, guid uint64) (playerState
 	s.restoreLoadedCorpseState(ctx, &state)
 	s.player = &state
 	return state, nil
+}
+
+func (s *session) loadFishingSteps(ctx context.Context, state *playerState) error {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil
+	}
+	var steps int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT fishingSteps FROM character_fishingsteps WHERE guid = ?", state.GUID).Scan(&steps)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || missingTable(err) {
+			return nil
+		}
+		return err
+	}
+	if steps > 255 {
+		steps = 255
+	}
+	if steps > 0 {
+		state.FishingSteps = uint8(steps)
+	}
+	return nil
 }
 
 func (s *session) calculatePlayerStats(ctx context.Context, state *playerState) error {

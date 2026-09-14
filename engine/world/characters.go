@@ -1938,7 +1938,26 @@ func (s *session) savePlayerState(ctx context.Context, online uint32) error {
 	}
 	args := []any{state.Name, state.Race, state.Class, state.Gender, state.Level, state.XP, state.Money, state.Skin, state.Face, state.HairStyle, state.HairColor, state.FacialStyle, state.BankBagSlots, state.RestState, state.PlayerFlags, state.Map, 0, 0, state.X, state.Y, state.Z, state.Orientation, state.TransportX, state.TransportY, state.TransportZ, state.TransportO, state.TransportGUID, strings.Join(taxi, " "), state.Cinematic, state.TotalPlayedTime, state.LevelPlayedTime, state.RestBonus, state.LogoutTime, state.LogoutResting, state.ResetTalentsCost, state.ResetTalentsTime, state.ExtraFlags, state.StableSlots, state.AtLogin, state.Zone, s.deathExpireTime, state.TaxiPath, state.ArenaPoints, state.TotalHonorPoints, state.TodayHonorPoints, state.YesterdayHonorPoints, state.TotalKills, state.TodayKills, state.YesterdayKills, state.ChosenTitle, state.KnownCurrency, state.WatchedFaction, state.DrunkenState, state.Health, state.Powers[0], state.Powers[1], state.Powers[2], state.Powers[3], state.Powers[4], state.Powers[5], state.Powers[6], s.latency.Load(), state.TalentGroupsCount, state.ActiveTalentGroup, explored.String(), state.Equipment, state.AmmoID, strings.Join(titles, " "), state.ActionBars, state.GrantableLevels, online, state.GUID}
 	_, err := s.server.CharactersStore.ExecStatement(ctx, "CHAR_UPD_CHARACTER", args...)
+	if err == nil {
+		err = s.saveFishingSteps(ctx, state)
+	}
 	return err
+}
+
+func (s *session) saveFishingSteps(ctx context.Context, state *playerState) error {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil
+	}
+	if state.FishingSteps == 0 {
+		if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "DELETE FROM character_fishingsteps WHERE guid = ?", state.GUID); err != nil && !missingTable(err) {
+			return err
+		}
+		return nil
+	}
+	if _, err := s.server.CharactersStore.DB.ExecContext(ctx, "REPLACE INTO character_fishingsteps (guid, fishingSteps) VALUES (?, ?)", state.GUID, state.FishingSteps); err != nil && !missingTable(err) {
+		return err
+	}
+	return nil
 }
 
 func isReadTimeout(err error) bool {
