@@ -517,12 +517,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.debug("world login stage", "stage", "account-online-complete", "guid", guid)
 	s.lastFallZ = state.Z
 	s.lastFallTime = 0
-	if s.server.Config.SoloLFGAnnounce {
-		message := protocol.BuildSystemChatMessage("This server is running |cff4CFF00Solo Dungeon Finder|r module.")
-		if err := s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), message, true); err != nil {
-			return false
-		}
-	}
 	updates, err := s.server.buildPlayerUpdate(state)
 	if err != nil {
 		return false
@@ -532,14 +526,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	if state.PlayerFlags&playerFlagGhost != 0 {
 		s.sendLoadedCorpse(ctx)
-	}
-	s.sendLoadedAuras()
-	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state), true); err != nil {
-		return false
-	}
-	if err := s.sendInventoryItems(ctx); err != nil {
-		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
-		return false
 	}
 
 	// Concurrently query nearby creatures and gameobjects
@@ -576,8 +562,16 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 		}
 		s.debug("nearby gameobjects sent", "account", s.accountName, "count", goCount)
 	}
+	if err := s.write(uint16(protocol.OpcodeSMSG_INIT_WORLD_STATES), buildInitWorldStates(state), true); err != nil {
+		return false
+	}
 	s.lastStreamX, s.lastStreamY, s.lastStreamZ = state.X, state.Y, state.Z
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
+		return false
+	}
+	s.sendLoadedAuras()
+	if err := s.sendInventoryItems(ctx); err != nil {
+		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
 		return false
 	}
 	s.questStatusSent = true
@@ -608,6 +602,12 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
 	s.debug("world login stage", "stage", "player-login-hooks-complete", "guid", guid)
 	s.server.Features.OnPlayerLogin()
+	if s.server.Config.SoloLFGAnnounce {
+		message := protocol.BuildSystemChatMessage("This server is running |cff4CFF00Solo Dungeon Finder|r module.")
+		if err := s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), message, true); err != nil {
+			return false
+		}
+	}
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true
 }

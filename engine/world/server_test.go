@@ -285,13 +285,6 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if cinOpcode != uint16(protocol.OpcodeSMSG_TRIGGER_CINEMATIC) || len(cinPayload) != 4 {
 		t.Fatalf("cinematic opcode=%x payload=%d", cinOpcode, len(cinPayload))
 	}
-	chatOpcode, chatPayload, err := readServerFrame(clientConn, clientCrypt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if chatOpcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) || len(chatPayload) == 0 {
-		t.Fatalf("chat opcode=%x payload=%d", chatOpcode, len(chatPayload))
-	}
 	updateOpcode, updatePayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
@@ -334,6 +327,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	}
 	if questStatusOpcode != uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE) || len(questStatusPayload) != 4 {
 		t.Fatalf("quest status opcode=%x payload=%d", questStatusOpcode, len(questStatusPayload))
+	}
+	chatOpcode, chatPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chatOpcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) || len(chatPayload) == 0 {
+		t.Fatalf("chat opcode=%x payload=%d", chatOpcode, len(chatPayload))
 	}
 	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_TIME_SYNC_RESP), []byte{0, 0, 0, 0, 0, 0, 0, 0}, clientCrypt); err != nil {
 		t.Fatal(err)
