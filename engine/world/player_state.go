@@ -1801,6 +1801,12 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 	updates := protocol.NewUpdateData()
 	fields := make(map[int]uint32)
 	slotItems := make(map[int]uint64)
+	type enchantDurationUpdate struct {
+		itemGUID uint64
+		slot     uint32
+		duration uint32
+	}
+	enchantDurations := make([]enchantDurationUpdate, 0)
 	for _, item := range items {
 		bag, slot, itemGUID, itemEntry, count := item.bag, item.slot, item.itemGUID, item.itemEntry, item.count
 		if count <= 0 {
@@ -1821,6 +1827,15 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			itemState.Durability = toUint32(item.durability)
 			parseItemFields(item.charges, itemState.SpellCharges[:])
 			parseItemFields(item.enchantments, itemState.Enchantments[:])
+			if bag == 0 && slot >= 0 && slot < 19 {
+				for enchantSlot := 0; enchantSlot < 12; enchantSlot++ {
+					enchantID := itemState.Enchantments[enchantSlot*3]
+					enchantDuration := itemState.Enchantments[enchantSlot*3+1]
+					if enchantID != 0 && enchantDuration > 0 {
+						enchantDurations = append(enchantDurations, enchantDurationUpdate{itemGUID: fullGUID, slot: uint32(enchantSlot), duration: enchantDuration / 1000})
+					}
+				}
+			}
 		} else {
 			itemState.Durability = itemDurability(itemGUID)
 		}
@@ -1894,14 +1909,16 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		}
 	}
+	for _, enchant := range enchantDurations {
+		if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE), protocol.BuildItemEnchantTimeUpdate(s.playerGUID, enchant.itemGUID, enchant.slot, enchant.duration), true); err != nil {
+			return err
+		}
+	}
 	for _, item := range items {
 		if item.duration <= 0 {
 			continue
 		}
-		packet := protocol.NewBuffer(12)
-		packet.WriteU64(uint64(item.itemGUID) | (uint64(0x4000) << 48))
-		packet.WriteU32(toUint32(item.duration))
-		if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), packet.Bytes(), true); err != nil {
+		if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), protocol.BuildItemTimeUpdate(uint64(item.itemGUID)|(uint64(0x4000)<<48), toUint32(item.duration)), true); err != nil {
 			return err
 		}
 	}

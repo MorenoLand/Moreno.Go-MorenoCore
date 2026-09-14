@@ -1571,8 +1571,8 @@ func TestSendInventoryItemsAtomicDelivery(t *testing.T) {
 		"CREATE TABLE characters (guid INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, ContainerSlots INTEGER, MaxDurability INTEGER)",
 		"INSERT INTO item_template VALUES (6948, 0, 0)", // Hearthstone
-		"INSERT INTO item_instance VALUES (8, 6948, 1, 0, 1, 120, '', 0, '', 0, 0, 0, '')",
-		"INSERT INTO character_inventory VALUES (1, 0, 23, 8)", // Hearthstone in backpack slot 23
+		"INSERT INTO item_instance VALUES (8, 6948, 1, 0, 1, 120, '', 0, '3789 60000 0', 0, 0, 0, '')",
+		"INSERT INTO character_inventory VALUES (1, 0, 15, 8)", // Timed enchant on equipped item slot 15
 		"INSERT INTO characters VALUES (1, '')",
 	} {
 		if _, err := db.Exec(stmt); err != nil {
@@ -1602,9 +1602,9 @@ func TestSendInventoryItemsAtomicDelivery(t *testing.T) {
 		opcode uint16
 		data   []byte
 	}
-	pktChan := make(chan frame, 2)
+	pktChan := make(chan frame, 3)
 	go func() {
-		for i := 0; i < 2; i++ {
+		for i := 0; i < 3; i++ {
 			op, data, rErr := readServerFrame(c, nil)
 			if rErr != nil {
 				return
@@ -1649,6 +1649,27 @@ func TestSendInventoryItemsAtomicDelivery(t *testing.T) {
 	expectedHearthstoneGUID := uint64(8) | (uint64(0x4000) << 48)
 	if guid1 != expectedHearthstoneGUID {
 		t.Fatalf("expected item GUID %x, got %x", expectedHearthstoneGUID, guid1)
+	}
+	select {
+	case enchantFrame := <-pktChan:
+		if enchantFrame.opcode != uint16(protocol.OpcodeSMSG_ITEM_ENCHANT_TIME_UPDATE) {
+			t.Fatalf("enchant opcode=%x", enchantFrame.opcode)
+		}
+		enchantReader := protocol.NewReader(enchantFrame.data)
+		if itemGUID, err := enchantReader.ReadU64(); err != nil || itemGUID != 0x4000000000000008 {
+			t.Fatalf("enchant item guid=%x err=%v", itemGUID, err)
+		}
+		if slot, err := enchantReader.ReadU32(); err != nil || slot != 0 {
+			t.Fatalf("enchant slot=%d err=%v", slot, err)
+		}
+		if duration, err := enchantReader.ReadU32(); err != nil || duration != 60 {
+			t.Fatalf("enchant duration=%d err=%v", duration, err)
+		}
+		if playerGUID, err := enchantReader.ReadU64(); err != nil || playerGUID != 1 {
+			t.Fatalf("enchant player guid=%x err=%v", playerGUID, err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for item enchantment packet")
 	}
 	select {
 	case durationFrame := <-pktChan:
