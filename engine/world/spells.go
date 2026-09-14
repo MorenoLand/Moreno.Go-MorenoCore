@@ -936,7 +936,29 @@ func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell
 		}
 	}
 	lowGUID := s.server.nextDynamicSpellLowGUID()
-	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli())}
+	auraEffect := persistent
+	for _, effect := range spell.Effects {
+		if effect.Effect == 6 && effect.Aura != 0 {
+			auraEffect = effect
+			break
+		}
+	}
+	periodMs := auraEffect.AuraPeriod
+	if periodMs == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 8 || auraEffect.Aura == 23 || auraEffect.Aura == 24 || auraEffect.Aura == 89) {
+		periodMs = 3000
+	}
+	amount := uint32(0)
+	if auraEffect.BasePoints >= 0 {
+		amount = uint32(auraEffect.BasePoints + 1)
+	}
+	if amount == 0 && (auraEffect.Aura == 3 || auraEffect.Aura == 23 || auraEffect.Aura == 89) {
+		amount = uint32(10 + int(s.player.Level)*2)
+	}
+	schoolMask := uint8(spell.SchoolMask)
+	if schoolMask == 0 {
+		schoolMask = 1
+	}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli()), SpellData: spell, AuraEffect: auraEffect, AuraDurationMs: uint32(durationMs), AuraPeriodMs: periodMs, AuraAmount: amount, AuraSchoolMask: schoolMask, NextAuraTick: time.Now().Add(time.Duration(periodMs) * time.Millisecond)}
 	s.server.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 }
 

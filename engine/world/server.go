@@ -558,6 +558,7 @@ func (s *Server) runWorldTick(ctx context.Context) {
 			s.updateContinentTransports(now)
 			s.updateMailDeliveries(ctx, now.Unix())
 			s.updateActiveCreatures(ctx)
+			s.updateDynamicSpellAuras(ctx, now)
 			s.updatePlayerCombat(ctx)
 			s.updatePlayerRegeneration(ctx, now)
 			s.processCreatureRespawns(ctx, now)

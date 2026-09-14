@@ -1,9 +1,11 @@
 package world
 
 import (
+	"context"
 	"math"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/data/wotlk"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -20,6 +22,13 @@ type dynamicSpellObjectState struct {
 	X, Y, Z, Orientation      float32
 	Radius                    float32
 	CastTime                  uint32
+	SpellData                 wotlk.Spell
+	AuraEffect                wotlk.SpellEffect
+	AuraDurationMs            uint32
+	AuraPeriodMs              uint32
+	AuraAmount                uint32
+	AuraSchoolMask            uint8
+	NextAuraTick              time.Time
 	DespawnTimer              *time.Timer
 }
 
@@ -95,6 +104,51 @@ func (s *Server) spawnDynamicSpellObject(object *dynamicSpellObjectState, durati
 	if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
 		s.broadcastToMap(object.Map, packet.Opcode, packet.Payload.Bytes())
 	}
+}
+
+func (s *Server) updateDynamicSpellAuras(ctx context.Context, now time.Time) {
+	if s == nil {
+		return
+	}
+	s.objectsMu.Lock()
+	objects := make([]*dynamicSpellObjectState, 0, len(s.dynamicSpellObjects))
+	for _, object := range s.dynamicSpellObjects {
+		if object == nil || object.AuraPeriodMs == 0 || now.Before(object.NextAuraTick) {
+			continue
+		}
+		object.NextAuraTick = now.Add(time.Duration(object.AuraPeriodMs) * time.Millisecond)
+		objects = append(objects, object)
+	}
+	s.objectsMu.Unlock()
+	for _, object := range objects {
+		caster := s.findSessionByGUID(object.CasterGUID)
+		if caster == nil || caster.player == nil {
+			continue
+		}
+		target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagDestLocation, Destination: protocol.SpellTargetLocation{X: object.X, Y: object.Y, Z: object.Z}}
+		for _, targetGUID := range caster.spellAreaEnemyTargets(ctx, object.SpellData, target) {
+			if caster.hasDynamicAreaAura(targetGUID, object.SpellData.ID) {
+				continue
+			}
+			caster.applyAuraToTarget(ctx, targetGUID, object.SpellData, object.AuraEffect, object.AuraDurationMs, object.AuraPeriodMs, object.AuraAmount, uint32(object.AuraSchoolMask))
+		}
+	}
+}
+
+func (s *session) hasDynamicAreaAura(targetGUID uint64, spellID uint32) bool {
+	if s == nil || s.server == nil {
+		return false
+	}
+	if target := s.server.findSessionByGUID(targetGUID); target != nil {
+		target.castMu.Lock()
+		_, found := target.activeAuras[spellID]
+		target.castMu.Unlock()
+		return found
+	}
+	s.server.auraMu.Lock()
+	_, found := s.server.activeCreatureAuras[targetGUID][spellID]
+	s.server.auraMu.Unlock()
+	return found
 }
 
 func (s *Server) despawnDynamicSpellObject(guid uint64) {
