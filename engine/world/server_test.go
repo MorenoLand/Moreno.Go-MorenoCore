@@ -328,15 +328,15 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if timeSyncOpcode != uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ) || len(timeSyncPayload) != 4 {
 		t.Fatalf("time sync opcode=%x payload=%d", timeSyncOpcode, len(timeSyncPayload))
 	}
-	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_TIME_SYNC_RESP), []byte{0, 0, 0, 0, 0, 0, 0, 0}, clientCrypt); err != nil {
-		t.Fatal(err)
-	}
 	questStatusOpcode, questStatusPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if questStatusOpcode != uint16(protocol.OpcodeSMSG_QUESTGIVER_STATUS_MULTIPLE) || len(questStatusPayload) != 4 {
 		t.Fatalf("quest status opcode=%x payload=%d", questStatusOpcode, len(questStatusPayload))
+	}
+	if err := writeClientFrame(clientConn, uint32(protocol.OpcodeCMSG_TIME_SYNC_RESP), []byte{0, 0, 0, 0, 0, 0, 0, 0}, clientCrypt); err != nil {
+		t.Fatal(err)
 	}
 	chat := protocol.NewBuffer(16)
 	chat.WriteU32(chatSay)
