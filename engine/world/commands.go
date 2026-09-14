@@ -293,28 +293,35 @@ func (s *session) refreshNearbyObjects(ctx context.Context) {
 	isGM := (s.player.ExtraFlags&playerExtraGMOn != 0) || (s.player.PlayerFlags&playerFlagGM != 0)
 	if !isGM {
 		// When GM mode is turned OFF, destroy any GM-only creatures that were previously visible
-		distance := float64(s.server.Config.VisibilityDistanceContinents)
-		if distance <= 0 {
-			distance = 150.0
-		}
-		query := `SELECT c.guid, c.id
-			FROM creature AS c
-			JOIN creature_template AS t ON t.entry = c.id
-			WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
-			AND ((c.phaseMask <> 0 AND (c.phaseMask & 1) = 0) OR (COALESCE(t.flags_extra, 0) & 0x400) <> 0 OR (COALESCE(t.npcflag, 0) & 0xC000) <> 0)`
-		if rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, s.player.Map, float64(s.player.X)-distance, float64(s.player.X)+distance, float64(s.player.Y)-distance, float64(s.player.Y)+distance); err == nil {
-			for rows.Next() {
-				var low, entry int64
-				if err := rows.Scan(&low, &entry); err == nil {
-					rawGUID := creatureWorldGUID(uint32(low), uint32(entry))
-					s.sendDestroyObject(rawGUID, false)
-				}
-			}
-			rows.Close()
-		}
+		s.destroyHiddenCreaturesInRange(ctx, *s.player)
 		s.destroyHiddenGameObjectsInRange(ctx, *s.player)
 	}
 	s.streamNearbyObjects(ctx)
+}
+
+func (s *session) destroyHiddenCreaturesInRange(ctx context.Context, state playerState) {
+	if s == nil || s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		return
+	}
+	distance := float64(s.server.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 150
+	}
+	query := `SELECT c.guid, c.id
+		FROM creature AS c JOIN creature_template AS t ON t.entry = c.id
+		WHERE c.map = ? AND c.position_x BETWEEN ? AND ? AND c.position_y BETWEEN ? AND ?
+		AND ((c.phaseMask <> 0 AND (c.phaseMask & 1) = 0) OR (COALESCE(t.flags_extra, 0) & 0x400) <> 0 OR (COALESCE(t.npcflag, 0) & 0xC000) <> 0)`
+	rows, err := s.server.WorldStore.DB.QueryContext(ctx, query, state.Map, float64(state.X)-distance, float64(state.X)+distance, float64(state.Y)-distance, float64(state.Y)+distance)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var low, entry int64
+		if rows.Scan(&low, &entry) == nil {
+			s.sendDestroyObject(creatureWorldGUID(uint32(low), uint32(entry)), false)
+		}
+	}
 }
 
 func (s *session) destroyHiddenGameObjectsInRange(ctx context.Context, state playerState) {

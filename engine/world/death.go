@@ -709,6 +709,7 @@ func (s *session) resurrectPlayer(ctx context.Context, restorePercent float32) {
 	s.sendPlayerUpdate()
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_MOVE_LAND_WALK))
 	s.sendForcedMovement(uint16(protocol.OpcodeSMSG_FORCE_MOVE_UNROOT))
+	s.refreshNearbyObjects(ctx)
 }
 
 func (s *session) persistResurrectionState(ctx context.Context) {
