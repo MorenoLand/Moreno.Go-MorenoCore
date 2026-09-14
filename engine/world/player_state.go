@@ -1963,6 +1963,10 @@ func (s *session) handleAcceptLevelGrant(ctx context.Context, payload []byte) bo
 		_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET level = ?, health = ? WHERE guid = ?", s.player.Level, s.player.Health, s.playerGUID)
 		if granterGUID != 0 {
 			_, _ = s.server.CharactersStore.DB.ExecContext(ctx, "UPDATE characters SET grantableLevels = CASE WHEN grantableLevels > 0 THEN grantableLevels - 1 ELSE 0 END WHERE guid = ?", granterGUID)
+			if granter := s.server.findSessionByGUID(granterGUID); granter != nil && granter.player != nil && granter.player.GrantableLevels > 0 {
+				granter.player.GrantableLevels--
+				granter.sendPlayerUpdate()
+			}
 		}
 	}
 

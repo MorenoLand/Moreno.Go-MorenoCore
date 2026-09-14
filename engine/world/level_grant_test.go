@@ -19,12 +19,13 @@ func TestSlice13Handlers(t *testing.T) {
 	db.SetMaxOpenConns(1)
 
 	for _, stmt := range []string{
-		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, level INTEGER, homebind_map INTEGER, homebind_zone INTEGER, homebind_x REAL, homebind_y REAL, homebind_z REAL)",
+		"CREATE TABLE characters (guid INTEGER PRIMARY KEY, money INTEGER, level INTEGER, grantableLevels INTEGER, homebind_map INTEGER, homebind_zone INTEGER, homebind_x REAL, homebind_y REAL, homebind_z REAL)",
 		"CREATE TABLE character_inventory (guid INTEGER, bag INTEGER, slot INTEGER, item INTEGER)",
 		"CREATE TABLE item_instance (guid INTEGER PRIMARY KEY, itemEntry INTEGER, owner_guid INTEGER, creatorGuid INTEGER, count INTEGER, duration INTEGER, charges TEXT, flags INTEGER, enchantments TEXT, randomPropertyId INTEGER, durability INTEGER, playedTime INTEGER, text TEXT)",
 		"CREATE TABLE character_pet (id INTEGER PRIMARY KEY, owner INTEGER, slot INTEGER)",
 		"CREATE TABLE bugreport (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, content TEXT)",
-		"INSERT INTO characters VALUES (1, 10000, 10, 0, 0, 0, 0, 0)",
+		"INSERT INTO characters VALUES (1, 10000, 10, 0, 0, 0, 0, 0, 0)",
+		"INSERT INTO characters VALUES (555, 0, 20, 2, 0, 0, 0, 0, 0)",
 	} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -32,7 +33,7 @@ func TestSlice13Handlers(t *testing.T) {
 	}
 
 	store := &database.Store{Name: "characters", Backend: database.BackendSQLite, DB: db}
-	srv := &Server{CharactersStore: store, WorldStore: store, Config: config.Default()}
+	srv := &Server{CharactersStore: store, WorldStore: store, Config: config.Default(), sessions: make(map[*session]struct{})}
 	sess := &session{server: srv, playerGUID: 1, playerLoaded: true, player: &playerState{
 		GUID:  1,
 		Money: 10000,
@@ -43,6 +44,9 @@ func TestSlice13Handlers(t *testing.T) {
 		Y:     20.5,
 		Z:     30.5,
 	}}
+	granter := &session{server: srv, playerGUID: 555, playerLoaded: true, player: &playerState{GUID: 555, Level: 20, GrantableLevels: 2}}
+	srv.sessions[sess] = struct{}{}
+	srv.sessions[granter] = struct{}{}
 	ctx := context.Background()
 
 	// 1. CMSG_BINDER_ACTIVATE
@@ -127,5 +131,12 @@ func TestSlice13Handlers(t *testing.T) {
 	}
 	if sess.player.Level != 11 {
 		t.Fatalf("expected level 11, got %d", sess.player.Level)
+	}
+	if granter.player.GrantableLevels != 1 {
+		t.Fatalf("expected granter grantable levels 1, got %d", granter.player.GrantableLevels)
+	}
+	var remaining int
+	if err := db.QueryRowContext(ctx, "SELECT grantableLevels FROM characters WHERE guid = 555").Scan(&remaining); err != nil || remaining != 1 {
+		t.Fatalf("grantable levels persistence=%d err=%v", remaining, err)
 	}
 }
