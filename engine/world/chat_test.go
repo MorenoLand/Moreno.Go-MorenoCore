@@ -115,6 +115,36 @@ func TestChatLanguageRejectionSendsReferenceNotification(t *testing.T) {
 	}
 }
 
+func TestUniversalClientChatLanguageUsesFactionLanguageForTwoSideChat(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), sessions: make(map[*session]struct{})}
+	state := &session{server: server, conn: serverConn, authed: true, twoSideChat: true, playerLoaded: true, playerGUID: 99, player: &playerState{GUID: 99, Name: "Tester", Race: 1, Map: 0, Skills: []playerSkill{{Skill: 98, Value: 300, Max: 300}}}}
+	server.sessions[state] = struct{}{}
+	payload := protocol.NewBuffer(16)
+	payload.WriteU32(chatSay)
+	payload.WriteU32(languageUniversal)
+	payload.WriteCString("hello")
+	done := make(chan bool, 1)
+	go func() { done <- state.handleMessageChat(context.Background(), payload.Bytes()) }()
+	opcode, response, err := readServerFrame(clientConn, nil)
+	if err != nil || opcode != uint16(protocol.OpcodeSMSG_MESSAGECHAT) {
+		t.Fatalf("opcode=%x err=%v", opcode, err)
+	}
+	reader := protocol.NewReader(response)
+	if _, err := reader.ReadU8(); err != nil {
+		t.Fatal(err)
+	}
+	language, err := reader.ReadU32()
+	if err != nil || language != languageUniversal {
+		t.Fatalf("language=%d err=%v", language, err)
+	}
+	if !<-done {
+		t.Fatal("normalized universal chat closed the session")
+	}
+}
+
 func TestHandleMessageChatBroadcastsSayToSender(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
