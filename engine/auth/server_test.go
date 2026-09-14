@@ -294,6 +294,23 @@ func TestReconnectProofRejectsInvalidVersionWhenStrict(t *testing.T) {
 	}
 }
 
+func TestStrictLogonVersionProofUsesBuildChecksum(t *testing.T) {
+	seed := bytes.Repeat([]byte{0x22}, 16)
+	checksum := bytes.Repeat([]byte{0x33}, sha1.Size)
+	sess := &session{server: &Server{StrictVersionCheck: true}, os: "Win", buildInfo: &buildInfo{WindowsHash: checksum}}
+	h := sha1.New()
+	_, _ = h.Write(seed)
+	_, _ = h.Write(checksum)
+	if !sess.verifyVersionProof(seed, h.Sum(nil), false) {
+		t.Fatal("strict logon version proof was rejected")
+	}
+	bad := append([]byte(nil), h.Sum(nil)...)
+	bad[0] ^= 0xFF
+	if sess.verifyVersionProof(seed, bad, false) {
+		t.Fatal("invalid strict logon version proof was accepted")
+	}
+}
+
 func buildChallenge(login string) []byte {
 	var b bytes.Buffer
 	b.WriteByte(logonChallenge)

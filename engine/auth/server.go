@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"database/sql"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -73,10 +74,12 @@ type account struct {
 }
 
 type buildInfo struct {
-	Build  uint32
-	Major  uint8
-	Minor  uint8
-	Bugfix uint8
+	Build       uint32
+	Major       uint8
+	Minor       uint8
+	Bugfix      uint8
+	WindowsHash []byte
+	MacHash     []byte
 }
 
 type realm struct {
@@ -98,6 +101,7 @@ type session struct {
 	status         byte
 	account        account
 	srp            *crypto.SRP6
+	buildInfo      *buildInfo
 	sessionKey     [crypto.SRP6SessionKeyLength]byte
 	reconnectProof [16]byte
 	build          uint32
@@ -261,6 +265,7 @@ func (s *session) handleLogonChallenge(ctx context.Context) error {
 		s.debug("logon rejected", "account", s.login, "reason", "unsupported build", "build", s.build)
 		return writePacket(s.conn, []byte{logonChallenge, 0, wowVersionInvalid})
 	}
+	s.buildInfo = info
 	s.srp, err = crypto.NewSRP6(s.account.Login, s.account.Salt, s.account.Verifier)
 	if err != nil {
 		return err
@@ -329,6 +334,11 @@ func (s *session) handleLogonProof(ctx context.Context) error {
 		_ = writePacket(s.conn, []byte{logonProof, wowUnknownAccount, 0, 0})
 		s.recordFailedLogin(ctx)
 		return errors.New("invalid SRP6 proof")
+	}
+	if !s.verifyVersionProof(A[:], data[52:72], false) {
+		s.debug("logon proof rejected", "account", s.account.Login, "reason", "invalid version proof")
+		_ = writePacket(s.conn, []byte{logonProof, wowVersionInvalid})
+		return errors.New("invalid version proof")
 	}
 	s.sessionKey = key
 	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
@@ -451,15 +461,10 @@ func (s *session) handleReconnectProof(ctx context.Context) error {
 		s.debug("reconnect proof rejected", "account", s.account.Login, "reason", "invalid proof")
 		return errors.New("invalid reconnect proof")
 	}
-	if s.server.StrictVersionCheck {
-		version := sha1.New()
-		_, _ = version.Write(r1[:])
-		_, _ = version.Write(make([]byte, sha1.Size))
-		if subtle.ConstantTimeCompare(version.Sum(nil), data[36:56]) != 1 {
-			s.debug("reconnect proof rejected", "account", s.account.Login, "reason", "invalid version proof")
-			_ = writePacket(s.conn, []byte{reconnectProof, wowVersionInvalid})
-			return errors.New("invalid reconnect version proof")
-		}
+	if !s.verifyVersionProof(r1[:], data[36:56], true) {
+		s.debug("reconnect proof rejected", "account", s.account.Login, "reason", "invalid version proof")
+		_ = writePacket(s.conn, []byte{reconnectProof, wowVersionInvalid})
+		return errors.New("invalid reconnect version proof")
 	}
 	if err := updateAuthenticatedAccount(ctx, s.server.Store, s.account.Login, s.sessionKey[:], s.remoteIP, s.locale, s.os); err != nil {
 		return err
@@ -605,11 +610,67 @@ func updateAuthenticatedAccount(ctx context.Context, store *database.Store, logi
 
 func loadBuildInfo(ctx context.Context, store *database.Store, build uint32) (*buildInfo, error) {
 	var result buildInfo
-	err := store.DB.QueryRowContext(ctx, "SELECT build, majorVersion, minorVersion, bugfixVersion FROM build_info WHERE build = ? LIMIT 1", build).Scan(&result.Build, &result.Major, &result.Minor, &result.Bugfix)
+	var winHash, macHash sql.NullString
+	err := store.DB.QueryRowContext(ctx, "SELECT build, majorVersion, minorVersion, bugfixVersion, winChecksumSeed, macChecksumSeed FROM build_info WHERE build = ? LIMIT 1", build).Scan(&result.Build, &result.Major, &result.Minor, &result.Bugfix, &winHash, &macHash)
+	if err != nil && (strings.Contains(strings.ToLower(err.Error()), "no such column") || strings.Contains(strings.ToLower(err.Error()), "unknown column")) {
+		err = store.DB.QueryRowContext(ctx, "SELECT build, majorVersion, minorVersion, bugfixVersion FROM build_info WHERE build = ? LIMIT 1", build).Scan(&result.Build, &result.Major, &result.Minor, &result.Bugfix)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
+	result.WindowsHash = decodeVersionHash(winHash)
+	result.MacHash = decodeVersionHash(macHash)
 	return &result, err
+}
+
+func decodeVersionHash(value sql.NullString) []byte {
+	if !value.Valid || value.String == "" {
+		return nil
+	}
+	if decoded, err := hex.DecodeString(strings.TrimSpace(value.String)); err == nil && len(decoded) == sha1.Size {
+		return decoded
+	}
+	if len(value.String) == sha1.Size {
+		return []byte(value.String)
+	}
+	return nil
+}
+
+func (s *session) verifyVersionProof(input, proof []byte, reconnect bool) bool {
+	if s == nil || s.server == nil || !s.server.StrictVersionCheck {
+		return true
+	}
+	versionHash := make([]byte, sha1.Size)
+	if !reconnect {
+		if s.buildInfo == nil {
+			return false
+		}
+		switch s.os {
+		case "Win":
+			copy(versionHash, s.buildInfo.WindowsHash)
+		case "OSX":
+			copy(versionHash, s.buildInfo.MacHash)
+		default:
+			return false
+		}
+		if len(s.buildInfo.WindowsHash) == 0 && len(s.buildInfo.MacHash) == 0 {
+			return true
+		}
+		allZero := true
+		for _, value := range versionHash {
+			if value != 0 {
+				allZero = false
+				break
+			}
+		}
+		if allZero {
+			return true
+		}
+	}
+	hash := sha1.New()
+	_, _ = hash.Write(input)
+	_, _ = hash.Write(versionHash)
+	return len(proof) == sha1.Size && subtle.ConstantTimeCompare(hash.Sum(nil), proof) == 1
 }
 
 func loadBuilds(ctx context.Context, store *database.Store) (map[uint32]buildInfo, error) {
