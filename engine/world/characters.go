@@ -517,10 +517,6 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	s.debug("world login stage", "stage", "account-online-complete", "guid", guid)
 	s.lastFallZ = state.Z
 	s.lastFallTime = 0
-	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
-	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
-	s.debug("world login stage", "stage", "player-login-hooks-complete", "guid", guid)
-	s.server.Features.OnPlayerLogin()
 	if s.server.Config.SoloLFGAnnounce {
 		message := protocol.BuildSystemChatMessage("This server is running |cff4CFF00Solo Dungeon Finder|r module.")
 		if err := s.write(uint16(protocol.OpcodeSMSG_MESSAGECHAT), message, true); err != nil {
@@ -608,6 +604,10 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.loadMailState(ctx)
 	s.sendNewMailNotification(ctx)
+	s.debug("world login stage", "stage", "player-login-hooks-start", "guid", guid)
+	s.triggerPlayerEvent(ctx, scripting.PlayerEventLogin, s.luaPlayer())
+	s.debug("world login stage", "stage", "player-login-hooks-complete", "guid", guid)
+	s.server.Features.OnPlayerLogin()
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true
 }
