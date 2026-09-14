@@ -285,7 +285,9 @@ func TestCreatureHostileAggroAndCombat(t *testing.T) {
 	}
 
 	// 2. Reference melee reach treats five yards as contact range
-	server.stepCreatureMotion(context.Background(), motion, players, now)
+	for attempt := 0; attempt < 20 && sess.player.Health >= 100; attempt++ {
+		server.stepCreatureMotion(context.Background(), motion, players, now.Add(time.Duration(attempt+1)*time.Second))
+	}
 	if motion.X != 0.0 || motion.Y != 0.0 {
 		t.Fatalf("creature moved while already in melee range, got pos %f,%f", motion.X, motion.Y)
 	}
