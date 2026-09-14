@@ -1,0 +1,49 @@
+package world
+
+import (
+	"net"
+	"testing"
+	"time"
+
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
+)
+
+func TestDynamicSpellObjectCreateAndDespawn(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{sessions: make(map[*session]struct{}), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState)}
+	sess := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, player: &playerState{GUID: 1, Map: 0}}
+	server.sessions[sess] = struct{}{}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(1), CasterGUID: 1, SpellID: 5740, Map: 0, X: 10, Y: 20, Z: 30, Radius: 8}
+	go server.spawnDynamicSpellObject(object, 20*time.Millisecond)
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("create opcode=%x", opcode)
+	}
+	opcode, payload, err = readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_DESTROY_OBJECT) || len(payload) != 9 {
+		t.Fatalf("destroy opcode=%x payload=%x", opcode, payload)
+	}
+	reader := protocol.NewReader(payload)
+	guid, err := reader.ReadU64()
+	if err != nil || guid != object.GUID {
+		t.Fatalf("destroy guid=%x err=%v", guid, err)
+	}
+	if value, err := reader.ReadU8(); err != nil || value != 0 {
+		t.Fatalf("destroy death flag=%d err=%v", value, err)
+	}
+	server.objectsMu.Lock()
+	_, exists := server.dynamicSpellObjects[object.GUID]
+	server.objectsMu.Unlock()
+	if exists {
+		t.Fatal("dynamic spell object remained after despawn")
+	}
+}

@@ -502,6 +502,7 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	if areaSpell {
 		hitTargets = s.spellAreaEnemyTargets(ctx, spell, target)
 	}
+	s.spawnPersistentAreaAura(ctx, spell, target)
 	targetGUID := uint64(0)
 	if len(hitTargets) > 0 {
 		targetGUID = hitTargets[0]
@@ -901,6 +902,42 @@ func (s *session) finishSpellCast(ctx context.Context, castID uint8, spellID uin
 	}
 
 	applyEffects(ctx)
+}
+
+func (s *session) spawnPersistentAreaAura(ctx context.Context, spell wotlk.Spell, target protocol.SpellTargetData) {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	var persistent wotlk.SpellEffect
+	found := false
+	for _, effect := range spell.Effects {
+		if effect.Effect == 27 {
+			persistent, found = effect, true
+			break
+		}
+	}
+	if !found || spell.DurationIndex == 0 || s.server.Data == nil {
+		return
+	}
+	durationMs, durationFound, err := s.server.Data.SpellDuration(spell.DurationIndex, uint32(s.player.Level))
+	if err != nil || !durationFound || durationMs <= 0 {
+		return
+	}
+	radius, radiusFound, err := s.server.Data.SpellRadius(persistent.RadiusIndex, uint32(s.player.Level))
+	if err != nil || !radiusFound || radius <= 0 {
+		return
+	}
+	x, y, z := s.player.X, s.player.Y, s.player.Z
+	if target.Flags&protocol.SpellTargetFlagDestLocation != 0 {
+		x, y, z = target.Destination.X, target.Destination.Y, target.Destination.Z
+	} else if target.Flags&protocol.SpellTargetFlagUnitWireMask != 0 && target.UnitGUID != 0 {
+		if destination, ok := s.getCombatTarget(ctx, target.UnitGUID); ok {
+			x, y, z = destination.X, destination.Y, destination.Z
+		}
+	}
+	lowGUID := s.server.nextDynamicSpellLowGUID()
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(lowGUID), CasterGUID: s.playerGUID, SpellID: uint64(spell.ID), Map: s.player.Map, X: x, Y: y, Z: z, Orientation: s.player.Orientation, Radius: radius, CastTime: uint32(time.Now().UnixMilli())}
+	s.server.spawnDynamicSpellObject(object, time.Duration(durationMs)*time.Millisecond)
 }
 
 func (s *session) executeSpellDamage(ctx context.Context, targetGUID uint64, spellID, damage uint32) {
