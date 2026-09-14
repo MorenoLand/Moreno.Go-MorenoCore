@@ -31,12 +31,12 @@ func TestFeatureConfigurationDefaultsAndOverrides(t *testing.T) {
 
 func TestChatFloodConfigurationOverrides(t *testing.T) {
 	c := Default()
-	for _, setting := range []struct{ key, value string }{{"ChatFlood.MessageCount", "4"}, {"ChatFlood.MessageDelay", "2"}, {"ChatFlood.MuteTime", "30"}, {"ChatLevelReq.Channel", "3"}, {"ChatLevelReq.Whisper", "4"}, {"ChatLevelReq.Emote", "5"}, {"ChatLevelReq.Say", "6"}, {"ChatLevelReq.Yell", "7"}} {
+	for _, setting := range []struct{ key, value string }{{"ChatFlood.MessageCount", "4"}, {"ChatFlood.MessageDelay", "2"}, {"ChatFlood.MuteTime", "30"}, {"ChatLevelReq.Channel", "3"}, {"ChatLevelReq.Whisper", "4"}, {"ChatLevelReq.Emote", "5"}, {"ChatLevelReq.Say", "6"}, {"ChatLevelReq.Yell", "7"}, {"ClientCacheVersion", "42"}} {
 		if err := c.Set(setting.key, setting.value); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if c.ChatFloodMessageCount != 4 || c.ChatFloodMessageDelay != 2 || c.ChatFloodMuteTime != 30 || c.ChatChannelLevelReq != 3 || c.ChatWhisperLevelReq != 4 || c.ChatEmoteLevelReq != 5 || c.ChatSayLevelReq != 6 || c.ChatYellLevelReq != 7 {
+	if c.ChatFloodMessageCount != 4 || c.ChatFloodMessageDelay != 2 || c.ChatFloodMuteTime != 30 || c.ChatChannelLevelReq != 3 || c.ChatWhisperLevelReq != 4 || c.ChatEmoteLevelReq != 5 || c.ChatSayLevelReq != 6 || c.ChatYellLevelReq != 7 || c.ClientCacheVersion != 42 {
 		t.Fatalf("unexpected chat flood settings: %+v", c)
 	}
 }

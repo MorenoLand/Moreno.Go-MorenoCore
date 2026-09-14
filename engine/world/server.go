@@ -54,6 +54,7 @@ type Server struct {
 	TraceRecorder           *protocoltrace.Recorder
 	RealmID                 uint32
 	Config                  config.Config
+	clientCacheVersion      uint32
 	Features                *Features
 	Data                    *wotlk.Store
 	sessionsMu              sync.RWMutex
@@ -293,6 +294,7 @@ func NewServer(stores *database.Set, logger *slog.Logger, realmID uint32, settin
 
 func (s *Server) Initialize(ctx context.Context) error {
 	s.clearOnlineState(ctx)
+	s.loadClientCacheVersion(ctx)
 	if err := s.Features.Initialize(ctx); err != nil {
 		return err
 	}
@@ -307,6 +309,23 @@ func (s *Server) Initialize(ctx context.Context) error {
 	s.loadContinentTransports(ctx)
 	go s.runWorldTick(ctx)
 	return nil
+}
+
+func (s *Server) loadClientCacheVersion(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	if s.Config.ClientCacheVersion != 0 {
+		s.clientCacheVersion = s.Config.ClientCacheVersion
+		return
+	}
+	if s.WorldStore == nil || s.WorldStore.DB == nil {
+		return
+	}
+	var cacheID sql.NullInt64
+	if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT cache_id FROM version LIMIT 1").Scan(&cacheID); err == nil && cacheID.Valid && cacheID.Int64 > 0 {
+		s.clientCacheVersion = uint32(cacheID.Int64)
+	}
 }
 
 func (s *Server) clearOnlineState(ctx context.Context) {
@@ -2946,6 +2965,11 @@ func (s *session) handleAuthSession(ctx context.Context, payload []byte) bool {
 		return false
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_ADDON_INFO), buildAddonInfoResponse(b.Bytes()[b.Position():]), true); err != nil {
+		return false
+	}
+	cacheVersion := protocol.NewBuffer(4)
+	cacheVersion.WriteU32(s.server.clientCacheVersion)
+	if err := s.write(uint16(protocol.OpcodeSMSG_CLIENTCACHE_VERSION), cacheVersion.Bytes(), true); err != nil {
 		return false
 	}
 	if err := s.write(uint16(protocol.OpcodeSMSG_TUTORIAL_FLAGS), buildTutorialFlags(s.tutorials), true); err != nil {

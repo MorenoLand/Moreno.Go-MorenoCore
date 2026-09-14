@@ -107,6 +107,13 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if addonOpcode != uint16(protocol.OpcodeSMSG_ADDON_INFO) || !bytes.Equal(addonPayload, []byte{0, 0, 0, 0}) {
 		t.Fatalf("addon info opcode=%x payload=%x", addonOpcode, addonPayload)
 	}
+	cacheOpcode, cachePayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cacheOpcode != uint16(protocol.OpcodeSMSG_CLIENTCACHE_VERSION) || !bytes.Equal(cachePayload, []byte{0, 0, 0, 0}) {
+		t.Fatalf("client cache opcode=%x payload=%x", cacheOpcode, cachePayload)
+	}
 	tutorialOpcode, tutorialPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
