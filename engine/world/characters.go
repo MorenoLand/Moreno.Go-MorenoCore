@@ -572,6 +572,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.sendLoginMovementStates(); err != nil {
 		return false
 	}
+	if err := s.sendLoginEffect(); err != nil {
+		return false
+	}
 	s.sendLoadedAuras()
 	if err := s.sendInventoryItems(ctx); err != nil {
 		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
@@ -663,6 +666,21 @@ func packedGUIDSize(guid uint64) int {
 		}
 	}
 	return size
+}
+
+func (s *session) sendLoginEffect() error {
+	if s == nil || s.player == nil {
+		return nil
+	}
+	target := protocol.SpellTargetData{Flags: protocol.SpellTargetFlagUnit, UnitGUID: s.playerGUID}
+	packet := protocol.BuildSpellGo(s.playerGUID, s.playerGUID, 1, 836, spellCastFlagGo, uint32(time.Now().UnixMilli()), []uint64{s.playerGUID}, nil, target)
+	if err := s.write(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, true); err != nil {
+		return err
+	}
+	if s.server != nil {
+		s.server.broadcastToNearby(uint16(protocol.OpcodeSMSG_SPELL_GO), packet, s)
+	}
+	return nil
 }
 
 func buildLoginSetTimeSpeed(now time.Time) []byte {

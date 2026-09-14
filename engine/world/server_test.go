@@ -321,6 +321,27 @@ func TestAuthSessionAndPing(t *testing.T) {
 	if timeSyncOpcode != uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ) || len(timeSyncPayload) != 4 {
 		t.Fatalf("time sync opcode=%x payload=%d", timeSyncOpcode, len(timeSyncPayload))
 	}
+	loginEffectOpcode, loginEffectPayload, err := readServerFrame(clientConn, clientCrypt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loginEffectOpcode != uint16(protocol.OpcodeSMSG_SPELL_GO) {
+		t.Fatalf("login effect opcode=%x", loginEffectOpcode)
+	}
+	loginEffectReader := protocol.NewReader(loginEffectPayload)
+	if _, err := loginEffectReader.ReadPackedGUID(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loginEffectReader.ReadPackedGUID(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loginEffectReader.ReadU8(); err != nil {
+		t.Fatal(err)
+	}
+	spellID, err := loginEffectReader.ReadU32()
+	if err != nil || spellID != 836 {
+		t.Fatalf("login effect spell=%d err=%v", spellID, err)
+	}
 	questStatusOpcode, questStatusPayload, err := readServerFrame(clientConn, clientCrypt)
 	if err != nil {
 		t.Fatal(err)
