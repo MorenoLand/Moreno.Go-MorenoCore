@@ -209,6 +209,63 @@ func TestCreatureLootRecipientAuthorization(t *testing.T) {
 	}
 }
 
+func TestLootResponseSortsItemsBySlot(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{}
+	sess := &session{server: server, conn: serverConn, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1}}
+	loot := &activeLootState{TargetGUID: 77, LootType: 1, Items: map[uint8]lootItem{
+		3: {Slot: 3, ItemEntry: 3003, Count: 1},
+		1: {Slot: 1, ItemEntry: 1001, Count: 1},
+		2: {Slot: 2, ItemEntry: 2002, Count: 1},
+	}}
+	done := make(chan error, 1)
+	go func() { done <- sess.sendLootResponse(loot) }()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_LOOT_RESPONSE) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	_, _ = reader.ReadU64()
+	_, _ = reader.ReadU8()
+	_, _ = reader.ReadU32()
+	count, err := reader.ReadU8()
+	if err != nil || count != 3 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	for _, expected := range []struct {
+		slot  uint8
+		entry uint32
+	}{{1, 1001}, {2, 2002}, {3, 3003}} {
+		slot, err := reader.ReadU8()
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := reader.ReadU32()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if slot != expected.slot || entry != expected.entry {
+			t.Fatalf("loot item slot=%d entry=%d, want slot=%d entry=%d", slot, entry, expected.slot, expected.entry)
+		}
+		for i := 0; i < 4; i++ {
+			if _, err := reader.ReadU32(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := reader.ReadU8(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestHandleLootRoll(t *testing.T) {
 	srv := &Server{
 		groups:       make(map[uint64]*groupState),

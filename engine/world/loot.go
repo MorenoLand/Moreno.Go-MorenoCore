@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sort"
 	"time"
 
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
@@ -84,6 +85,15 @@ func (l *activeLootState) hasOverThresholdItem(threshold uint8) bool {
 		}
 	}
 	return false
+}
+
+func sortedLootItems(items map[uint8]lootItem) []lootItem {
+	result := make([]lootItem, 0, len(items))
+	for _, item := range items {
+		result = append(result, item)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Slot < result[j].Slot })
+	return result
 }
 
 func buildLootLooterPacket(loot *activeLootState, grp *groupState) []byte {
@@ -377,7 +387,8 @@ func (s *session) sendLootResponse(loot *activeLootState) error {
 	packet.WriteU8(loot.LootType)
 	packet.WriteU32(loot.Money)
 	packet.WriteU8(uint8(len(loot.Items)))
-	for _, it := range loot.Items {
+	items := sortedLootItems(loot.Items)
+	for _, it := range items {
 		var slotType uint8 = 0 // LOOT_SLOT_TYPE_ALLOW_LOOT
 		if grp != nil {
 			isOverThreshold := it.Quality >= uint32(grp.LootThreshold)
@@ -439,7 +450,7 @@ func (s *session) sendLootResponse(loot *activeLootState) error {
 		if grp.LootMethod == 2 { // Master Loot
 			s.sendLootMasterList(loot)
 		} else if grp.LootMethod == 3 || grp.LootMethod == 4 { // Group Loot / Need Before Greed
-			for _, it := range loot.Items {
+			for _, it := range sortedLootItems(loot.Items) {
 				if it.Quality >= uint32(grp.LootThreshold) {
 					s.server.startGroupLootRoll(loot.TargetGUID, uint32(it.Slot), it.ItemEntry, it.Count, loot.MapID, s.groupID)
 				}
