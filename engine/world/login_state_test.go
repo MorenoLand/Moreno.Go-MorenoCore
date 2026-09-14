@@ -159,3 +159,50 @@ func TestLoadGhostAuraRestoresGhostFlag(t *testing.T) {
 		t.Fatal("ghost aura did not restore player ghost flag")
 	}
 }
+
+func TestSendLoginMovementStatesUsesReferenceCompoundPacket(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	sess := &session{conn: serverConn, playerGUID: 9, player: &playerState{GUID: 9}, activeAuras: map[uint32]*activeAura{
+		1: {SpellID: 1, AuraType: 26},
+		2: {SpellID: 2, AuraType: 104},
+		3: {SpellID: 3, AuraType: 105},
+		4: {SpellID: 4, AuraType: 106},
+	}}
+	go func() {
+		if err := sess.sendLoginMovementStates(); err != nil {
+			t.Error(err)
+		}
+	}()
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_MULTIPLE_MOVES) {
+		t.Fatalf("opcode=%x", opcode)
+	}
+	reader := protocol.NewReader(payload)
+	size, err := reader.ReadU32()
+	if err != nil || int(size) != reader.Remaining() {
+		t.Fatalf("compound size=%d remaining=%d err=%v", size, reader.Remaining(), err)
+	}
+	want := []uint16{uint16(protocol.OpcodeSMSG_FORCE_MOVE_ROOT), uint16(protocol.OpcodeSMSG_MOVE_WATER_WALK), uint16(protocol.OpcodeSMSG_MOVE_FEATHER_FALL), uint16(protocol.OpcodeSMSG_MOVE_SET_HOVER)}
+	for _, expected := range want {
+		length, err := reader.ReadU8()
+		if err != nil || length != uint8(2+packedGUIDSize(9)+4) {
+			t.Fatalf("subpacket length=%d err=%v", length, err)
+		}
+		subOpcode, err := reader.ReadU16()
+		if err != nil || subOpcode != expected {
+			t.Fatalf("subpacket opcode=%x want=%x err=%v", subOpcode, expected, err)
+		}
+		guid, err := reader.ReadPackedGUID()
+		if err != nil || guid != 9 {
+			t.Fatalf("subpacket guid=%d err=%v", guid, err)
+		}
+		if counter, err := reader.ReadU32(); err != nil || counter != 0 {
+			t.Fatalf("subpacket counter=%d err=%v", counter, err)
+		}
+	}
+}

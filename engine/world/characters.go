@@ -569,6 +569,9 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	if err := s.write(uint16(protocol.OpcodeSMSG_TIME_SYNC_REQ), buildTimeSyncRequest(0), true); err != nil {
 		return false
 	}
+	if err := s.sendLoginMovementStates(); err != nil {
+		return false
+	}
 	s.sendLoadedAuras()
 	if err := s.sendInventoryItems(ctx); err != nil {
 		s.debug("inventory load failed", "account", s.accountName, "guid", s.playerGUID, "error", err)
@@ -610,6 +613,56 @@ func (s *session) handlePlayerLogin(ctx context.Context, payload []byte) (succes
 	}
 	s.debug("player login complete", "account", s.accountName, "guid", s.playerGUID, "map", state.Map, "x", state.X, "y", state.Y, "z", state.Z)
 	return true
+}
+
+func (s *session) sendLoginMovementStates() error {
+	if s == nil || s.player == nil {
+		return nil
+	}
+	const (
+		auraRoot        uint32 = 26
+		auraWaterWalk   uint32 = 104
+		auraFeatherFall uint32 = 105
+		auraHover       uint32 = 106
+	)
+	auras := s.loadedAuras()
+	state := protocol.NewBuffer(64)
+	for _, aura := range auras {
+		var opcode protocol.Opcode
+		switch aura.AuraType {
+		case auraRoot:
+			opcode = protocol.OpcodeSMSG_FORCE_MOVE_ROOT
+		case auraWaterWalk:
+			opcode = protocol.OpcodeSMSG_MOVE_WATER_WALK
+		case auraFeatherFall:
+			opcode = protocol.OpcodeSMSG_MOVE_FEATHER_FALL
+		case auraHover:
+			opcode = protocol.OpcodeSMSG_MOVE_SET_HOVER
+		default:
+			continue
+		}
+		state.WriteU8(uint8(2 + packedGUIDSize(s.playerGUID) + 4))
+		state.WriteU16(uint16(opcode))
+		state.WritePackedGUID(s.playerGUID)
+		state.WriteU32(0)
+	}
+	if state.Len() == 0 {
+		return nil
+	}
+	packet := protocol.NewBuffer(state.Len() + 4)
+	packet.WriteU32(uint32(state.Len()))
+	packet.Write(state.Bytes())
+	return s.write(uint16(protocol.OpcodeSMSG_MULTIPLE_MOVES), packet.Bytes(), true)
+}
+
+func packedGUIDSize(guid uint64) int {
+	size := 1
+	for index := 0; index < 8; index++ {
+		if byte(guid>>(8*index)) != 0 {
+			size++
+		}
+	}
+	return size
 }
 
 func buildLoginSetTimeSpeed(now time.Time) []byte {
