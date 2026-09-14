@@ -224,3 +224,41 @@ func TestChannel_Moderate(t *testing.T) {
 		t.Fatal("expected handleChannelModerate to return true")
 	}
 }
+
+func TestRemoveSessionChannelsBroadcastsDeparture(t *testing.T) {
+	leavingConn, leavingClient := net.Pipe()
+	otherConn, otherClient := net.Pipe()
+	defer leavingConn.Close()
+	defer leavingClient.Close()
+	defer otherConn.Close()
+	defer otherClient.Close()
+	leaving := &session{conn: leavingConn, playerLoaded: true, playerGUID: 26, channels: map[string]struct{}{"general": {}}}
+	other := &session{conn: otherConn, playerLoaded: true, playerGUID: 27}
+	server := &Server{channels: map[string]*worldChannel{"general": {ID: 1, Name: "General", Members: map[*session]struct{}{leaving: {}, other: {}}}}, sessions: make(map[*session]struct{})}
+	done := make(chan struct{})
+	go func() {
+		server.removeSessionChannels(leaving)
+		close(done)
+	}()
+	opcode, payload, err := readServerFrame(otherClient, nil)
+	if err != nil || opcode != uint16(protocol.OpcodeSMSG_CHANNEL_NOTIFY) {
+		t.Fatalf("opcode=%x err=%v", opcode, err)
+	}
+	r := protocol.NewReader(payload)
+	if notice, err := r.ReadU8(); err != nil || notice != channelLeftNotice {
+		t.Fatalf("notice=%d err=%v", notice, err)
+	}
+	if name, err := r.ReadCString(); err != nil || name != "General" {
+		t.Fatalf("name=%q err=%v", name, err)
+	}
+	if guid, err := r.ReadU64(); err != nil || guid != leaving.playerGUID {
+		t.Fatalf("guid=%d err=%v", guid, err)
+	}
+	<-done
+	if len(server.channels) != 1 || leaving.channels != nil {
+		t.Fatal("session channel cleanup incomplete")
+	}
+	if _, ok := server.channels["general"].Members[leaving]; ok {
+		t.Fatal("leaving session remains a channel member")
+	}
+}

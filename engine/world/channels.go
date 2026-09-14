@@ -336,9 +336,15 @@ func channelFlags(id uint32, name string) uint8 {
 }
 
 func (s *Server) removeSessionChannels(member *session) {
+	type departure struct {
+		name    string
+		members []*session
+	}
+	departures := make([]departure, 0)
 	s.channelsMu.Lock()
 	if s.channels == nil {
 		s.channelsMu.Unlock()
+		member.channels = nil
 		return
 	}
 	for key, channel := range s.channels {
@@ -346,12 +352,22 @@ func (s *Server) removeSessionChannels(member *session) {
 			continue
 		}
 		delete(channel.Members, member)
+		members := make([]*session, 0, len(channel.Members))
+		for other := range channel.Members {
+			members = append(members, other)
+		}
+		departures = append(departures, departure{name: channel.Name, members: members})
 		if len(channel.Members) == 0 {
 			delete(s.channels, key)
 		}
 	}
 	s.channelsMu.Unlock()
 	member.channels = nil
+	for _, left := range departures {
+		for _, other := range left.members {
+			_ = other.sendChannelNotify(channelLeftNotice, left.name, &channelNotifyGUID{GUID: member.playerGUID})
+		}
+	}
 }
 
 func isCityZone(zone uint32) bool {
