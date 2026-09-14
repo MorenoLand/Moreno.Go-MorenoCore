@@ -214,3 +214,70 @@ func TestReadHeaderScansEmbeddedVersionOneArchive(t *testing.T) {
 		t.Fatalf("header offsets archive=%d hash=%d block=%d extended=%d", archive.header.ArchiveOffset, archive.header.HashTablePos, archive.header.BlockTablePos, archive.header.ExtendedBlockTable)
 	}
 }
+
+func encryptMPQFixture(data []byte, key uint32) {
+	cryptOnce.Do(initCryptTable)
+	seed := key
+	seed2 := uint32(0xEEEEEEEE)
+	for offset := 0; offset+4 <= len(data); offset += 4 {
+		seed2 += cryptTable[0x400+(seed&0xFF)]
+		plain := binary.LittleEndian.Uint32(data[offset:])
+		cipher := plain ^ (seed + seed2)
+		seed = ((^seed << 21) + 0x11111111) | (seed >> 11)
+		seed2 = plain + seed2 + (seed2 << 5) + 3
+		binary.LittleEndian.PutUint32(data[offset:], cipher)
+	}
+}
+
+func TestOpenReadsEmbeddedVersionOneArchive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fixture.mpq")
+	archiveOffset := 512
+	hashOffset, blockOffset, extendedOffset, fileOffset := 0x100, 0x200, 0x300, 0x400
+	listfile := []byte("Interface/Test.txt\r\n")
+	data := make([]byte, archiveOffset+fileOffset+len(listfile))
+	header := data[archiveOffset:]
+	binary.LittleEndian.PutUint32(header[0:], archiveMagic)
+	binary.LittleEndian.PutUint32(header[4:], 44)
+	binary.LittleEndian.PutUint32(header[8:], uint32(fileOffset+len(listfile)))
+	binary.LittleEndian.PutUint16(header[12:], 1)
+	binary.LittleEndian.PutUint16(header[14:], 3)
+	binary.LittleEndian.PutUint32(header[16:], uint32(hashOffset))
+	binary.LittleEndian.PutUint32(header[20:], uint32(blockOffset))
+	binary.LittleEndian.PutUint32(header[24:], 16)
+	binary.LittleEndian.PutUint32(header[28:], 1)
+	binary.LittleEndian.PutUint64(header[32:], uint64(extendedOffset))
+	hashes := data[archiveOffset+hashOffset : archiveOffset+hashOffset+16*16]
+	for index := 0; index < 16; index++ {
+		binary.LittleEndian.PutUint32(hashes[index*16:], 0xFFFFFFFF)
+		binary.LittleEndian.PutUint32(hashes[index*16+4:], 0xFFFFFFFF)
+		binary.LittleEndian.PutUint32(hashes[index*16+12:], 0xFFFFFFFF)
+	}
+	listHash := hashString("(listfile)", 0)
+	hashSlot := int(listHash % 16)
+	binary.LittleEndian.PutUint32(hashes[hashSlot*16:], hashString("(listfile)", 1))
+	binary.LittleEndian.PutUint32(hashes[hashSlot*16+4:], hashString("(listfile)", 2))
+	binary.LittleEndian.PutUint16(hashes[hashSlot*16+8:], 0)
+	binary.LittleEndian.PutUint16(hashes[hashSlot*16+10:], 0)
+	binary.LittleEndian.PutUint32(hashes[hashSlot*16+12:], 0)
+	encryptMPQFixture(hashes, hashString("(hash table)", 3))
+	blocks := data[archiveOffset+blockOffset : archiveOffset+blockOffset+16]
+	binary.LittleEndian.PutUint32(blocks[0:], uint32(fileOffset))
+	binary.LittleEndian.PutUint32(blocks[4:], uint32(len(listfile)))
+	binary.LittleEndian.PutUint32(blocks[8:], uint32(len(listfile)))
+	binary.LittleEndian.PutUint32(blocks[12:], fileExists|fileSingle)
+	encryptMPQFixture(blocks, hashString("(block table)", 3))
+	copy(data[archiveOffset+extendedOffset:], []byte{0, 0})
+	copy(data[archiveOffset+fileOffset:], listfile)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	files, err := archive.ListFiles()
+	if err != nil || len(files) != 1 || files[0] != "Interface/Test.txt" {
+		t.Fatalf("listfile=%v err=%v", files, err)
+	}
+}

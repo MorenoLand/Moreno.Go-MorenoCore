@@ -26,6 +26,7 @@ const (
 	fileEncrypt  uint32 = 0x00010000
 	fileFixKey   uint32 = 0x00020000
 	fileSingle   uint32 = 0x01000000
+	fileExists   uint32 = 0x80000000
 	sectorSize   uint32 = 512
 )
 
@@ -549,11 +550,13 @@ func hashString(name string, hashType uint32) uint32 {
 func decrypt(data []byte, key uint32) {
 	cryptOnce.Do(initCryptTable)
 	seed := key
+	seed2 := uint32(0xEEEEEEEE)
 	for offset := 0; offset+4 <= len(data); offset += 4 {
+		seed2 += cryptTable[0x400+(seed&0xFF)]
 		value := binary.LittleEndian.Uint32(data[offset:])
-		value ^= seed + cryptTable[0x400+(seed&0xFF)]
-		binary.LittleEndian.PutUint32(data[offset:], value)
+		value ^= seed + seed2
 		seed = ((^seed << 21) + 0x11111111) | (seed >> 11)
-		seed += value + (seed << 5) + 3
+		seed2 = value + seed2 + (seed2 << 5) + 3
+		binary.LittleEndian.PutUint32(data[offset:], value)
 	}
 }
