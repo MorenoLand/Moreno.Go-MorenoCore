@@ -3,6 +3,7 @@ package world
 import (
 	"context"
 	"math"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -62,30 +63,32 @@ const (
 )
 
 type dynamicGameObjectState struct {
-	GUID           uint64
-	LowGUID        uint32
-	Entry          uint32
-	OwnerGUID      uint64
-	FishingHandled bool
-	Map            uint32
-	X              float32
-	Y              float32
-	Z              float32
-	Orientation    float32
-	State          uint8
-	AnimProgress   uint8
-	ArtKit         uint8
-	Type           uint8
-	DisplayID      uint32
-	Size           float32
-	Flags          uint32
-	Faction        uint32
-	Data1          uint32
-	ParentRotation [4]float32
-	AutoCloseTimer *time.Timer
-	DespawnTimer   *time.Timer
-	Hidden         bool
-	IsRuntimeSpawn bool
+	GUID            uint64
+	LowGUID         uint32
+	Entry           uint32
+	OwnerGUID       uint64
+	FishingHandled  bool
+	FishingUses     uint32
+	FishingMaxOpens uint32
+	Map             uint32
+	X               float32
+	Y               float32
+	Z               float32
+	Orientation     float32
+	State           uint8
+	AnimProgress    uint8
+	ArtKit          uint8
+	Type            uint8
+	DisplayID       uint32
+	Size            float32
+	Flags           uint32
+	Faction         uint32
+	Data1           uint32
+	ParentRotation  [4]float32
+	AutoCloseTimer  *time.Timer
+	DespawnTimer    *time.Timer
+	Hidden          bool
+	IsRuntimeSpawn  bool
 }
 
 type gameObjectSpawn struct {
@@ -531,6 +534,21 @@ func (s *Server) getOrLoadGameObjectState(ctx context.Context, guid uint64, lowG
 		DisplayID:   uint32(displayID),
 		Size:        float32(size),
 		Data1:       uint32(data1),
+	}
+	if dyn.Type == GameObjectTypeFishingHole {
+		var minOpens, maxOpens int64
+		if err := s.WorldStore.DB.QueryRowContext(ctx, "SELECT COALESCE(data2, 0), COALESCE(data3, 0) FROM gameobject_template WHERE entry = ?", entry).Scan(&minOpens, &maxOpens); err == nil && maxOpens > 0 {
+			if minOpens < 0 {
+				minOpens = 0
+			}
+			if maxOpens < minOpens {
+				maxOpens = minOpens
+			}
+			dyn.FishingMaxOpens = uint32(minOpens)
+			if maxOpens > minOpens {
+				dyn.FishingMaxOpens += uint32(rand.Int63n(maxOpens - minOpens + 1))
+			}
+		}
 	}
 
 	s.objectsMu.Lock()

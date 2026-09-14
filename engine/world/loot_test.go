@@ -585,7 +585,7 @@ func TestFishingHoleUseDoesNotRequireBobberOwner(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 	sess := &session{server: &Server{}, conn: serverConn, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Map: 0, X: 10, Y: 20, Z: 30}}
-	state := &dynamicGameObjectState{GUID: 8, Map: 0, X: 10, Y: 20, Z: 30, Type: GameObjectTypeFishingHole}
+	state := &dynamicGameObjectState{GUID: 8, Map: 0, X: 10, Y: 20, Z: 30, Type: GameObjectTypeFishingHole, FishingMaxOpens: 1}
 	payload := protocol.NewBuffer(8)
 	payload.WriteU64(8)
 	done := make(chan bool, 1)
@@ -602,6 +602,9 @@ func TestFishingHoleUseDoesNotRequireBobberOwner(t *testing.T) {
 	}
 	if !<-done {
 		t.Fatal("fishing-hole use failed")
+	}
+	if state.FishingUses != 1 {
+		t.Fatalf("fishing uses=%d", state.FishingUses)
 	}
 }
 

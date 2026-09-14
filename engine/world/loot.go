@@ -398,9 +398,17 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	if goState.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
 		return s.sendLootError(targetGUID, 4) == nil
 	}
-	goState.FishingHandled = true
+	if !requireOwner && goState.FishingMaxOpens > 0 && goState.FishingUses >= goState.FishingMaxOpens {
+		return true
+	}
+	if requireOwner {
+		goState.FishingHandled = true
+	}
 	loot := &activeLootState{TargetGUID: targetGUID, MapID: goState.Map, LootType: 3, Items: make(map[uint8]lootItem)}
 	if s.server == nil || s.server.WorldStore == nil || s.server.WorldStore.DB == nil {
+		if !requireOwner {
+			goState.FishingUses++
+		}
 		return s.sendLootResponse(loot) == nil
 	}
 	var zoneSkill int64
@@ -500,7 +508,17 @@ func (s *session) handleFishingUse(ctx context.Context, payload []byte, goState 
 	if err := s.sendLootResponse(loot); err != nil {
 		return false
 	}
-	s.server.despawnDynamicGameObject(targetGUID)
+	if requireOwner {
+		s.server.despawnDynamicGameObject(targetGUID)
+	} else {
+		goState.FishingUses++
+		if goState.FishingMaxOpens > 0 && goState.FishingUses >= goState.FishingMaxOpens {
+			s.server.setGameObjectState(targetGUID, GameObjectStateActive)
+			s.server.broadcastGameObjectDespawn(goState.Map, targetGUID)
+		} else {
+			s.server.setGameObjectState(targetGUID, GameObjectStateReady)
+		}
+	}
 	return true
 }
 
