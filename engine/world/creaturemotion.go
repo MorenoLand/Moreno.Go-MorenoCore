@@ -578,7 +578,7 @@ func (s *Server) stepCreatureMotion(ctx context.Context, motion *creatureMotion,
 		if cReach <= 0 {
 			cReach = 1.5
 		}
-		contactDist := cReach + victimReach
+		contactDist := float32(calcMeleeRange(cReach, victimReach))
 		spellMinDist, spellMaxDist := contactDist, contactDist
 		if len(motion.Spells) > 0 && s != nil && s.Data != nil {
 			if spellInfo, found, err := s.Data.Spell(motion.Spells[motion.NextSpellIdx%len(motion.Spells)]); err == nil && found {

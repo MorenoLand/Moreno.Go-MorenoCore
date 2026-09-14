@@ -229,16 +229,19 @@ func TestCreatureHostileAggroAndCombat(t *testing.T) {
 	server.sessions[sess] = struct{}{}
 
 	motion := &creatureMotion{
-		GUID:     creatureWorldGUID(100, 68),
-		Entry:    68,
-		Map:      0,
-		X:        0.0,
-		Y:        0.0,
-		Z:        0.0,
-		Faction:  14, // Monster (Hostile)
-		Level:    5,
-		Speed:    2.5,
-		RunSpeed: 7.0,
+		GUID:       creatureWorldGUID(100, 68),
+		Entry:      68,
+		Map:        0,
+		X:          0.0,
+		Y:          0.0,
+		Z:          0.0,
+		Faction:    14, // Monster (Hostile)
+		Level:      5,
+		Speed:      2.5,
+		RunSpeed:   7.0,
+		Health:     100,
+		MaxHealth:  100,
+		AttackTime: 1000,
 	}
 
 	players := []playerPos{{
@@ -281,10 +284,13 @@ func TestCreatureHostileAggroAndCombat(t *testing.T) {
 		t.Fatalf("expected creature target to be 1, got %d", motion.TargetGUID)
 	}
 
-	// 2. Creature pursues target at run speed
+	// 2. Reference melee reach treats five yards as contact range
 	server.stepCreatureMotion(context.Background(), motion, players, now)
-	if motion.X != 5.0 || motion.Y != 0.0 {
-		t.Fatalf("expected creature to move toward target, got pos %f,%f", motion.X, motion.Y)
+	if motion.X != 0.0 || motion.Y != 0.0 {
+		t.Fatalf("creature moved while already in melee range, got pos %f,%f", motion.X, motion.Y)
+	}
+	if sess.player.Health >= 100 {
+		t.Fatalf("expected in-range creature attack to damage player, health=%d", sess.player.Health)
 	}
 }
 
