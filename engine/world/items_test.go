@@ -1571,7 +1571,7 @@ func TestSendInventoryItemsAtomicDelivery(t *testing.T) {
 		"CREATE TABLE characters (guid INTEGER, equipmentCache TEXT)",
 		"CREATE TABLE item_template (entry INTEGER PRIMARY KEY, ContainerSlots INTEGER, MaxDurability INTEGER)",
 		"INSERT INTO item_template VALUES (6948, 0, 0)", // Hearthstone
-		"INSERT INTO item_instance VALUES (8, 6948, 1, 0, 1, 0, '', 0, '', 0, 0, 0, '')",
+		"INSERT INTO item_instance VALUES (8, 6948, 1, 0, 1, 120, '', 0, '', 0, 0, 0, '')",
 		"INSERT INTO character_inventory VALUES (1, 0, 23, 8)", // Hearthstone in backpack slot 23
 		"INSERT INTO characters VALUES (1, '')",
 	} {
@@ -1598,31 +1598,41 @@ func TestSendInventoryItemsAtomicDelivery(t *testing.T) {
 		},
 	}
 
-	pktChan := make(chan []byte, 1)
+	type frame struct {
+		opcode uint16
+		data   []byte
+	}
+	pktChan := make(chan frame, 2)
 	go func() {
-		op, data, rErr := readServerFrame(c, nil)
-		if rErr != nil {
-			return
-		}
-		if op == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
-			decompressed, dErr := protocol.DecompressUpdatePayload(data)
-			if dErr == nil {
-				data = decompressed
+		for i := 0; i < 2; i++ {
+			op, data, rErr := readServerFrame(c, nil)
+			if rErr != nil {
+				return
 			}
+			if op == uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+				decompressed, dErr := protocol.DecompressUpdatePayload(data)
+				if dErr == nil {
+					data = decompressed
+				}
+			}
+			pktChan <- frame{opcode: op, data: data}
 		}
-		pktChan <- data
 	}()
 
 	if err := sess.sendInventoryItems(context.Background()); err != nil {
 		t.Fatalf("sendInventoryItems failed: %v", err)
 	}
 
-	var data []byte
+	var first frame
 	select {
-	case data = <-pktChan:
+	case first = <-pktChan:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("timeout waiting for inventory update packet")
 	}
+	if first.opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) && first.opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) {
+		t.Fatalf("unexpected inventory opcode=%x", first.opcode)
+	}
+	data := first.data
 
 	r := protocol.NewReader(data)
 	blockCount, err := r.ReadU32()
@@ -1639,6 +1649,21 @@ func TestSendInventoryItemsAtomicDelivery(t *testing.T) {
 	expectedHearthstoneGUID := uint64(8) | (uint64(0x4000) << 48)
 	if guid1 != expectedHearthstoneGUID {
 		t.Fatalf("expected item GUID %x, got %x", expectedHearthstoneGUID, guid1)
+	}
+	select {
+	case durationFrame := <-pktChan:
+		if durationFrame.opcode != uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE) {
+			t.Fatalf("duration opcode=%x", durationFrame.opcode)
+		}
+		durationReader := protocol.NewReader(durationFrame.data)
+		if guid, err := durationReader.ReadU64(); err != nil || guid != expectedHearthstoneGUID {
+			t.Fatalf("duration guid=%x err=%v", guid, err)
+		}
+		if duration, err := durationReader.ReadU32(); err != nil || duration != 120 {
+			t.Fatalf("duration=%d err=%v", duration, err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("timeout waiting for item duration packet")
 	}
 }
 

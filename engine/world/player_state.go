@@ -1894,6 +1894,17 @@ func (s *session) sendInventoryItems(ctx context.Context) error {
 			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 		}
 	}
+	for _, item := range items {
+		if item.duration <= 0 {
+			continue
+		}
+		packet := protocol.NewBuffer(12)
+		packet.WriteU64(uint64(item.itemGUID) | (uint64(0x4000) << 48))
+		packet.WriteU32(toUint32(item.duration))
+		if err := s.write(uint16(protocol.OpcodeSMSG_ITEM_TIME_UPDATE), packet.Bytes(), true); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
