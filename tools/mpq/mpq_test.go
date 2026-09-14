@@ -325,6 +325,90 @@ func TestReadEncryptedMultiSectorFile(t *testing.T) {
 	}
 }
 
+func writeEmbeddedMPQZlibFixture(t *testing.T, name string, payload []byte) string {
+	t.Helper()
+	archiveOffset := 512
+	hashOffset, blockOffset, extendedOffset, fileOffset := 0x100, 0x200, 0x300, 0x400
+	blockSize := uint32(512 << 3)
+	sectorCount := (uint32(len(payload)) + blockSize - 1) / blockSize
+	encoded := make([][]byte, sectorCount)
+	for index := uint32(0); index < sectorCount; index++ {
+		start := index * blockSize
+		end := start + blockSize
+		if end > uint32(len(payload)) {
+			end = uint32(len(payload))
+		}
+		var compressed bytes.Buffer
+		writer := zlib.NewWriter(&compressed)
+		if _, err := writer.Write(payload[start:end]); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		encoded[index] = append([]byte{0x02}, compressed.Bytes()...)
+	}
+	tableSize := (sectorCount + 1) * 4
+	fileData := make([]byte, tableSize)
+	dataOffset := tableSize
+	for index, sector := range encoded {
+		binary.LittleEndian.PutUint32(fileData[uint32(index)*4:], uint32(dataOffset))
+		fileData = append(fileData, sector...)
+		dataOffset += uint32(len(sector))
+	}
+	binary.LittleEndian.PutUint32(fileData[sectorCount*4:], uint32(dataOffset))
+	data := make([]byte, archiveOffset+fileOffset+len(fileData))
+	header := data[archiveOffset:]
+	binary.LittleEndian.PutUint32(header[0:], archiveMagic)
+	binary.LittleEndian.PutUint32(header[4:], 44)
+	binary.LittleEndian.PutUint32(header[8:], uint32(fileOffset+len(fileData)))
+	binary.LittleEndian.PutUint16(header[12:], 1)
+	binary.LittleEndian.PutUint16(header[14:], 3)
+	binary.LittleEndian.PutUint32(header[16:], uint32(hashOffset))
+	binary.LittleEndian.PutUint32(header[20:], uint32(blockOffset))
+	binary.LittleEndian.PutUint32(header[24:], 16)
+	binary.LittleEndian.PutUint32(header[28:], 1)
+	binary.LittleEndian.PutUint64(header[32:], uint64(extendedOffset))
+	hashes := data[archiveOffset+hashOffset : archiveOffset+hashOffset+16*16]
+	for index := 0; index < 16; index++ {
+		binary.LittleEndian.PutUint32(hashes[index*16:], 0xFFFFFFFF)
+		binary.LittleEndian.PutUint32(hashes[index*16+4:], 0xFFFFFFFF)
+		binary.LittleEndian.PutUint32(hashes[index*16+12:], 0xFFFFFFFF)
+	}
+	hashSlot := int(hashString(name, 0) % 16)
+	binary.LittleEndian.PutUint32(hashes[hashSlot*16:], hashString(name, 1))
+	binary.LittleEndian.PutUint32(hashes[hashSlot*16+4:], hashString(name, 2))
+	binary.LittleEndian.PutUint32(hashes[hashSlot*16+12:], 0)
+	encryptMPQFixture(hashes, hashString("(hash table)", 3))
+	blocks := data[archiveOffset+blockOffset : archiveOffset+blockOffset+16]
+	binary.LittleEndian.PutUint32(blocks[0:], uint32(fileOffset))
+	binary.LittleEndian.PutUint32(blocks[4:], uint32(len(fileData)))
+	binary.LittleEndian.PutUint32(blocks[8:], uint32(len(payload)))
+	binary.LittleEndian.PutUint32(blocks[12:], fileExists|fileCompress)
+	encryptMPQFixture(blocks, hashString("(block table)", 3))
+	copy(data[archiveOffset+extendedOffset:], []byte{0, 0})
+	copy(data[archiveOffset+fileOffset:], fileData)
+	path := filepath.Join(t.TempDir(), "zlib-sectors.mpq")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestReadCompressedMultiSectorFile(t *testing.T) {
+	payload := bytes.Repeat([]byte("compressed MPQ sector parity "), 400)
+	path := writeEmbeddedMPQZlibFixture(t, "Data/zlib.bin", payload)
+	archive, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	got, err := archive.ReadFile("Data/zlib.bin")
+	if err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("compressed multi-sector read len=%d err=%v", len(got), err)
+	}
+}
+
 func TestOpenReadsEmbeddedVersionOneArchive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fixture.mpq")
 	archiveOffset := 512
