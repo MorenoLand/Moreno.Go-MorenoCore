@@ -175,6 +175,8 @@ func NormalizeSchemaStatement(statement, dialect string) ([]string, error) {
 			return nil, nil
 		}
 		return []string{statement}, nil
+	case strings.HasPrefix(upper, "CREATE INDEX"), strings.HasPrefix(upper, "CREATE UNIQUE INDEX"):
+		return []string{statement}, nil
 	case strings.HasPrefix(upper, "CREATE VIEW") || strings.HasPrefix(upper, "CREATE ALGORITHM") || strings.HasPrefix(upper, "CREATE DEFINER"):
 		if strings.Contains(upper, " PROCEDURE ") || strings.Contains(upper, " FUNCTION ") || strings.Contains(upper, " TRIGGER ") || strings.Contains(upper, " EVENT ") {
 			return nil, nil

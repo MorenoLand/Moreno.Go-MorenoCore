@@ -81,3 +81,21 @@ func TestDatabaseStats(t *testing.T) {
 		t.Errorf("expected 2 rows, got %d", rows)
 	}
 }
+
+func TestSchemaDifferencesDetectDefinitionDrift(t *testing.T) {
+	left := schemaInventory{Objects: map[string]string{"auth/TABLE/account": "CREATE TABLE account (id INTEGER)"}}
+	right := schemaInventory{Objects: map[string]string{"auth/TABLE/account": "CREATE TABLE account (id TEXT)", "auth/TABLE/extra": "CREATE TABLE extra (id INTEGER)"}}
+	missing, extra, mismatched := schemaDifferences(left, right)
+	if len(missing) != 0 || len(extra) != 1 || len(mismatched) != 1 || extra[0] != "auth/TABLE/extra" || mismatched[0] != "auth/TABLE/account" {
+		t.Fatalf("missing=%v extra=%v mismatched=%v", missing, extra, mismatched)
+	}
+}
+
+func TestSchemaIndexComparisonIgnoresDialectIndexNames(t *testing.T) {
+	left := schemaInventory{Objects: map[string]string{"auth/INDEX/account/username": "INDEX/account/username"}}
+	right := schemaInventory{Objects: map[string]string{"auth/INDEX/account/username": "INDEX/account/username"}}
+	missing, extra, mismatched := schemaDifferences(left, right)
+	if len(missing) != 0 || len(extra) != 0 || len(mismatched) != 0 {
+		t.Fatalf("missing=%v extra=%v mismatched=%v", missing, extra, mismatched)
+	}
+}

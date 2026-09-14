@@ -15,12 +15,14 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: dbtool schema|import-sql|verify|statement-audit")
+		fmt.Fprintln(os.Stderr, "usage: dbtool schema|schema-audit|import-sql|verify|statement-audit")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
 	case "schema":
 		os.Exit(schema(os.Args[2:]))
+	case "schema-audit":
+		os.Exit(schemaAudit(os.Args[2:]))
 	case "import-sql":
 		os.Exit(importSQL(os.Args[2:]))
 	case "verify":
@@ -31,6 +33,36 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unknown dbtool command %q\n", os.Args[1])
 		os.Exit(2)
 	}
+}
+
+func schemaAudit(args []string) int {
+	fs := flag.NewFlagSet("schema-audit", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	mysqlDir := fs.String("mysql-dir", "sql/mysql", "MySQL schema directory")
+	sqliteDir := fs.String("sqlite-dir", "sql/sqlite", "SQLite schema directory")
+	output := fs.String("output", "docs/SCHEMA_INVENTORY.md", "audit report path")
+	strict := fs.Bool("strict", false, "return failure when dialect definitions differ")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	report, status, err := schemaAuditReport(*mysqlDir, *sqliteDir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.MkdirAll(filepath.Dir(*output), 0755); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if err := os.WriteFile(*output, []byte(report), 0644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	fmt.Printf("wrote %s\n", *output)
+	if *strict {
+		return status
+	}
+	return 0
 }
 
 type statementAuditFailure struct {
