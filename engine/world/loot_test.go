@@ -517,7 +517,7 @@ func TestFishingNodeUsesFishingLootTemplate(t *testing.T) {
 	server := &Server{WorldStore: store, CharactersStore: store, creatureLoot: make(map[uint64]*activeLootState), dynamicGameObjects: make(map[uint64]*dynamicGameObjectState)}
 	sess := &session{server: server, conn: serverConn, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1, Map: 0, Zone: 40, X: 10, Y: 20, Z: 30, Skills: []playerSkill{{Skill: 356, Value: 1, Max: 100}}}}
 	guid := gameObjectGUID(500, 35591)
-	state := &dynamicGameObjectState{GUID: guid, Entry: 35591, LowGUID: 500, Map: 0, X: 10, Y: 20, Z: 30, OwnerGUID: 1, Type: GameObjectTypeFishingNode}
+	state := &dynamicGameObjectState{GUID: guid, Entry: 35591, LowGUID: 500, Map: 0, X: 10, Y: 20, Z: 30, OwnerGUID: 1, State: GameObjectStateReady, Type: GameObjectTypeFishingNode}
 	payload := protocol.NewBuffer(8)
 	payload.WriteU64(guid)
 	done := make(chan bool, 1)
@@ -557,6 +557,26 @@ func TestFishingHoleBypassesLowSkillChance(t *testing.T) {
 	bobber := &dynamicGameObjectState{GUID: 1, Map: 0, X: 20, Y: 20, Z: 0, Type: GameObjectTypeFishingNode}
 	if !sess.fishingHoleNearby(context.Background(), bobber) {
 		t.Fatal("nearby dynamic fishing hole was not detected")
+	}
+}
+
+func TestFishingNodeRejectsPrematureUse(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+	server := &Server{}
+	sess := &session{server: server, conn: serverConn, playerLoaded: true, playerGUID: 1, player: &playerState{GUID: 1}}
+	state := &dynamicGameObjectState{GUID: 7, OwnerGUID: 1, State: GameObjectStateActive}
+	payload := protocol.NewBuffer(8)
+	payload.WriteU64(7)
+	done := make(chan bool, 1)
+	go func() { done <- sess.handleFishingNodeUse(context.Background(), payload.Bytes(), state) }()
+	opcode, _, err := readServerFrame(clientConn, nil)
+	if err != nil || opcode != uint16(protocol.OpcodeSMSG_FISH_NOT_HOOKED) {
+		t.Fatalf("opcode=%x err=%v", opcode, err)
+	}
+	if !<-done {
+		t.Fatal("premature fishing use was not handled")
 	}
 }
 

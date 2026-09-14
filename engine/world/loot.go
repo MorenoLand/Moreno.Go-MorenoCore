@@ -383,6 +383,10 @@ func (s *session) handleFishingNodeUse(ctx context.Context, payload []byte, goSt
 	if err != nil || targetGUID != goState.GUID {
 		return true
 	}
+	if goState.State != GameObjectStateReady {
+		_ = s.write(uint16(protocol.OpcodeSMSG_FISH_NOT_HOOKED), nil, true)
+		return true
+	}
 	if goState.Map != s.player.Map || distance3D(s.player.X, s.player.Y, s.player.Z, goState.X, goState.Y, goState.Z) > 10.0 {
 		return s.sendLootError(targetGUID, 4) == nil
 	}

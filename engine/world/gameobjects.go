@@ -692,7 +692,11 @@ func (s *session) spawnFishingBobber(ctx context.Context, target protocol.SpellT
 		}
 	}
 	lowGUID := s.server.nextDynamicGameObjectLowGUID()
-	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, Map: s.player.Map, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z, Orientation: s.player.Orientation, State: GameObjectStateReady, Type: GameObjectTypeFishingNode, DisplayID: displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	dyn := &dynamicGameObjectState{GUID: gameObjectGUID(lowGUID, entry), LowGUID: lowGUID, Entry: entry, OwnerGUID: s.playerGUID, Map: s.player.Map, X: target.Destination.X, Y: target.Destination.Y, Z: target.Destination.Z, Orientation: s.player.Orientation, State: GameObjectStateActive, Type: GameObjectTypeFishingNode, DisplayID: displayID, Size: size, ParentRotation: [4]float32{0, 0, 0, 1}, IsRuntimeSpawn: true}
+	dyn.AutoCloseTimer = time.AfterFunc(5*time.Second, func() {
+		s.server.setGameObjectState(dyn.GUID, GameObjectStateReady)
+		s.server.broadcastGameObjectCustomAnim(dyn.Map, dyn.GUID, 0)
+	})
 	dyn.DespawnTimer = time.AfterFunc(30*time.Second, func() { s.server.despawnDynamicGameObject(dyn.GUID) })
 	s.server.spawnDynamicGameObject(dyn)
 }
