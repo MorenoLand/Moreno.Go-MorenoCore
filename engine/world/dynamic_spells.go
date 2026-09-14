@@ -122,3 +122,27 @@ func (s *Server) despawnDynamicSpellObject(guid uint64) {
 	packet.WriteU8(0)
 	s.broadcastToMap(mapID, uint16(protocol.OpcodeSMSG_DESTROY_OBJECT), packet.Bytes())
 }
+
+func (s *session) streamDynamicSpellObjects() {
+	if s == nil || s.server == nil || s.player == nil {
+		return
+	}
+	distance := float64(s.server.Config.VisibilityDistanceContinents)
+	if distance <= 0 {
+		distance = 150
+	}
+	updates := protocol.NewUpdateData()
+	s.server.objectsMu.RLock()
+	for _, object := range s.server.dynamicSpellObjects {
+		if object == nil || object.Map != s.player.Map || math.Hypot(float64(object.X-s.player.X), float64(object.Y-s.player.Y)) > distance {
+			continue
+		}
+		updates.AddUpdateBlock(buildDynamicSpellObjectUpdate(object))
+	}
+	s.server.objectsMu.RUnlock()
+	if updates.HasData() {
+		if packet, err := updates.BuildPacket(0); err == nil && packet != nil {
+			_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
+		}
+	}
+}

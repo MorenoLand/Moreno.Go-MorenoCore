@@ -374,6 +374,7 @@ func (s *session) streamNearbyObjects(ctx context.Context) {
 	if packet, count, err := s.server.buildNearbyGameObjectUpdates(ctx, *s.player); err == nil && count > 0 && packet != nil {
 		_ = s.write(packet.Opcode, packet.Payload.Bytes(), true)
 	}
+	s.streamDynamicSpellObjects()
 }
 
 func (s *session) sendDestroyObject(guid uint64, onDeath bool) {

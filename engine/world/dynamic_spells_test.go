@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/engine/config"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/pkg/protocol"
 )
 
@@ -76,5 +77,24 @@ func TestDynamicSpellObjectCreateAndDespawn(t *testing.T) {
 	server.objectsMu.Unlock()
 	if exists {
 		t.Fatal("dynamic spell object remained after despawn")
+	}
+}
+
+func TestStreamDynamicSpellObjectsToEnteringPlayer(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	server := &Server{Config: config.Default(), sessions: make(map[*session]struct{}), dynamicSpellObjects: make(map[uint64]*dynamicSpellObjectState)}
+	object := &dynamicSpellObjectState{GUID: dynamicSpellGUID(2), CasterGUID: 1, SpellID: 2120, Map: 0, X: 10, Y: 20, Z: 30, Radius: 8}
+	server.dynamicSpellObjects[object.GUID] = object
+	sess := &session{server: server, conn: serverConn, authed: true, playerLoaded: true, player: &playerState{GUID: 2, Map: 0, X: 11, Y: 20, Z: 30}}
+	go sess.streamDynamicSpellObjects()
+	_ = clientConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	opcode, payload, err := readServerFrame(clientConn, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opcode != uint16(protocol.OpcodeSMSG_UPDATE_OBJECT) && opcode != uint16(protocol.OpcodeSMSG_COMPRESSED_UPDATE_OBJECT) {
+		t.Fatalf("stream opcode=%x payload=%d", opcode, len(payload))
 	}
 }
