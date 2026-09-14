@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/MorenoLand/Moreno.Go-MorenoCore/tools/mpq"
 	"github.com/MorenoLand/Moreno.Go-MorenoCore/tools/wowdata"
 )
 
@@ -32,7 +33,7 @@ func main() {
 		os.Exit(2)
 	}
 	if *adtFile != "" {
-		data, err := os.ReadFile(*adtFile)
+		data, err := readClientAsset(*input, *adtFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "ADT read failed: %v\n", err)
 			os.Exit(1)
@@ -64,7 +65,7 @@ func main() {
 		}
 	}
 	if *wdtFile != "" {
-		data, err := os.ReadFile(*wdtFile)
+		data, err := readClientAsset(*input, *wdtFile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "WDT read failed: %v\n", err)
 			os.Exit(1)
@@ -105,6 +106,38 @@ func main() {
 		os.Exit(1)
 	}
 	fmt.Printf("Extracted and validated %d DBC files into %s\n", count, *output)
+}
+
+func readClientAsset(input, name string) ([]byte, error) {
+	data, localErr := os.ReadFile(name)
+	if localErr == nil {
+		return data, nil
+	}
+	if input == "" {
+		return nil, localErr
+	}
+	archives, err := mpq.Archives(input)
+	if err != nil {
+		return nil, err
+	}
+	var lastErr error = localErr
+	for _, path := range archives {
+		archive, openErr := mpq.Open(path)
+		if openErr != nil {
+			lastErr = openErr
+			continue
+		}
+		data, readErr := archive.ReadFile(name)
+		closeErr := archive.Close()
+		if readErr == nil {
+			if closeErr != nil {
+				return nil, closeErr
+			}
+			return data, nil
+		}
+		lastErr = readErr
+	}
+	return nil, fmt.Errorf("client asset %q was not found in %q: %w", name, input, lastErr)
 }
 
 func writeDirBin(path string, payload []byte) error {

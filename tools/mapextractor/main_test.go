@@ -273,3 +273,18 @@ func TestExtractDBCInvalidDir(t *testing.T) {
 	}
 	_ = os.RemoveAll(tempDir)
 }
+
+func TestReadClientAssetUsesLocalFileBeforeMPQSearch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "World", "Maps", "test.wdt")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("local WDT fixture")
+	if err := os.WriteFile(path, want, 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readClientAsset("", path)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("asset=%q err=%v", got, err)
+	}
+}
