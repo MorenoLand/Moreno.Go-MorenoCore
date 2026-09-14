@@ -25,6 +25,53 @@ func TestGeneratedStatementRegistry(t *testing.T) {
 	}
 }
 
+func TestSQLiteDialectOverridesPreserveNullAndTimestampSemantics(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	store := &Store{Name: "auth", Backend: BackendSQLite, DB: db}
+	if _, err := db.Exec("CREATE TABLE ip_banned (ip TEXT, bandate INTEGER, unbandate INTEGER, bannedby TEXT, banreason TEXT)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO ip_banned VALUES ('127.0.0.1', 100, 100, 'test', 'permanent'), ('192.0.2.1', 1, 2, 'test', 'expired')"); err != nil {
+		t.Fatal(err)
+	}
+	var banned bool
+	var country sql.NullString
+	row, err := store.QueryRowStatement(context.Background(), "LOGIN_SEL_IP_INFO", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := row.Scan(&banned, &country); err != nil || !banned || country.Valid {
+		t.Fatalf("banned=%v country=%v err=%v", banned, country, err)
+	}
+	if _, err := store.ExecStatement(context.Background(), "LOGIN_DEL_EXPIRED_IP_BANS"); err != nil {
+		t.Fatal(err)
+	}
+	var remaining int
+	if err := db.QueryRow("SELECT COUNT(*) FROM ip_banned").Scan(&remaining); err != nil || remaining != 1 {
+		t.Fatalf("remaining bans=%d err=%v", remaining, err)
+	}
+}
+
+func TestMySQLAndMariaDBStatementSQLRemainAligned(t *testing.T) {
+	for _, definition := range AllStatements() {
+		mysql, err := StatementSQL(definition.ID, BackendMySQL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		maria, err := StatementSQL(definition.ID, BackendMariaDB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mysql != maria {
+			t.Fatalf("statement %s diverges between MySQL and MariaDB", definition.ID)
+		}
+	}
+}
+
 func TestSQLiteDialectOverridesAvoidMySQLOnlySyntax(t *testing.T) {
 	ids := []StatementID{
 		"LOGIN_DEL_EXPIRED_IP_BANS", "LOGIN_UPD_EXPIRED_ACCOUNT_BANS", "LOGIN_SEL_IP_BANNED_BY_IP",
