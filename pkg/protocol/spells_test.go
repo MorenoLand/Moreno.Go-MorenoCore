@@ -80,3 +80,52 @@ func TestBuildSpellFailure(t *testing.T) {
 		t.Fatalf("result=%d err=%v", value, err)
 	}
 }
+
+func TestBuildAuraUpdateAllPreservesReferenceRecords(t *testing.T) {
+	data := BuildAuraUpdateAll(7, []AuraUpdateRecord{{CasterGUID: 7, Slot: 2, SpellID: 123, Positive: true, MaxDurationMs: 60000, DurationMs: 30000, CasterLevel: 20, StackCount: 2}, {CasterGUID: 8, Slot: 5, SpellID: 456, Positive: false, CasterLevel: 30, StackCount: 1}})
+	reader := NewReader(data)
+	if guid, err := reader.ReadPackedGUID(); err != nil || guid != 7 {
+		t.Fatalf("target=%d err=%v", guid, err)
+	}
+	if slot, err := reader.ReadU8(); err != nil || slot != 2 {
+		t.Fatalf("first slot=%d err=%v", slot, err)
+	}
+	if spell, err := reader.ReadU32(); err != nil || spell != 123 {
+		t.Fatalf("first spell=%d err=%v", spell, err)
+	}
+	flags, err := reader.ReadU8()
+	if err != nil || flags&AuraFlagCaster == 0 || flags&AuraFlagDuration == 0 || flags&AuraFlagPositive == 0 {
+		t.Fatalf("first flags=%x err=%v", flags, err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		t.Fatal(err)
+	}
+	if stack, err := reader.ReadU8(); err != nil || stack != 2 {
+		t.Fatalf("first stack=%d err=%v", stack, err)
+	}
+	if max, err := reader.ReadU32(); err != nil || max != 60000 {
+		t.Fatalf("first max=%d err=%v", max, err)
+	}
+	if remaining, err := reader.ReadU32(); err != nil || remaining != 30000 {
+		t.Fatalf("first remaining=%d err=%v", remaining, err)
+	}
+	if slot, err := reader.ReadU8(); err != nil || slot != 5 {
+		t.Fatalf("second slot=%d err=%v", slot, err)
+	}
+	if spell, err := reader.ReadU32(); err != nil || spell != 456 {
+		t.Fatalf("second spell=%d err=%v", spell, err)
+	}
+	flags, err = reader.ReadU8()
+	if err != nil || flags&AuraFlagCaster != 0 || flags&AuraFlagNegative == 0 {
+		t.Fatalf("second flags=%x err=%v", flags, err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.ReadU8(); err != nil {
+		t.Fatal(err)
+	}
+	if caster, err := reader.ReadPackedGUID(); err != nil || caster != 8 {
+		t.Fatalf("second caster=%d err=%v", caster, err)
+	}
+}

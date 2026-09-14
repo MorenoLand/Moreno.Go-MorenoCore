@@ -138,8 +138,13 @@ func (s *session) loadedAuras() []*activeAura {
 }
 
 func (s *session) sendLoadedAuras() {
-	for _, aura := range s.loadedAuras() {
-		packet := protocol.BuildAuraUpdateWithStack(s.playerGUID, aura.CasterGUID, aura.Slot, aura.SpellID, false, aura.Positive, aura.DurationMs, aura.RemainingMs, aura.CasterLevel, aura.StackCount)
-		_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE), packet, true)
+	auras := s.loadedAuras()
+	if len(auras) == 0 {
+		return
 	}
+	records := make([]protocol.AuraUpdateRecord, 0, len(auras))
+	for _, aura := range auras {
+		records = append(records, protocol.AuraUpdateRecord{CasterGUID: aura.CasterGUID, Slot: aura.Slot, SpellID: aura.SpellID, Positive: aura.Positive, MaxDurationMs: aura.DurationMs, DurationMs: aura.RemainingMs, CasterLevel: aura.CasterLevel, StackCount: aura.StackCount})
+	}
+	_ = s.write(uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL), protocol.BuildAuraUpdateAll(s.playerGUID, records), true)
 }

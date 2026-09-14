@@ -128,7 +128,7 @@ func TestLoadAndSendPersistentAura(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opcode != uint16(protocol.OpcodeSMSG_AURA_UPDATE) || len(payload) == 0 {
+	if opcode != uint16(protocol.OpcodeSMSG_AURA_UPDATE_ALL) || len(payload) == 0 {
 		t.Fatalf("opcode=%x payload=%x", opcode, payload)
 	}
 	sess.clearActiveAuras()

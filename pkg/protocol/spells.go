@@ -274,42 +274,67 @@ func BuildAuraUpdate(targetGUID, casterGUID uint64, slot uint8, spellID uint32, 
 	return BuildAuraUpdateWithStack(targetGUID, casterGUID, slot, spellID, remove, positive, maxDurationMs, durationMs, casterLevel, 1)
 }
 
+type AuraUpdateRecord struct {
+	CasterGUID    uint64
+	Slot          uint8
+	SpellID       uint32
+	Positive      bool
+	MaxDurationMs uint32
+	DurationMs    uint32
+	CasterLevel   uint8
+	StackCount    uint8
+}
+
 func BuildAuraUpdateWithStack(targetGUID, casterGUID uint64, slot uint8, spellID uint32, remove, positive bool, maxDurationMs, durationMs uint32, casterLevel, stackCount uint8) []byte {
 	buf := NewBuffer(36)
 	buf.WritePackedGUID(targetGUID)
-	buf.WriteU8(slot)
 	if remove {
+		buf.WriteU8(slot)
 		buf.WriteU32(0)
 		return buf.Bytes()
 	}
-	buf.WriteU32(spellID)
+	writeAuraUpdateRecord(buf, targetGUID, AuraUpdateRecord{CasterGUID: casterGUID, Slot: slot, SpellID: spellID, Positive: positive, MaxDurationMs: maxDurationMs, DurationMs: durationMs, CasterLevel: casterLevel, StackCount: stackCount})
+	return buf.Bytes()
+}
+
+func BuildAuraUpdateAll(targetGUID uint64, records []AuraUpdateRecord) []byte {
+	buf := NewBuffer(16 + len(records)*24)
+	buf.WritePackedGUID(targetGUID)
+	for _, record := range records {
+		writeAuraUpdateRecord(buf, targetGUID, record)
+	}
+	return buf.Bytes()
+}
+
+func writeAuraUpdateRecord(buf *Buffer, targetGUID uint64, record AuraUpdateRecord) {
+	buf.WriteU8(record.Slot)
+	buf.WriteU32(record.SpellID)
 	flags := AuraFlagEffIndex0
-	if casterGUID == targetGUID || casterGUID == 0 {
+	if record.CasterGUID == 0 || record.CasterGUID == targetGUID {
 		flags |= AuraFlagCaster
 	}
-	if positive {
+	if record.Positive {
 		flags |= AuraFlagPositive
 	} else {
 		flags |= AuraFlagNegative
 	}
-	if maxDurationMs > 0 {
+	if record.MaxDurationMs > 0 {
 		flags |= AuraFlagDuration
 	}
 	buf.WriteU8(flags)
-	if casterLevel == 0 {
-		casterLevel = 1
+	if record.CasterLevel == 0 {
+		record.CasterLevel = 1
 	}
-	buf.WriteU8(casterLevel)
-	if stackCount == 0 {
-		stackCount = 1
+	buf.WriteU8(record.CasterLevel)
+	if record.StackCount == 0 {
+		record.StackCount = 1
 	}
-	buf.WriteU8(stackCount)
+	buf.WriteU8(record.StackCount)
 	if flags&AuraFlagCaster == 0 { // not self-cast
-		buf.WritePackedGUID(casterGUID)
+		buf.WritePackedGUID(record.CasterGUID)
 	}
-	if maxDurationMs > 0 {
-		buf.WriteU32(maxDurationMs)
-		buf.WriteU32(durationMs)
+	if record.MaxDurationMs > 0 {
+		buf.WriteU32(record.MaxDurationMs)
+		buf.WriteU32(record.DurationMs)
 	}
-	return buf.Bytes()
 }
