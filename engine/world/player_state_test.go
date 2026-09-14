@@ -129,6 +129,25 @@ func TestFishingStepsLoadAndSave(t *testing.T) {
 	}
 }
 
+func TestInstanceStateLoad(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE characters (guid INTEGER PRIMARY KEY, instance_id INTEGER, instance_mode_mask INTEGER)"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO characters VALUES (7, 42, 3)"); err != nil {
+		t.Fatal(err)
+	}
+	sess := &session{server: &Server{CharactersStore: &database.Store{DB: db}}}
+	state := playerState{GUID: 7}
+	if err := sess.loadInstanceState(context.Background(), &state); err != nil || state.InstanceID != 42 || state.InstanceModeMask != 3 {
+		t.Fatalf("instance state=%d/%d err=%v", state.InstanceID, state.InstanceModeMask, err)
+	}
+}
+
 func TestBuildBagCreateBlockIncludesContentsAndContainer(t *testing.T) {
 	bagGUID := uint64(0x4000000000000019)
 	itemGUID := uint64(0x4000000000000020)

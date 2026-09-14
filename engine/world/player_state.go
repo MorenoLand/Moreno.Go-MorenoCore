@@ -162,6 +162,8 @@ type playerState struct {
 	GuildID              uint32
 	GuildRank            uint8
 	Map                  uint32
+	InstanceID           uint32
+	InstanceModeMask     uint32
 	X                    float32
 	Y                    float32
 	Z                    float32
@@ -380,6 +382,27 @@ func (s *session) loadFishingSteps(ctx context.Context, state *playerState) erro
 	}
 	if steps > 0 {
 		state.FishingSteps = uint8(steps)
+	}
+	return nil
+}
+
+func (s *session) loadInstanceState(ctx context.Context, state *playerState) error {
+	if s == nil || state == nil || s.server == nil || s.server.CharactersStore == nil || s.server.CharactersStore.DB == nil {
+		return nil
+	}
+	var instanceID, instanceModeMask int64
+	err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(CAST(instance_id AS INTEGER), 0), COALESCE(CAST(instance_mode_mask AS INTEGER), 0) FROM characters WHERE guid = ?", state.GUID).Scan(&instanceID, &instanceModeMask)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) || isMissingColumn(err) {
+			return nil
+		}
+		return err
+	}
+	if instanceID > 0 {
+		state.InstanceID = uint32(instanceID)
+	}
+	if instanceModeMask > 0 {
+		state.InstanceModeMask = uint32(instanceModeMask)
 	}
 	return nil
 }
@@ -810,6 +833,7 @@ func (s *session) loadOptionalPlayerState(ctx context.Context, state *playerStat
 		state.MaxPowers[i] = uint32(power)
 	}
 	state.Cinematic, state.KnownCurrency, state.WatchedFaction, state.AmmoID, state.ActionBars = uint32(cinematic), uint32(knownCurrency), uint32(watchedFaction), uint32(ammoID), uint32(actionBars)
+	_ = s.loadInstanceState(ctx, state)
 	var grantableLevels int64
 	if err := s.server.CharactersStore.DB.QueryRowContext(ctx, "SELECT COALESCE(CAST(grantableLevels AS INTEGER), 0) FROM characters WHERE guid = ?", state.GUID).Scan(&grantableLevels); err == nil && grantableLevels > 0 {
 		if grantableLevels > 255 {
