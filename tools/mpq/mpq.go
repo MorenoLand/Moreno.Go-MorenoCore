@@ -30,14 +30,16 @@ const (
 )
 
 type header struct {
-	HeaderSize    uint32
-	ArchiveSize   uint32
-	FormatVersion uint16
-	BlockSize     uint16
-	HashTablePos  uint32
-	BlockTablePos uint32
-	HashEntries   uint32
-	BlockEntries  uint32
+	HeaderSize         uint32
+	ArchiveSize        uint32
+	FormatVersion      uint16
+	BlockSize          uint16
+	HashTablePos       uint64
+	BlockTablePos      uint64
+	ExtendedBlockTable uint64
+	ArchiveOffset      uint64
+	HashEntries        uint32
+	BlockEntries       uint32
 }
 
 type hashEntry struct {
@@ -49,7 +51,8 @@ type hashEntry struct {
 }
 
 type blockEntry struct {
-	FilePos        uint32
+	RelativePos    uint64
+	FilePos        uint64
 	CompressedSize uint32
 	FileSize       uint32
 	Flags          uint32
@@ -122,22 +125,33 @@ func (a *Archive) Close() error {
 
 func (a *Archive) readHeader() error {
 	var raw [32]byte
-	if _, err := io.ReadFull(a.file, raw[:]); err != nil {
-		return err
+	for offset := uint64(0); ; offset += 512 {
+		if _, err := a.file.ReadAt(raw[:], int64(offset)); err != nil {
+			return fmt.Errorf("%s is not an MPQ archive: %w", a.path, err)
+		}
+		if binary.LittleEndian.Uint32(raw[:4]) != archiveMagic {
+			continue
+		}
+		a.header = header{HeaderSize: binary.LittleEndian.Uint32(raw[4:8]), ArchiveSize: binary.LittleEndian.Uint32(raw[8:12]), FormatVersion: binary.LittleEndian.Uint16(raw[12:14]), BlockSize: binary.LittleEndian.Uint16(raw[14:16]), HashTablePos: uint64(binary.LittleEndian.Uint32(raw[16:20])) + offset, BlockTablePos: uint64(binary.LittleEndian.Uint32(raw[20:24])) + offset, ArchiveOffset: offset, HashEntries: binary.LittleEndian.Uint32(raw[24:28]), BlockEntries: binary.LittleEndian.Uint32(raw[28:32])}
+		if a.header.HeaderSize < 32 || a.header.HashEntries == 0 || a.header.BlockEntries == 0 {
+			return fmt.Errorf("invalid MPQ header in %s", a.path)
+		}
+		if a.header.FormatVersion >= 1 {
+			var extended [12]byte
+			if _, err := a.file.ReadAt(extended[:], int64(offset)+32); err != nil {
+				return fmt.Errorf("invalid MPQ extended header in %s: %w", a.path, err)
+			}
+			a.header.ExtendedBlockTable = binary.LittleEndian.Uint64(extended[:8]) + offset
+			a.header.HashTablePos += uint64(binary.LittleEndian.Uint16(extended[8:10])) << 32
+			a.header.BlockTablePos += uint64(binary.LittleEndian.Uint16(extended[10:12])) << 32
+		}
+		return nil
 	}
-	if binary.LittleEndian.Uint32(raw[:4]) != archiveMagic {
-		return fmt.Errorf("%s is not an MPQ archive", a.path)
-	}
-	a.header = header{HeaderSize: binary.LittleEndian.Uint32(raw[4:8]), ArchiveSize: binary.LittleEndian.Uint32(raw[8:12]), FormatVersion: binary.LittleEndian.Uint16(raw[12:14]), BlockSize: binary.LittleEndian.Uint16(raw[14:16]), HashTablePos: binary.LittleEndian.Uint32(raw[16:20]), BlockTablePos: binary.LittleEndian.Uint32(raw[20:24]), HashEntries: binary.LittleEndian.Uint32(raw[24:28]), BlockEntries: binary.LittleEndian.Uint32(raw[28:32])}
-	if a.header.HeaderSize < 32 || a.header.HashEntries == 0 || a.header.BlockEntries == 0 {
-		return fmt.Errorf("invalid MPQ header in %s", a.path)
-	}
-	return nil
 }
 
 func (a *Archive) readTables() error {
 	cryptOnce.Do(initCryptTable)
-	hashBytes, err := a.readAt(a.header.HashTablePos, a.header.HashEntries*16)
+	hashBytes, err := a.readAt(a.header.HashTablePos, uint64(a.header.HashEntries)*16)
 	if err != nil {
 		return err
 	}
@@ -147,7 +161,7 @@ func (a *Archive) readTables() error {
 		offset := index * 16
 		a.hashes[index] = hashEntry{NameA: binary.LittleEndian.Uint32(hashBytes[offset:]), NameB: binary.LittleEndian.Uint32(hashBytes[offset+4:]), Locale: binary.LittleEndian.Uint16(hashBytes[offset+8:]), Platform: hashBytes[offset+10], Block: binary.LittleEndian.Uint32(hashBytes[offset+12:])}
 	}
-	blockBytes, err := a.readAt(a.header.BlockTablePos, a.header.BlockEntries*16)
+	blockBytes, err := a.readAt(a.header.BlockTablePos, uint64(a.header.BlockEntries)*16)
 	if err != nil {
 		return err
 	}
@@ -155,7 +169,19 @@ func (a *Archive) readTables() error {
 	a.blocks = make([]blockEntry, a.header.BlockEntries)
 	for index := range a.blocks {
 		offset := index * 16
-		a.blocks[index] = blockEntry{FilePos: binary.LittleEndian.Uint32(blockBytes[offset:]), CompressedSize: binary.LittleEndian.Uint32(blockBytes[offset+4:]), FileSize: binary.LittleEndian.Uint32(blockBytes[offset+8:]), Flags: binary.LittleEndian.Uint32(blockBytes[offset+12:])}
+		relative := uint64(binary.LittleEndian.Uint32(blockBytes[offset:]))
+		a.blocks[index] = blockEntry{RelativePos: relative, FilePos: relative + a.header.ArchiveOffset, CompressedSize: binary.LittleEndian.Uint32(blockBytes[offset+4:]), FileSize: binary.LittleEndian.Uint32(blockBytes[offset+8:]), Flags: binary.LittleEndian.Uint32(blockBytes[offset+12:])}
+	}
+	if a.header.ExtendedBlockTable != 0 {
+		extended, err := a.readAt(a.header.ExtendedBlockTable, uint64(a.header.BlockEntries)*2)
+		if err != nil {
+			return err
+		}
+		for index := range a.blocks {
+			high := uint64(binary.LittleEndian.Uint16(extended[index*2:])) << 32
+			a.blocks[index].RelativePos |= high
+			a.blocks[index].FilePos |= high
+		}
 	}
 	return nil
 }
@@ -179,7 +205,7 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 	}
 	block := a.blocks[index]
 	if block.Flags&fileImplode != 0 {
-		data, err := a.readAt(block.FilePos, block.CompressedSize)
+		data, err := a.readAt(block.FilePos, uint64(block.CompressedSize))
 		if err != nil {
 			return nil, err
 		}
@@ -187,7 +213,7 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 		if block.Flags&fileEncrypt != 0 {
 			key = hashString(name, 3)
 			if block.Flags&fileFixKey != 0 {
-				key = (key + block.FilePos) ^ block.FileSize
+				key = (key + uint32(block.RelativePos)) ^ block.FileSize
 			}
 		}
 		if key != 0 {
@@ -199,11 +225,11 @@ func (a *Archive) ReadFile(name string) ([]byte, error) {
 	if block.Flags&fileEncrypt != 0 {
 		key = hashString(name, 3)
 		if block.Flags&fileFixKey != 0 {
-			key = (key + block.FilePos) ^ block.FileSize
+			key = (key + uint32(block.RelativePos)) ^ block.FileSize
 		}
 	}
 	if block.Flags&fileSingle != 0 {
-		data, err := a.readAt(block.FilePos, block.CompressedSize)
+		data, err := a.readAt(block.FilePos, uint64(block.CompressedSize))
 		if err != nil {
 			return nil, err
 		}
@@ -219,7 +245,7 @@ func (a *Archive) readSectors(block blockEntry, key uint32) ([]byte, error) {
 	sectorBytes := sectorSize << a.header.BlockSize
 	sectorCount := (block.FileSize + sectorBytes - 1) / sectorBytes
 	offsetBytes := (sectorCount + 1) * 4
-	offsets, err := a.readAt(block.FilePos, offsetBytes)
+	offsets, err := a.readAt(block.FilePos, uint64(offsetBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +259,7 @@ func (a *Archive) readSectors(block blockEntry, key uint32) ([]byte, error) {
 		if end < start || end > block.CompressedSize {
 			return nil, errors.New("invalid MPQ sector offsets")
 		}
-		data, err := a.readAt(block.FilePos+start, end-start)
+		data, err := a.readAt(block.FilePos+uint64(start), uint64(end-start))
 		if err != nil {
 			return nil, err
 		}
@@ -272,8 +298,11 @@ func (a *Archive) find(name string) (uint32, bool) {
 	return 0, false
 }
 
-func (a *Archive) readAt(offset, size uint32) ([]byte, error) {
-	data := make([]byte, size)
+func (a *Archive) readAt(offset, size uint64) ([]byte, error) {
+	if size > uint64(^uint(0)>>1) {
+		return nil, errors.New("MPQ read size exceeds addressable memory")
+	}
+	data := make([]byte, int(size))
 	if _, err := a.file.ReadAt(data, int64(offset)); err != nil {
 		return nil, err
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"encoding/base64"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -178,5 +179,38 @@ func TestOpenInvalidFile(t *testing.T) {
 	_, err = Open(invalidFile)
 	if err == nil {
 		t.Fatal("expected error opening non-MPQ file")
+	}
+}
+
+func TestReadHeaderScansEmbeddedVersionOneArchive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "embedded.mpq")
+	data := make([]byte, 512+44)
+	offset := 512
+	binary.LittleEndian.PutUint32(data[offset:], archiveMagic)
+	binary.LittleEndian.PutUint32(data[offset+4:], 44)
+	binary.LittleEndian.PutUint32(data[offset+8:], 4096)
+	binary.LittleEndian.PutUint16(data[offset+12:], 1)
+	binary.LittleEndian.PutUint16(data[offset+14:], 3)
+	binary.LittleEndian.PutUint32(data[offset+16:], 0x100)
+	binary.LittleEndian.PutUint32(data[offset+20:], 0x200)
+	binary.LittleEndian.PutUint32(data[offset+24:], 16)
+	binary.LittleEndian.PutUint32(data[offset+28:], 8)
+	binary.LittleEndian.PutUint64(data[offset+32:], 0x300)
+	binary.LittleEndian.PutUint16(data[offset+40:], 1)
+	binary.LittleEndian.PutUint16(data[offset+42:], 2)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	archive := &Archive{path: path, file: file}
+	if err := archive.readHeader(); err != nil {
+		t.Fatal(err)
+	}
+	if archive.header.ArchiveOffset != 512 || archive.header.HashTablePos != (1<<32)+0x100+512 || archive.header.BlockTablePos != (2<<32)+0x200+512 || archive.header.ExtendedBlockTable != 0x300+512 {
+		t.Fatalf("header offsets archive=%d hash=%d block=%d extended=%d", archive.header.ArchiveOffset, archive.header.HashTablePos, archive.header.BlockTablePos, archive.header.ExtendedBlockTable)
 	}
 }
