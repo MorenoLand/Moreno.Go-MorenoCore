@@ -147,6 +147,19 @@ func TestVendorStockSeparatesSlotsAndExtendedCosts(t *testing.T) {
 	}
 }
 
+func TestVendorStockSeparatesCreatureInstances(t *testing.T) {
+	srv := &Server{}
+	if got := srv.currentVendorStockForGUID(0xF130000000000101, 5001, 1, 0, 2, time.Minute, 1); got != 2 {
+		t.Fatalf("vendor one initial stock=%d", got)
+	}
+	if got, ok := srv.consumeVendorStockForGUID(0xF130000000000101, 5001, 1, 0, 2); !ok || got != 0 {
+		t.Fatalf("vendor one consumed stock=%d ok=%v", got, ok)
+	}
+	if got := srv.currentVendorStockForGUID(0xF130000000000202, 5001, 1, 0, 2, time.Minute, 1); got != 2 {
+		t.Fatalf("vendor two stock=%d, shared instance state", got)
+	}
+}
+
 func TestVendorExtendedCostPurchase(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {

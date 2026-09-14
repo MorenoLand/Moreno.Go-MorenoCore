@@ -40,7 +40,7 @@ type vendorInventoryStack struct {
 }
 
 type vendorStockKey struct {
-	Vendor       uint32
+	VendorGUID   uint64
 	Item         uint32
 	Slot         uint32
 	ExtendedCost uint32
@@ -52,10 +52,14 @@ type vendorStockState struct {
 }
 
 func (s *Server) currentVendorStock(vendor, item uint32, maxCount int32, increment time.Duration, buyCount uint32) int32 {
-	return s.currentVendorStockFor(vendor, item, 0, 0, maxCount, increment, buyCount)
+	return s.currentVendorStockForGUID(uint64(vendor), item, 0, 0, maxCount, increment, buyCount)
 }
 
 func (s *Server) currentVendorStockFor(vendor, item, slot, extendedCost uint32, maxCount int32, increment time.Duration, buyCount uint32) int32 {
+	return s.currentVendorStockForGUID(uint64(vendor), item, slot, extendedCost, maxCount, increment, buyCount)
+}
+
+func (s *Server) currentVendorStockForGUID(vendorGUID uint64, item, slot, extendedCost uint32, maxCount int32, increment time.Duration, buyCount uint32) int32 {
 	if maxCount <= 0 {
 		return -1
 	}
@@ -67,7 +71,7 @@ func (s *Server) currentVendorStockFor(vendor, item, slot, extendedCost uint32, 
 	if s.vendorStock == nil {
 		s.vendorStock = make(map[vendorStockKey]*vendorStockState)
 	}
-	key := vendorStockKey{Vendor: vendor, Item: item, Slot: slot, ExtendedCost: extendedCost}
+	key := vendorStockKey{VendorGUID: vendorGUID, Item: item, Slot: slot, ExtendedCost: extendedCost}
 	stock := s.vendorStock[key]
 	if stock == nil {
 		stock = &vendorStockState{Current: maxCount, Updated: time.Now()}
@@ -90,13 +94,17 @@ func (s *Server) currentVendorStockFor(vendor, item, slot, extendedCost uint32, 
 }
 
 func (s *Server) consumeVendorStock(vendor, item uint32, amount uint32) (int32, bool) {
-	return s.consumeVendorStockFor(vendor, item, 0, 0, amount)
+	return s.consumeVendorStockForGUID(uint64(vendor), item, 0, 0, amount)
 }
 
 func (s *Server) consumeVendorStockFor(vendor, item, slot, extendedCost, amount uint32) (int32, bool) {
+	return s.consumeVendorStockForGUID(uint64(vendor), item, slot, extendedCost, amount)
+}
+
+func (s *Server) consumeVendorStockForGUID(vendorGUID uint64, item, slot, extendedCost, amount uint32) (int32, bool) {
 	s.vendorMu.Lock()
 	defer s.vendorMu.Unlock()
-	stock := s.vendorStock[vendorStockKey{Vendor: vendor, Item: item, Slot: slot, ExtendedCost: extendedCost}]
+	stock := s.vendorStock[vendorStockKey{VendorGUID: vendorGUID, Item: item, Slot: slot, ExtendedCost: extendedCost}]
 	if stock == nil || stock.Current < int32(amount) {
 		return 0, false
 	}
@@ -105,12 +113,16 @@ func (s *Server) consumeVendorStockFor(vendor, item, slot, extendedCost, amount 
 }
 
 func (s *Server) restoreVendorStock(vendor, item uint32, amount uint32) {
-	s.restoreVendorStockFor(vendor, item, 0, 0, amount)
+	s.restoreVendorStockForGUID(uint64(vendor), item, 0, 0, amount)
 }
 
 func (s *Server) restoreVendorStockFor(vendor, item, slot, extendedCost, amount uint32) {
+	s.restoreVendorStockForGUID(uint64(vendor), item, slot, extendedCost, amount)
+}
+
+func (s *Server) restoreVendorStockForGUID(vendorGUID uint64, item, slot, extendedCost, amount uint32) {
 	s.vendorMu.Lock()
-	if stock := s.vendorStock[vendorStockKey{Vendor: vendor, Item: item, Slot: slot, ExtendedCost: extendedCost}]; stock != nil {
+	if stock := s.vendorStock[vendorStockKey{VendorGUID: vendorGUID, Item: item, Slot: slot, ExtendedCost: extendedCost}]; stock != nil {
 		stock.Current += int32(amount)
 	}
 	s.vendorMu.Unlock()
@@ -186,7 +198,7 @@ func (s *session) sendVendorList(ctx context.Context, vendorGUID uint64) bool {
 		if buyCount <= 0 {
 			buyCount = 1
 		}
-		inStock := s.server.currentVendorStockFor(creatureEntry, uint32(item), itemSlot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
+		inStock := s.server.currentVendorStockForGUID(vendorGUID, uint32(item), itemSlot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
 		if inStock == 0 && !isGM {
 			continue
 		}
@@ -317,7 +329,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	totalCost := uint32(buyPrice) * count
 	remainingStock := int32(-1)
 	if maxCount > 0 {
-		current := s.server.currentVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
+		current := s.server.currentVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), int32(maxCount), time.Duration(incrTime)*time.Second, uint32(buyCount))
 		if current < int32(amount) {
 			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrItemAlreadySold), true)
 			return true
@@ -338,7 +350,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	}
 	if maxCount > 0 {
 		var ok bool
-		remainingStock, ok = s.server.consumeVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), uint32(amount))
+		remainingStock, ok = s.server.consumeVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), uint32(amount))
 		if !ok {
 			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrItemAlreadySold), true)
 			return true
@@ -347,7 +359,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 	res, err := s.storeOrStackItem(ctx, s.playerGUID, itemEntry, uint32(amount))
 	if err != nil {
 		if maxCount > 0 {
-			s.server.restoreVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), uint32(amount))
+			s.server.restoreVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), uint32(amount))
 		}
 		_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantCarryMore), true)
 		return true
@@ -356,7 +368,7 @@ func (s *session) processBuyItem(ctx context.Context, vendorGUID uint64, itemEnt
 		if err := s.destroyVendorExtendedCostItems(ctx, extendedCost, count); err != nil {
 			s.rollbackVendorStoredItem(ctx, res, uint32(amount))
 			if maxCount > 0 {
-				s.server.restoreVendorStockFor(vendorEntry, itemEntry, slot, uint32(extCost), uint32(amount))
+				s.server.restoreVendorStockForGUID(vendorGUID, itemEntry, slot, uint32(extCost), uint32(amount))
 			}
 			_ = s.write(uint16(protocol.OpcodeSMSG_BUY_FAILED), buildBuyFailed(vendorGUID, itemEntry, buyErrCantFindItem), true)
 			return true
