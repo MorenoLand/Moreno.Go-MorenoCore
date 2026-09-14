@@ -143,25 +143,27 @@ func (s *session) loadEquipmentCache(ctx context.Context, guid uint64, cached st
 		return cached
 	}
 	fields := strings.Fields(cached)
-	for index := 0; index < len(fields); index += 2 {
-		if fields[index] != "0" {
-			return cached
+	if len(fields) >= int(inventorySlotBagEnd)*2 {
+		for index := 0; index < len(fields); index += 2 {
+			if fields[index] != "0" {
+				return cached
+			}
 		}
 	}
-	parts := make([]string, int(equipSlotEnd)*2)
+	parts := make([]string, int(inventorySlotBagEnd)*2)
 	for i := range parts {
 		parts[i] = "0"
 	}
 	rows, err := s.server.CharactersStore.DB.QueryContext(ctx, `SELECT ci.slot, ii.itemEntry
 		FROM character_inventory AS ci JOIN item_instance AS ii ON ii.guid = ci.item
-		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ? ORDER BY ci.slot`, guid, equipSlotEnd)
+		WHERE ci.guid = ? AND ci.bag = 0 AND ci.slot < ? ORDER BY ci.slot`, guid, inventorySlotBagEnd)
 	if err != nil {
 		return cached
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var slot, itemEntry int64
-		if rows.Scan(&slot, &itemEntry) != nil || slot < 0 || slot >= int64(equipSlotEnd) || itemEntry <= 0 {
+		if rows.Scan(&slot, &itemEntry) != nil || slot < 0 || slot >= int64(inventorySlotBagEnd) || itemEntry <= 0 {
 			continue
 		}
 		parts[slot*2] = strconv.FormatInt(itemEntry, 10)
